@@ -2,22 +2,27 @@
 
 ## Overview
 
-A CLI + web tool that uses OpenRouter LLMs to ingest fantasy world lore (raw text, notes, prose) and automatically generates/updates a structured markdown wiki.
+A CLI + web tool that uses OpenRouter LLMs to ingest fantasy world lore (raw text, notes, SRT subtitle files, prose) and automatically generates/updates a structured markdown wiki. Every claim in the wiki is backed by a citation to either a source URL or a timestamped YouTube video link.
 
 ## Architecture
 
 ```
-User writes lore (raw text/notes)
+User provides lore (raw text, SRT files, URLs)
         |
         v
-   CLI command: `auto-lorebook ingest <file-or-stdin>`
+   CLI command: `auto-lorebook ingest <file> --source-url <url>`
+        |
+        v
+   SRT parser extracts text + timestamps
+   (or plain text parser for .txt/.md input)
         |
         v
    OpenRouter LLM extracts entities & relationships
-   (characters, locations, factions, events, items, etc.)
+   with source references (timestamps, URLs)
         |
         v
    Wiki .md files created/updated in `wiki/` directory
+   (every fact includes a citation)
         |
         v
    Web UI serves & renders the markdown wiki
@@ -31,20 +36,33 @@ User writes lore (raw text/notes)
 - Configurable model selection (default: a cost-effective model)
 - Structured output parsing (JSON responses from the LLM)
 
-### 2. Lore Ingestion Pipeline
-- **Input**: Raw text files, stdin, or a directory of text files
+### 2. Source Parsers
+- **SRT parser**: Parses `.srt` subtitle files, extracts dialogue/narration with timestamps. Groups consecutive subtitle blocks into logical chunks for LLM context.
+- **Plain text parser**: Handles `.txt` and `.md` files as raw lore input.
+- **Source metadata**: Each input carries a source descriptor:
+  - For YouTube SRTs: `--source-url https://youtube.com/watch?v=VIDEO_ID` — timestamps become clickable `&t=` links
+  - For web pages: `--source-url https://example.com/lore-page`
+  - For local notes: source is recorded as the filename
+
+### 3. Lore Ingestion Pipeline
+- **Input**: Parsed text chunks with source + timestamp metadata
 - **Processing**: Send lore text to LLM with a prompt that extracts:
   - Entity type (character, location, faction, event, item, concept)
   - Entity name
   - Summary/description
   - Relationships to other entities
   - Key attributes (varies by type)
-- **Output**: Structured entity data ready for wiki generation
+  - **Source citations** — for each fact, the LLM must output which source and timestamp/section it came from
+- **Output**: Structured entity data with citations, ready for wiki generation
 
-### 3. Wiki Generator
+### 4. Wiki Generator
 - Each entity gets its own `.md` file under `wiki/<category>/<entity-name>.md`
 - Files use a consistent template per entity type
 - Cross-links between related entities via markdown links (`[Character Name](../characters/character-name.md)`)
+- **Citations rendered inline** — each fact gets a superscript reference linking to either:
+  - A timestamped YouTube URL: `[1](https://youtube.com/watch?v=VIDEO_ID&t=123)` (clickable, jumps to the moment)
+  - A web page URL: `[2](https://example.com/lore-page)`
+- A **References** section at the bottom of each wiki page lists all sources
 - **Update logic**: When re-ingesting, the LLM merges new info with existing file content (doesn't just overwrite)
 - Generates an `wiki/index.md` as the main table of contents
 
@@ -78,39 +96,64 @@ wiki/
 ## CLI Commands
 
 ```
-auto-lorebook ingest <path>       # Ingest lore from a file or directory
-auto-lorebook ingest -            # Ingest lore from stdin
-auto-lorebook wiki list           # List all wiki entries
-auto-lorebook wiki show <name>    # Print a wiki entry to stdout
-auto-lorebook wiki rebuild        # Re-generate all wiki files from stored lore
-auto-lorebook serve               # Start the web UI (default: localhost:8080)
+auto-lorebook ingest <path> --source-url <url>   # Ingest lore with a source reference
+auto-lorebook ingest <path>                      # Ingest lore (source = filename)
+auto-lorebook ingest -                           # Ingest lore from stdin
+auto-lorebook wiki list                          # List all wiki entries
+auto-lorebook wiki show <name>                   # Print a wiki entry to stdout
+auto-lorebook wiki rebuild                       # Re-generate all wiki files from stored lore
+auto-lorebook serve                              # Start the web UI (default: localhost:8080)
+```
+
+### Example: YouTube SRT Workflow
+
+```bash
+# Download subtitles for a worldbuilding video
+yt-dlp --write-subs --sub-lang en --skip-download -o subs "https://youtube.com/watch?v=abc123"
+
+# Ingest the SRT with the video URL as source
+auto-lorebook ingest subs.en.srt --source-url "https://youtube.com/watch?v=abc123"
+
+# Wiki entries now cite specific timestamps:
+#   The Kingdom of Aldara was founded in the Second Age. [1]
+#   ...
+#   ## References
+#   1. [Worldbuilding Video @ 4:32](https://youtube.com/watch?v=abc123&t=272)
 ```
 
 ## Implementation Phases
 
-### Phase 1: OpenRouter Client
+### Phase 1: SRT Parser & Source Metadata
+- [ ] Build SRT parser (timestamps + text extraction)
+- [ ] Define source metadata model (URL, type, timestamp mapping)
+- [ ] Plain text parser with source tracking
+
+### Phase 2: OpenRouter Client
 - [ ] Add `httpx` dependency
 - [ ] Build async OpenRouter client with structured output support
-- [ ] Add `ingest` CLI command that sends text and prints extracted entities
+- [ ] Design LLM prompt that extracts entities with citations back to source timestamps/sections
+- [ ] Add `ingest` CLI command with `--source-url` flag
 
-### Phase 2: Wiki File Generation
-- [ ] Define markdown templates per entity type
+### Phase 3: Wiki File Generation
+- [ ] Define markdown templates per entity type (with References section)
 - [ ] Write file manager that creates/updates wiki `.md` files
 - [ ] Generate cross-links between entities
+- [ ] Render inline citation superscripts and References footer
 - [ ] Generate `index.md`
 
-### Phase 3: Update/Merge Logic
+### Phase 4: Update/Merge Logic
 - [ ] When an entity already exists, send existing + new content to LLM
-- [ ] LLM produces merged/updated entry
+- [ ] LLM produces merged/updated entry, preserving existing citations and adding new ones
 - [ ] Write updated file
 
-### Phase 4: Web Interface
+### Phase 5: Web Interface
 - [ ] Minimal HTTP server serving wiki directory
 - [ ] Markdown-to-HTML rendering (using `markdown` or `mistune` library)
 - [ ] Simple CSS for readability
 - [ ] Sidebar/index navigation
+- [ ] Citation links render as clickable (YouTube timestamps open at the right moment)
 
-### Phase 5: Polish
+### Phase 6: Polish
 - [ ] Error handling for API failures, rate limits
 - [ ] Progress output during ingestion
 - [ ] Configuration file support (model, wiki path, etc.)
