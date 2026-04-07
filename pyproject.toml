@@ -10,6 +10,7 @@ dependencies = [
     "defusedxml >= 0.7.1, < 1",
     "httpx[trio] >= 0.28, < 1",
     "trio >= 0.33.0, < 1",
+    "yt-dlp >= 2024.1.0",
 ]
 
 [project.scripts]
