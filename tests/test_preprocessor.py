@@ -34,10 +34,7 @@ def _valid_response(
     new_entities: list[str] | None = None,
 ) -> dict:  # type: ignore[type-arg]
     """Build a valid pre-processor JSON response for the given chunks."""
-    mappings = [
-        {"chunk_index": i, "relevant_entities": []}
-        for i in range(len(chunks))
-    ]
+    mappings = [{"chunk_index": i, "relevant_entities": []} for i in range(len(chunks))]
     return {
         "section_mappings": mappings,
         "new_entity_mentions": new_entities or [],
