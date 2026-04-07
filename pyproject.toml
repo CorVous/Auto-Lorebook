@@ -1,5 +1,5 @@
 [project]
-name = "python-template"
+name = "auto-lorebook"
 dynamic = ["version"]
 readme = "README.md"
 authors = [
@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-python-template = "python_template.cli:main"
+auto-lorebook = "auto_lorebook.cli:main"
 
 [dependency-groups]
 dev = [
@@ -36,7 +36,7 @@ source = "vcs"
 fallback-version = "0.1.0"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/python_template/_version.py"
+version-file = "src/auto_lorebook/_version.py"
 
 [tool.uv]
 exclude-newer = "7d"
@@ -47,7 +47,7 @@ ruff = "2d"
 ty = "1d"
 
 [tool.ruff]
-extend-exclude = ["src/python_template/_version.py"]
+extend-exclude = ["src/auto_lorebook/_version.py"]
 
 [tool.ruff.lint]
 preview = true # I'm not a coward!
