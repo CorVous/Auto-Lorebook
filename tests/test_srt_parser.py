@@ -14,7 +14,6 @@ from auto_lorebook.parsers.srt import (
     seconds_to_timestamp,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -151,7 +150,7 @@ class TestSubtitleBlock:
         assert block.text == "Hello!"
 
     def test_duration(self) -> None:
-        """duration property returns end - start."""
+        """Duration property returns end - start."""
         block = SubtitleBlock(sequence=1, start=1.0, end=4.0, text="Hi")
         assert block.duration == pytest.approx(3.0)
 

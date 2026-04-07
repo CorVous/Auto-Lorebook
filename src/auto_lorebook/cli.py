@@ -10,7 +10,7 @@ import logging
 import sys
 
 from auto_lorebook import __version__
-from auto_lorebook.commands import version_cmd
+from auto_lorebook.commands import ingest, version_cmd
 
 # Get package name dynamically from installed metadata
 try:
@@ -88,6 +88,7 @@ def create_parser() -> argparse.ArgumentParser:
 
     # Register subcommands
     version_cmd.add_parser(subparsers, common_parser)
+    ingest.add_parser(subparsers, common_parser)
 
     return parser
 
