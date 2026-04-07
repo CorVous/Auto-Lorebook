@@ -77,6 +77,10 @@ User provides lore (raw text, SRT files, URLs)
 ## Directory Structure
 
 ```
+sources/                          # Raw ingested files preserved for re-processing
+  2024-01-15_worldbuilding-vid.srt
+  2024-01-20_campaign-notes.txt
+  2024-02-01_magic-system.md
 wiki/
   index.md
   characters/
@@ -144,7 +148,8 @@ auto-lorebook ingest subs.en.srt --source-url "https://youtube.com/watch?v=abc12
 ### Phase 4: Update/Merge Logic
 - [ ] When an entity already exists, send existing + new content to LLM
 - [ ] LLM produces merged/updated entry, preserving existing citations and adding new ones
-- [ ] Write updated file
+- [ ] Show diff to user and prompt for approval before writing conflicting changes
+- [ ] Write updated file only after user confirms
 
 ### Phase 5: Web Interface
 - [ ] Minimal HTTP server serving wiki directory
@@ -163,8 +168,11 @@ auto-lorebook ingest subs.en.srt --source-url "https://youtube.com/watch?v=abc12
 - `httpx` — async HTTP client for OpenRouter API
 - `mistune` — fast markdown parser for the web UI
 
+## Decisions
+
+1. **Storage**: Raw ingested files are stored in a `sources/` directory alongside the wiki, preserving the original `.txt`, `.md`, or `.srt` files for re-processing.
+2. **Conflict resolution**: When an entity update conflicts with existing content, the user is prompted to review and approve/reject changes before they're written.
+
 ## Open Questions
 
-1. **Storage**: Should we store the raw ingested lore separately (for re-processing), or just keep the generated wiki files?
-2. **Conflict resolution**: When updating, should the user be prompted to review changes, or fully automatic?
-3. **Model choice**: Any preference for default OpenRouter model? (e.g., `mistralai/mistral-small`, `google/gemini-2.0-flash-001`, `meta-llama/llama-3-70b-instruct`)
+1. **Model choice**: Any preference for default OpenRouter model? (e.g., `mistralai/mistral-small`, `google/gemini-2.0-flash-001`, `meta-llama/llama-3-70b-instruct`)
