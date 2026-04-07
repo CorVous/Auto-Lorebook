@@ -1,5 +1,9 @@
 # Claude Notes
 
+## First Step
+
+Update uv before anything else: `uv self update`
+
 ## Key Documents
 
 - **`plan.md`** — contains the project plan and feature roadmap
