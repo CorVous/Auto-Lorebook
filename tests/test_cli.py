@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from python_template import __version__
-from python_template.cli import create_parser, main, setup_logging
+from auto_lorebook import __version__
+from auto_lorebook.cli import create_parser, main, setup_logging
 
 
 def test_create_parser_exists() -> None:
@@ -64,7 +64,7 @@ def test_parser_has_version_flag() -> None:
 def test_parser_no_subcommand_shows_help() -> None:
     """Test that running with no subcommand shows help message."""
     result = subprocess.run(  # noqa: S603
-        [sys.executable, "-m", "python_template"],
+        [sys.executable, "-m", "auto_lorebook"],
         capture_output=True,
         text=True,
         check=False,
