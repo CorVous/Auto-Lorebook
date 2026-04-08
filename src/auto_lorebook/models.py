@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 @dataclass
@@ -87,3 +88,75 @@ class PreprocessorOutput:
 
     section_mappings: list[SectionMapping]
     new_entity_mentions: list[str]
+
+
+@dataclass
+class SourceReference:
+    """A back-reference to a specific transcript chunk.
+
+    :param chunk_index: Index into the TranscriptChunk list.
+    :param quote: Relevant snippet from that chunk.
+    :param timestamp_seconds: Optional timestamp for SRT-sourced chunks.
+    """
+
+    chunk_index: int
+    quote: str
+    timestamp_seconds: float | None = None
+
+
+@dataclass
+class EntityAction:
+    """A planned action for a wiki entity.
+
+    :param entity_name: Name of the entity.
+    :param category: Wiki category (e.g. "characters", "locations").
+    :param action: One of "create", "update", or "merge".
+    :param info_to_add: New information to include.
+    :param source_refs: Transcript chunks backing this action.
+    :param rationale: Why this action is being taken.
+    """
+
+    entity_name: str
+    category: str
+    action: Literal["create", "update", "merge"]
+    info_to_add: str
+    source_refs: list[SourceReference]
+    rationale: str
+
+
+@dataclass
+class PlannerOutput:
+    """Output from the Stage 2 planner LLM call.
+
+    :param entity_actions: Planned actions for wiki entities.
+    :param summary: Human-readable overview of the plan.
+    """
+
+    entity_actions: list[EntityAction]
+    summary: str
+
+
+@dataclass
+class WikiPage:
+    """A generated wiki page with markdown content.
+
+    :param entity_name: Name of the entity (e.g. "Aldara").
+    :param category: Wiki category (e.g. "characters", "locations").
+    :param markdown: Complete markdown content for the page, ready to write.
+    """
+
+    entity_name: str
+    category: str
+    markdown: str
+
+
+@dataclass
+class WriterOutput:
+    """Output from the Stage 3 writer LLM call.
+
+    :param pages: Generated wiki pages with full markdown content.
+    :param summary: Human-readable summary of what was written.
+    """
+
+    pages: list[WikiPage]
+    summary: str

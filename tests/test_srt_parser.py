@@ -216,3 +216,35 @@ def test_chunk_srt_blocks_source_propagated() -> None:
     blocks = [SrtBlock(index=1, start_seconds=0.0, end_seconds=1.0, text="Hi.")]
     chunks = chunk_srt_blocks(blocks, source)
     assert chunks[0].source is source
+
+
+def test_chunk_srt_blocks_exact_gap_boundary_merged() -> None:
+    """Blocks with gap exactly equal to max_gap_seconds are merged (<=)."""
+    source = SourceMetadata(filename="test.srt")
+    blocks = [
+        SrtBlock(index=1, start_seconds=0.0, end_seconds=1.0, text="First."),
+        SrtBlock(index=2, start_seconds=4.0, end_seconds=5.0, text="Second."),
+    ]
+    # Gap is exactly 3.0s which is <= max_gap_seconds
+    chunks = chunk_srt_blocks(blocks, source, max_gap_seconds=3.0)
+    assert len(chunks) == 1
+    assert "First." in chunks[0].text
+    assert "Second." in chunks[0].text
+
+
+def test_timestamp_to_seconds_invalid_format_raises() -> None:
+    """Invalid single timestamp string raises SrtParseError."""
+    with pytest.raises(SrtParseError):
+        srt_timestamp_to_seconds("00:00:00.000")  # dot instead of comma
+
+
+def test_parse_srt_out_of_order_indices() -> None:
+    """SRT blocks with non-sequential indices are still parsed."""
+    srt = (
+        "3\n00:00:00,000 --> 00:00:01,000\nThird.\n\n"
+        "1\n00:00:01,500 --> 00:00:02,500\nFirst.\n"
+    )
+    blocks = parse_srt(srt)
+    assert len(blocks) == 2
+    assert blocks[0].index == 3
+    assert blocks[1].index == 1

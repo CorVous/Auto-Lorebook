@@ -9,6 +9,8 @@ from auto_lorebook.models import (
     SrtBlock,
     TranscriptChunk,
     WikiExcerpt,
+    WikiPage,
+    WriterOutput,
 )
 
 
@@ -111,3 +113,35 @@ def test_preprocessor_output_empty() -> None:
     output = PreprocessorOutput(section_mappings=[], new_entity_mentions=[])
     assert output.section_mappings == []
     assert output.new_entity_mentions == []
+
+
+def test_wiki_page_fields() -> None:
+    """WikiPage stores entity_name, category, and markdown."""
+    page = WikiPage(
+        entity_name="Aldara",
+        category="locations",
+        markdown="# Aldara\n\nA kingdom in the north.",
+    )
+    assert page.entity_name == "Aldara"
+    assert page.category == "locations"
+    assert page.markdown == "# Aldara\n\nA kingdom in the north."
+
+
+def test_writer_output_fields() -> None:
+    """WriterOutput stores pages and summary."""
+    page = WikiPage(
+        entity_name="Aldara",
+        category="locations",
+        markdown="# Aldara\n\nA kingdom.",
+    )
+    output = WriterOutput(pages=[page], summary="Created Aldara page.")
+    assert len(output.pages) == 1
+    assert output.pages[0] is page
+    assert output.summary == "Created Aldara page."
+
+
+def test_writer_output_empty() -> None:
+    """WriterOutput can be constructed with empty pages list."""
+    output = WriterOutput(pages=[], summary="No pages to write.")
+    assert output.pages == []
+    assert output.summary == "No pages to write."
