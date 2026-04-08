@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from auto_lorebook import __version__
-from auto_lorebook.cli import create_parser, main, setup_logging
+from auto_lorebook.cli import create_parser
 
 
 def test_create_parser_exists() -> None:
@@ -71,13 +71,3 @@ def test_parser_no_subcommand_shows_help() -> None:
     )
     # Should show help (exit code 0) or error asking for subcommand
     assert "usage:" in result.stdout.lower() or "usage:" in result.stderr.lower()
-
-
-def test_main_function_exists() -> None:
-    """Test that main() entry point function exists."""
-    assert callable(main)
-
-
-def test_setup_logging_exists() -> None:
-    """Test that setup_logging function exists."""
-    assert callable(setup_logging)

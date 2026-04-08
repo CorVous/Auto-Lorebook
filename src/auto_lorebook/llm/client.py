@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import os
+from typing import Self
 
 import httpx
+
+# Default timeout: 120s for LLM responses which can be slow.
+_DEFAULT_TIMEOUT = httpx.Timeout(timeout=120.0)
+_MAX_ERROR_TEXT_LENGTH = 500
 
 
 class OpenRouterError(RuntimeError):
@@ -15,6 +20,8 @@ class OpenRouterClient:
     """Async HTTP client for the OpenRouter /chat/completions API.
 
     Uses httpx with an optional injected transport for testing.
+    Reuses a single ``httpx.AsyncClient`` across calls for connection pooling.
+    Use as an async context manager, or call :meth:`aclose` when done.
     """
 
     def __init__(
@@ -22,17 +29,32 @@ class OpenRouterClient:
         api_key: str,
         *,
         base_url: str = "https://openrouter.ai/api/v1",
+        timeout: httpx.Timeout = _DEFAULT_TIMEOUT,
         _transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         """Initialise the client.
 
         :param api_key: OpenRouter API key for the Authorization header.
         :param base_url: Base URL for the OpenRouter API.
+        :param timeout: Request timeout configuration.
         :param _transport: Optional custom transport (for testing only).
         """
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
-        self._transport = _transport
+        self._http = httpx.AsyncClient(
+            transport=_transport,
+            timeout=timeout,
+        )
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client and release resources."""
+        await self._http.aclose()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
 
     async def chat(
         self,
@@ -69,11 +91,12 @@ class OpenRouterClient:
         }
         url = f"{self._base_url}/chat/completions"
 
-        async with httpx.AsyncClient(transport=self._transport) as http:
-            response = await http.post(url, json=payload, headers=headers)
+        response = await self._http.post(url, json=payload, headers=headers)
 
         if response.status_code >= 400:
-            msg = f"OpenRouter API error {response.status_code}: {response.text}"
+            # Truncate error text to avoid leaking excessive API response data.
+            error_text = response.text[:_MAX_ERROR_TEXT_LENGTH]
+            msg = f"OpenRouter API error {response.status_code}: {error_text}"
             raise OpenRouterError(msg)
 
         data = response.json()

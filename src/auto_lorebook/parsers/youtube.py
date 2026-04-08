@@ -22,18 +22,26 @@ class YouTubeSubtitleError(RuntimeError):
     """Raised when YouTube subtitles cannot be downloaded or found."""
 
 
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
+
+
 def _validate_youtube_url(url: str) -> None:
     """Raise ValueError if url is not a recognised YouTube URL.
+
+    Validates both the scheme (http/https only) and the host against the
+    YouTube domain whitelist to prevent SSRF via exotic schemes.
 
     :param url: URL string to validate.
     :raises ValueError: If url is not a YouTube URL.
     """
     try:
         parsed = urlparse(url)
+        scheme = parsed.scheme.lower()
         host = parsed.netloc.lower()
     except Exception:  # noqa: BLE001
+        scheme = ""
         host = ""
-    if host not in _YOUTUBE_HOSTS:
+    if scheme not in _ALLOWED_SCHEMES or host not in _YOUTUBE_HOSTS:
         msg = f"Not a YouTube URL: {url!r}"
         raise ValueError(msg)
 
