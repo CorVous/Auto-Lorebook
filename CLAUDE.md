@@ -22,4 +22,5 @@ Always follow red/green TDD:
 
 1. Run `uv sync --dev` to keep dependencies up to date
 2. Run `uv run ruff check` to lint
-3. Run `uv run ty check` to type-check
+3. Run `uv run ruff format` to format
+4. Run `uv run ty check` to type-check
