@@ -134,3 +134,29 @@ class PlannerOutput:
 
     entity_actions: list[EntityAction]
     summary: str
+
+
+@dataclass
+class WikiPage:
+    """A generated wiki page with markdown content.
+
+    :param entity_name: Name of the entity (e.g. "Aldara").
+    :param category: Wiki category (e.g. "characters", "locations").
+    :param markdown: Complete markdown content for the page, ready to write.
+    """
+
+    entity_name: str
+    category: str
+    markdown: str
+
+
+@dataclass
+class WriterOutput:
+    """Output from the Stage 3 writer LLM call.
+
+    :param pages: Generated wiki pages with full markdown content.
+    :param summary: Human-readable summary of what was written.
+    """
+
+    pages: list[WikiPage]
+    summary: str
