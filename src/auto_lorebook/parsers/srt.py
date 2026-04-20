@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 _TIMESTAMP_RE = re.compile(
     r"(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})"
 )
+_SINGLE_TIMESTAMP_RE = re.compile(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _MIN_LINES_PER_BLOCK = 2
 
@@ -31,7 +32,7 @@ def srt_timestamp_to_seconds(ts: str) -> float:
     :return: Total seconds as a float.
     :raises SrtParseError: If the timestamp format is invalid.
     """
-    m = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})", ts.strip())
+    m = _SINGLE_TIMESTAMP_RE.fullmatch(ts.strip())
     if m is None:
         msg = f"Invalid SRT timestamp: {ts!r}"
         raise SrtParseError(msg)

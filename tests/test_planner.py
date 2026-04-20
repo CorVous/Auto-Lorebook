@@ -252,3 +252,41 @@ async def test_run_planner_missing_key_raises() -> None:
             chunks=chunks,
             wiki_pages={},
         )
+
+
+@pytest.mark.trio
+async def test_run_planner_invalid_action_raises() -> None:
+    """An invalid action string from the LLM raises ValueError."""
+    chunks = [_make_chunk("Text.", 0)]
+    preprocessor_output = _make_preprocessor_output(chunks)
+    client = _make_client(_valid_response(actions=[_action(action="delete")]))
+    with pytest.raises(ValueError, match="invalid action"):
+        await run_planner(
+            client=client,
+            preprocessor_output=preprocessor_output,
+            chunks=chunks,
+            wiki_pages={},
+        )
+
+
+@pytest.mark.trio
+async def test_run_planner_missing_entity_field_raises() -> None:
+    """Missing required field inside an entity action raises KeyError."""
+    chunks = [_make_chunk("Text.", 0)]
+    preprocessor_output = _make_preprocessor_output(chunks)
+    # Missing "entity_name" key
+    bad_action = {
+        "category": "locations",
+        "action": "create",
+        "info_to_add": "Info.",
+        "source_refs": [],
+        "rationale": "Reason.",
+    }
+    client = _make_client({"entity_actions": [bad_action], "summary": "Summary."})
+    with pytest.raises(KeyError):
+        await run_planner(
+            client=client,
+            preprocessor_output=preprocessor_output,
+            chunks=chunks,
+            wiki_pages={},
+        )

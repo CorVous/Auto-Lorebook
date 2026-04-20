@@ -195,3 +195,47 @@ def test_openrouter_client_from_env_missing_key() -> None:
         pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"),
     ):
         openrouter_client_from_env()
+
+
+@pytest.mark.trio
+async def test_chat_network_error_propagates() -> None:
+    """Transport-level errors (connection refused, DNS failure) propagate."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        msg = "Connection refused"
+        raise httpx.ConnectError(msg)
+
+    client = _make_client(httpx.MockTransport(handler))
+    with pytest.raises(httpx.ConnectError):
+        await client.chat("test-model", _USER_HI)
+
+
+@pytest.mark.trio
+async def test_client_context_manager() -> None:
+    """Client works as an async context manager and can be reused across calls."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _make_response("ok")
+
+    async with OpenRouterClient(
+        FAKE_API_KEY, base_url=BASE_URL, _transport=httpx.MockTransport(handler)
+    ) as client:
+        result1 = await client.chat("test-model", _USER_HI)
+        result2 = await client.chat("test-model", _USER_HI)
+    assert result1 == "ok"
+    assert result2 == "ok"
+
+
+@pytest.mark.trio
+async def test_chat_error_text_truncated() -> None:
+    """Long error response text is truncated in the exception message."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        long_body = "x" * 1000
+        return httpx.Response(status_code=500, text=long_body)
+
+    client = _make_client(httpx.MockTransport(handler))
+    with pytest.raises(OpenRouterError, match="OpenRouter API error 500") as exc_info:
+        await client.chat("test-model", _USER_HI)
+    # Error message should be truncated, not contain the full 1000 chars
+    assert len(str(exc_info.value)) < 600

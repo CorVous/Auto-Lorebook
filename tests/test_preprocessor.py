@@ -154,3 +154,22 @@ async def test_run_preprocessor_missing_key_raises() -> None:
     client = _make_client({"section_mappings": []})  # missing new_entity_mentions
     with pytest.raises(ValueError, match="pre-processor"):
         await run_preprocessor(client=client, chunks=chunks, wiki_pages={})
+
+
+@pytest.mark.trio
+async def test_run_preprocessor_chunk_index_out_of_range() -> None:
+    """Chunk index exceeding actual chunks list keeps placeholder text."""
+    chunks = [_make_chunk("Only one chunk.", 0)]
+    response = {
+        "section_mappings": [
+            {"chunk_index": 0, "relevant_entities": []},
+            {"chunk_index": 99, "relevant_entities": []},
+        ],
+        "new_entity_mentions": [],
+    }
+    client = _make_client(response)
+    result = await run_preprocessor(client=client, chunks=chunks, wiki_pages={})
+    # First mapping replaced with actual chunk
+    assert result.section_mappings[0].chunk.text == "Only one chunk."
+    # Second mapping retains placeholder since index 99 > len(chunks)
+    assert "<chunk" in result.section_mappings[1].chunk.text
