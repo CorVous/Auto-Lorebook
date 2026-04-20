@@ -121,8 +121,16 @@ def _parse_response(raw: str) -> PlannerOutput:
         )
         raise ValueError(msg)
 
+    valid_actions = {"create", "update", "merge"}
     entity_actions: list[EntityAction] = []
     for entry in data["entity_actions"]:
+        action = entry["action"]
+        if action not in valid_actions:
+            msg = (
+                f"planner response has invalid action {action!r};"
+                f" expected one of {sorted(valid_actions)}"
+            )
+            raise ValueError(msg)
         refs = [
             SourceReference(
                 chunk_index=int(r["chunk_index"]),
@@ -135,7 +143,7 @@ def _parse_response(raw: str) -> PlannerOutput:
             EntityAction(
                 entity_name=entry["entity_name"],
                 category=entry["category"],
-                action=entry["action"],
+                action=action,
                 info_to_add=entry["info_to_add"],
                 source_refs=refs,
                 rationale=entry["rationale"],

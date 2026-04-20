@@ -67,6 +67,18 @@ def test_fetch_rejects_empty_string() -> None:
         fetch_youtube_transcript("")
 
 
+def test_fetch_rejects_non_http_scheme() -> None:
+    """YouTube URL with non-http/https scheme raises ValueError."""
+    with pytest.raises(ValueError, match="YouTube"):
+        fetch_youtube_transcript("ftp://youtube.com/watch?v=abc123")
+
+
+def test_fetch_rejects_javascript_scheme() -> None:
+    """YouTube URL with javascript: scheme raises ValueError."""
+    with pytest.raises(ValueError, match="YouTube"):
+        fetch_youtube_transcript("javascript://youtube.com/watch?v=abc123")
+
+
 # --- fetch_youtube_transcript ---
 
 SAMPLE_SRT = """\

@@ -266,3 +266,20 @@ async def test_run_writer_summary_populated() -> None:
         wiki_pages={},
     )
     assert result.summary == "Created Aldara page."
+
+
+@pytest.mark.trio
+async def test_run_writer_missing_page_field_raises() -> None:
+    """Missing required field inside a page entry raises KeyError."""
+    chunks = [_make_chunk("Text.", 0)]
+    planner_output = _make_planner_output()
+    # Missing "entity_name" key in page
+    bad_page = {"category": "locations", "markdown": "# Foo\n"}
+    client = _make_client({"pages": [bad_page], "summary": "Summary."})
+    with pytest.raises(KeyError):
+        await run_writer(
+            client=client,
+            chunks=chunks,
+            planner_output=planner_output,
+            wiki_pages={},
+        )
