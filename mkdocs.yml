@@ -53,9 +53,24 @@ nav:
   - Home: index.md
   - Getting started:
       - getting-started/installation.md
-  - Guides:
+      - getting-started/first-ingest.md
   - Architecture:
       - architecture/overview.md
-  - Roadmap:
-      - roadmap/index.md
+      - architecture/repository-layout.md
+      - architecture/schema-versioning.md
+      - architecture/staleness.md
+      - architecture/entity-model.md
+      - architecture/timestamps.md
+  - Pipeline:
+      - pipeline/context.md
+      - pipeline/reading.md
+      - pipeline/planner.md
+      - pipeline/extractor.md
+      - pipeline/review.md
+      - pipeline/summarizer.md
+  - Reference:
+      - reference/cli.md
+      - reference/file-formats.md
+      - reference/audit.md
+  - Roadmap: roadmap/index.md
   - Contributing: contributing.md
