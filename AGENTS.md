@@ -31,7 +31,6 @@ Always follow red/green TDD:
 5. Run `uv run pytest` to run tests
 6. If the change touched any of:
    - environment variables or config keys
-   - on-disk layout under `data/familiars/`
    - architecture (providers, processors, pipeline, memory, history)
 
    update the matching page under `docs/` **in the same commit**, then run
