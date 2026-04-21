@@ -122,3 +122,13 @@ auto-lorebook serve [--port 8080]
 ```
 
 Available from Phase 6 onward. See [roadmap](../roadmap/index.md).
+
+## Utility
+
+```bash
+auto-lorebook version
+auto-lorebook --version
+```
+
+Display the installed package version. `version` is a subcommand;
+`--version` is a top-level flag. Both print the same string.

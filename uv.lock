@@ -3,13 +3,13 @@ revision = 3
 requires-python = "==3.13.*"
 
 [options]
-exclude-newer = "2026-04-14T17:52:55.183236Z"
+exclude-newer = "2026-04-14T18:07:31.252196Z"
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-defusedxml = { timestamp = "2026-04-20T17:52:55.18325Z", span = "P1D" }
-ruff = { timestamp = "2026-04-19T17:52:55.183256Z", span = "P2D" }
-ty = { timestamp = "2026-04-20T17:52:55.183257Z", span = "P1D" }
+defusedxml = { timestamp = "2026-04-20T18:07:31.252205Z", span = "P1D" }
+ruff = { timestamp = "2026-04-19T18:07:31.252208Z", span = "P2D" }
+ty = { timestamp = "2026-04-20T18:07:31.252208Z", span = "P1D" }
 
 [[package]]
 name = "attrs"
@@ -38,6 +38,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-trio" },
+    { name = "pyyaml" },
     { name = "requests" },
     { name = "ruff" },
     { name = "twine" },
@@ -60,6 +61,7 @@ dev = [
     { name = "pytest", specifier = ">=8.3.3,<9" },
     { name = "pytest-cov", specifier = ">=7.0.0,<8" },
     { name = "pytest-trio", specifier = ">=0.8.0,<1" },
+    { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "requests", specifier = ">=2.32.5,<3" },
     { name = "ruff", specifier = ">=0.14.3,<1" },
     { name = "twine", specifier = ">=6.2.0,<7" },
