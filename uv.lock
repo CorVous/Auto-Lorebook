@@ -3,13 +3,13 @@ revision = 3
 requires-python = "==3.13.*"
 
 [options]
-exclude-newer = "2026-04-14T18:07:31.252196Z"
+exclude-newer = "2026-04-14T18:23:57.363238Z"
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-defusedxml = { timestamp = "2026-04-20T18:07:31.252205Z", span = "P1D" }
-ruff = { timestamp = "2026-04-19T18:07:31.252208Z", span = "P2D" }
-ty = { timestamp = "2026-04-20T18:07:31.252208Z", span = "P1D" }
+defusedxml = { timestamp = "2026-04-20T18:23:57.363248Z", span = "P1D" }
+ruff = { timestamp = "2026-04-19T18:23:57.363252Z", span = "P2D" }
+ty = { timestamp = "2026-04-20T18:23:57.363253Z", span = "P1D" }
 
 [[package]]
 name = "attrs"
@@ -44,6 +44,11 @@ dev = [
     { name = "twine" },
     { name = "ty" },
 ]
+docs = [
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
+    { name = "pymdown-extensions" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -66,6 +71,11 @@ dev = [
     { name = "ruff", specifier = ">=0.14.3,<1" },
     { name = "twine", specifier = ">=6.2.0,<7" },
     { name = "ty", specifier = ">=0.0.25,<1" },
+]
+docs = [
+    { name = "mkdocs", specifier = ">=1.6.1,<2" },
+    { name = "mkdocs-material", specifier = ">=9.5.44,<10" },
+    { name = "pymdown-extensions", specifier = ">=10.12,<11" },
 ]
 
 [[package]]
