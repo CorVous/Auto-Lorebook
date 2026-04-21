@@ -4,13 +4,13 @@ This page is the single source of truth for what's built and what's
 planned. Other pages describe the system as specified; check here for
 implementation status.
 
-!!! info "Current status"
+!!! success "Current status"
 
-    MVP scaffolding only. CLI skeleton exists
-    (`src/auto_lorebook/cli.py` + `commands/`); no pipeline stage is
-    implemented yet. Phase 1 is the next target.
+    Phase 1 is implemented and all automated checks pass (308 tests,
+    ruff, ty). The exit criterion (end-to-end smoke test on a real VOD)
+    is the remaining manual step before Phase 2 begins.
 
-## Phase 1: Reading stage
+## Phase 1: Reading stage ✓
 
 **Goal** — ingest a YouTube URL, gather context, produce a reviewable,
 correctable reading via the two-substage pipeline.
@@ -63,6 +63,10 @@ correctly rendered with an empty bullet list; the mechanical gap check
 fires at least once on real content and the warning is actionable.
 Total human review time for a two-hour source fits inside the
 10–20 min/hour target on a representative session.
+
+**Implementation status** — all pipeline modules implemented;
+automated suite passes (308 tests, ruff clean, ty clean). Pending:
+manual smoke test on a real VOD.
 
 ## Phase 2: Entity scaffolding
 

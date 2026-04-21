@@ -1,10 +1,24 @@
 """CLI subcommands for auto-lorebook.
 
-Each subcommand is defined in its own module and exports:
-- add_parser(subparsers, common_parser): Register the subcommand
-- run(args): Execute the subcommand logic
+Each subcommand module exports:
+- add_parser(subparsers, common_parser): register the subcommand
+- run(args): execute the subcommand logic
 """
 
+from auto_lorebook.commands import approve_reading as approve_reading_cmd
+from auto_lorebook.commands import configure_context as configure_context_cmd
+from auto_lorebook.commands import generate_reading as generate_reading_cmd
+from auto_lorebook.commands import ingest as ingest_cmd
+from auto_lorebook.commands import readings as readings_cmd
+from auto_lorebook.commands import regenerate_reading as regenerate_reading_cmd
 from auto_lorebook.commands import version as version_cmd
 
-__all__ = ["version_cmd"]
+__all__ = [
+    "approve_reading_cmd",
+    "configure_context_cmd",
+    "generate_reading_cmd",
+    "ingest_cmd",
+    "readings_cmd",
+    "regenerate_reading_cmd",
+    "version_cmd",
+]
