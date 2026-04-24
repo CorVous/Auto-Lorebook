@@ -6,9 +6,15 @@ implementation status.
 
 !!! info "Current status"
 
-    MVP scaffolding only. CLI skeleton exists
-    (`src/auto_lorebook/cli.py` + `commands/`); no pipeline stage is
-    implemented yet. Phase 1 is the next target.
+    Phase 1 in progress. Foundations landed: CLI skeleton, config
+    loader, info.yaml, tolerant `.wiki-context.yaml` and
+    `.transcription-corrections.yaml` readers, interactive context
+    gathering with flag overrides, preamble assembly with
+    component-specific token-budget errors, canonical `h:mm:ss`
+    timestamp helpers, SRT parser, and a yt-dlp subprocess wrapper
+    wired into `ingest` for YouTube URLs. Stage 1a / 1b, the
+    `generate-reading` / `regenerate-reading` / `approve-reading`
+    commands, and the OpenRouter client are still outstanding.
 
 ## Phase 1: Reading stage
 

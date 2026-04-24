@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import datetime
 import logging
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from auto_lorebook import config as cfg_mod
-from auto_lorebook import info_yaml, source_store
+from auto_lorebook import info_yaml, source_store, ytdlp
 from auto_lorebook import source_id as sid_mod
 from auto_lorebook.commands._shared import finalize_context
 
@@ -30,7 +32,7 @@ def add_parser(
         description=(
             "Fetch a source, gather context, and store it in the wiki. "
             "Local files (.srt, .txt, .md) are supported. "
-            "YouTube URLs require yt-dlp (fetch not yet implemented)."
+            "YouTube URLs are fetched via yt-dlp (must be on PATH)."
         ),
     )
     parser.add_argument(
@@ -105,12 +107,27 @@ def run(args: argparse.Namespace) -> int:
     wiki_repo = cfg.wiki_repo_path
 
     if args.url_or_path.startswith(("http://", "https://")):
-        _logger.error(
-            "Fetching transcripts from URLs is not yet implemented. "
-            "Download the transcript manually and pass the local file."
-        )
-        return 1
+        return _run_from_url(args, cfg, wiki_repo)
+    return _run_from_local(args, cfg, wiki_repo)
 
+
+@dataclass
+class _ResolvedSource:
+    """Local file + initial metadata produced by resolving the positional arg."""
+
+    local_path: Path
+    source_url: str | None
+    source_type: str
+    fetched_title: str | None = None
+    fetched_duration: float | None = None
+    caption_type: str | None = None
+
+
+def _run_from_local(
+    args: argparse.Namespace,
+    cfg: cfg_mod.Config,
+    wiki_repo: Path,
+) -> int:
     try:
         source_id = sid_mod.derive(args.url_or_path, args.source_id, args.source_url)
     except sid_mod.SourceIdError as e:
@@ -122,11 +139,58 @@ def run(args: argparse.Namespace) -> int:
         _logger.error("File not found: %s", local_path)
         return 1
 
-    source_type = _derive_source_type(local_path, args.source_url)
+    resolved = _ResolvedSource(
+        local_path=local_path,
+        source_url=args.source_url,
+        source_type=_derive_source_type(local_path, args.source_url),
+    )
+    return _store_and_finalize(args, cfg, wiki_repo, source_id, resolved)
 
+
+def _run_from_url(
+    args: argparse.Namespace,
+    cfg: cfg_mod.Config,
+    wiki_repo: Path,
+) -> int:
+    video_id = sid_mod.extract_video_id(args.url_or_path)
+    if not video_id:
+        _logger.error(
+            "Only YouTube URLs are supported for remote ingest. "
+            "Download non-YouTube sources manually and pass the local file."
+        )
+        return 1
+
+    source_id = args.source_id or f"yt-{video_id}"
+
+    with tempfile.TemporaryDirectory(prefix="auto-lorebook-yt-") as tmp:
+        try:
+            fetched = ytdlp.fetch(args.url_or_path, Path(tmp))
+        except ytdlp.YtDlpError as e:
+            _logger.error("%s", e)
+            return 1
+
+        caption_type = "auto" if ".auto." in fetched.srt_path.name else "manual"
+        resolved = _ResolvedSource(
+            local_path=fetched.srt_path,
+            source_url=args.url_or_path,
+            source_type="youtube",
+            fetched_title=fetched.title,
+            fetched_duration=fetched.duration,
+            caption_type=caption_type,
+        )
+        return _store_and_finalize(args, cfg, wiki_repo, source_id, resolved)
+
+
+def _store_and_finalize(
+    args: argparse.Namespace,
+    cfg: cfg_mod.Config,
+    wiki_repo: Path,
+    source_id: str,
+    resolved: _ResolvedSource,
+) -> int:
     try:
         dest, transcript_filename = source_store.copy_transcript(
-            local_path, source_id, source_type, wiki_repo
+            resolved.local_path, source_id, resolved.source_type, wiki_repo
         )
     except (source_store.DuplicateSourceError, source_store.CollisionError) as e:
         _logger.error("%s", e)
@@ -146,7 +210,7 @@ def run(args: argparse.Namespace) -> int:
             )
             return 1
     else:
-        info = _new_info(source_id, source_type, args, transcript_filename)
+        info = _new_info(source_id, resolved, args, transcript_filename)
 
     info.transcript_filename = transcript_filename
 
@@ -166,17 +230,25 @@ def _derive_source_type(local_path: Path, source_url: str | None) -> str:
 
 def _new_info(
     source_id: str,
-    source_type: str,
+    resolved: _ResolvedSource,
     args: argparse.Namespace,
     transcript_filename: str,
 ) -> info_yaml.Info:
     fetched_at = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    title = resolved.fetched_title or Path(args.url_or_path).stem
+    duration = (
+        int(resolved.fetched_duration)
+        if resolved.fetched_duration is not None
+        else None
+    )
     return info_yaml.Info(
         source_id=source_id,
-        source_type=source_type,
+        source_type=resolved.source_type,
         fetched_at=fetched_at,
-        source_url=args.source_url,
-        title=Path(args.url_or_path).stem,
+        source_url=resolved.source_url,
+        title=title,
+        duration_seconds=duration,
+        caption_type=resolved.caption_type,
         transcript_filename=transcript_filename,
         context=info_yaml.SourceContext(),
     )

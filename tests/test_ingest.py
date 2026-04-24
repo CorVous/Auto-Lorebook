@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import json
+import subprocess  # noqa: S404
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
+from auto_lorebook import info_yaml, ytdlp
 from auto_lorebook.commands import ingest
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 
@@ -36,14 +40,95 @@ def _args(**kwargs: object) -> argparse.Namespace:
     return argparse.Namespace(**defaults)
 
 
-def test_url_with_source_id_still_errors(tmp_wiki: Path) -> None:
-    """URL positional always errors — --source-id is not a fetch bypass."""
-    args = _args(
-        url_or_path="https://youtube.com/watch?v=abc123", source_id="yt-abc123"
-    )
+_SAMPLE_SRT = (
+    "1\n"
+    "00:00:01,000 --> 00:00:02,000\n"
+    "hello\n"
+    "\n"
+    "2\n"
+    "00:00:03,000 --> 00:00:04,000\n"
+    "world\n"
+)
+
+
+def _fake_yt_run(
+    video_id: str, title: str, duration: float
+) -> Callable[..., subprocess.CompletedProcess[str]]:
+    """Patch target for subprocess.run that fakes yt-dlp output."""
+
+    def side_effect(
+        cmd: list[str], cwd: Path, **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        info = {"id": video_id, "title": title, "duration": duration}
+        (cwd / f"{video_id}.info.json").write_text(json.dumps(info), encoding="utf-8")
+        (cwd / f"{video_id}.en.srt").write_text(_SAMPLE_SRT, encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    return side_effect
+
+
+def test_youtube_url_ingests_via_ytdlp(tmp_wiki: Path) -> None:
+    args = _args(url_or_path="https://youtube.com/watch?v=abc12345678")
+    with (
+        patch(
+            "auto_lorebook.commands.ingest.cfg_mod.load_config",
+            return_value=_mock_config(tmp_wiki),
+        ),
+        patch(
+            "auto_lorebook.ytdlp.subprocess.run",
+            side_effect=_fake_yt_run("abc12345678", "The Video", 7200),
+        ),
+    ):
+        result = ingest.run(args)
+    assert result == 0
+
+    source_dir = tmp_wiki / "sources" / "yt-abc12345678"
+    assert (source_dir / "transcript.en.srt").exists()
+    info = info_yaml.read(source_dir / "info.yaml")
+    assert info.source_type == "youtube"
+    assert info.title == "The Video"
+    assert info.duration_seconds == 7200
+    assert info.caption_type == "manual"
+    assert info.source_url == "https://youtube.com/watch?v=abc12345678"
+
+
+def test_non_youtube_url_errors(tmp_wiki: Path) -> None:
+    args = _args(url_or_path="https://example.com/some.srt")
     with patch(
         "auto_lorebook.commands.ingest.cfg_mod.load_config",
         return_value=_mock_config(tmp_wiki),
+    ):
+        result = ingest.run(args)
+    assert result == 1
+
+
+def test_ytdlp_missing_returns_error(tmp_wiki: Path) -> None:
+    args = _args(url_or_path="https://youtube.com/watch?v=abcdefghijk")
+    with (
+        patch(
+            "auto_lorebook.commands.ingest.cfg_mod.load_config",
+            return_value=_mock_config(tmp_wiki),
+        ),
+        patch(
+            "auto_lorebook.ytdlp.subprocess.run",
+            side_effect=FileNotFoundError("yt-dlp"),
+        ),
+    ):
+        result = ingest.run(args)
+    assert result == 1
+
+
+def test_ytdlp_failure_returns_error(tmp_wiki: Path) -> None:
+    args = _args(url_or_path="https://youtube.com/watch?v=abcdefghijk")
+    with (
+        patch(
+            "auto_lorebook.commands.ingest.cfg_mod.load_config",
+            return_value=_mock_config(tmp_wiki),
+        ),
+        patch(
+            "auto_lorebook.ytdlp.fetch",
+            side_effect=ytdlp.NoSubtitlesError("no subs"),
+        ),
     ):
         result = ingest.run(args)
     assert result == 1
