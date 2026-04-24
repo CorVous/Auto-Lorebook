@@ -116,8 +116,12 @@ def read_frontmatter(path: Path) -> dict[str, Any]:
     return parsed
 
 
-def set_status(path: Path, status: str) -> None:
-    """Rewrite the `reading_status` field in place."""
+def with_status(path: Path, status: str) -> str:
+    """Return the reading.md text with `reading_status` set to `status`.
+
+    :raises FileNotFoundError: path doesn't exist
+    :raises ReadingError: invalid status, missing/malformed frontmatter
+    """
     if status not in VALID_STATUSES:
         msg = (
             f"invalid reading_status {status!r}; "
@@ -129,9 +133,7 @@ def set_status(path: Path, status: str) -> None:
     if not m:
         msg = f"{path}: no frontmatter block"
         raise ReadingError(msg)
-    body = m.group("body")
-    rest = m.group("rest")
-    parsed = yaml.safe_load(body) or {}
+    parsed = yaml.safe_load(m.group("body")) or {}
     if not isinstance(parsed, dict):
         msg = f"{path}: frontmatter is not a mapping"
         raise ReadingError(msg)
@@ -139,7 +141,12 @@ def set_status(path: Path, status: str) -> None:
     new_fm = yaml.safe_dump(
         parsed, allow_unicode=True, sort_keys=False, default_flow_style=False
     ).rstrip("\n")
-    atomic_write_text(path, f"---\n{new_fm}\n---\n{rest}")
+    return f"---\n{new_fm}\n---\n{m.group('rest')}"
+
+
+def set_status(path: Path, status: str) -> None:
+    """Rewrite the `reading_status` field in place."""
+    atomic_write_text(path, with_status(path, status))
 
 
 def _render_frontmatter(

@@ -6,7 +6,6 @@ endpoint. Uses stdlib `urllib` to avoid a runtime HTTP dep.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 from dataclasses import dataclass
@@ -140,9 +139,10 @@ class OpenRouterClient:
 
     @staticmethod
     def _raise_from_http_error(e: HTTPError) -> None:
-        body_bytes = b""
-        with contextlib.suppress(Exception):
+        try:
             body_bytes = e.read() or b""
+        except (OSError, AttributeError):
+            body_bytes = b""
         detail = ""
         if body_bytes:
             try:

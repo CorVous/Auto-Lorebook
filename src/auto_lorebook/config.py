@@ -68,7 +68,8 @@ class ConfigError(ValueError):
     """Raised when config.yaml is missing or malformed."""
 
 
-def _config_dir(home: Path | None = None) -> Path:
+def config_dir(home: Path | None = None) -> Path:
+    """Resolve ~/.auto-lorebook, respecting AUTO_LOREBOOK_HOME override."""
     if home is not None:
         return home
     env = os.environ.get(_CONFIG_DIR_ENV)
@@ -83,7 +84,7 @@ def load_config(home: Path | None = None) -> Config:
     :param home: override for the config directory (for tests)
     :raises ConfigError: if file is missing or malformed
     """
-    cfg_path = _config_dir(home) / "config.yaml"
+    cfg_path = config_dir(home) / "config.yaml"
     if not cfg_path.exists():
         msg = (
             f"Config file not found: {cfg_path}\n"
@@ -136,7 +137,7 @@ def load_config(home: Path | None = None) -> Config:
 
 def load_last_context(home: Path | None = None) -> LastContext:
     """Load ~/.auto-lorebook/last-context.yaml; missing/corrupt → empty."""
-    path = _config_dir(home) / "last-context.yaml"
+    path = config_dir(home) / "last-context.yaml"
     if not path.exists():
         return LastContext()
     try:
@@ -154,7 +155,7 @@ def load_last_context(home: Path | None = None) -> LastContext:
 
 def save_last_context(last: LastContext, home: Path | None = None) -> None:
     """Atomically write perspective and source_nature to last-context.yaml."""
-    cfg_dir = _config_dir(home)
+    cfg_dir = config_dir(home)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     path = cfg_dir / "last-context.yaml"
     data: dict[str, Any] = {}

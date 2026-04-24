@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime
 import logging
 import tempfile
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ from auto_lorebook import config as cfg_mod
 from auto_lorebook import info_yaml, source_store, ytdlp
 from auto_lorebook import source_id as sid_mod
 from auto_lorebook.commands._shared import finalize_context
+from auto_lorebook.timestamps import format_iso_now
 
 if TYPE_CHECKING:
     import argparse
@@ -234,7 +234,7 @@ def _new_info(
     args: argparse.Namespace,
     transcript_filename: str,
 ) -> info_yaml.Info:
-    fetched_at = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fetched_at = format_iso_now()
     title = resolved.fetched_title or Path(args.url_or_path).stem
     duration = (
         int(resolved.fetched_duration)

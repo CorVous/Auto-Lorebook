@@ -5,22 +5,19 @@ Emits a `Structure` validated by `structure.validate`.
 
 from __future__ import annotations
 
-import datetime
-import json
 import logging
-import re
 from typing import TYPE_CHECKING, Any
 
 from auto_lorebook import structure as structure_mod
+from auto_lorebook.llm_helpers import build_system_prompt, parse_json_object
 from auto_lorebook.structure import Structure, StructureValidationError
+from auto_lorebook.timestamps import format_iso_now
 
 if TYPE_CHECKING:
     from auto_lorebook.openrouter import OpenRouterClient
     from auto_lorebook.transcript import LoadedTranscript
 
 _logger = logging.getLogger(__name__)
-
-_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n(?P<body>.*?)\n```\s*$", re.DOTALL)
 
 _TASK_INSTRUCTIONS = """\
 You are segmenting an actual-play or lore transcript into a structured
@@ -90,11 +87,12 @@ def run(
 
     :raises Stage1aError: bad LLM output or mechanical-validation failure
     """
-    system_content = _build_system(preamble_text)
-    user_content = _build_user(transcript)
     messages = [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": user_content},
+        {
+            "role": "system",
+            "content": build_system_prompt(preamble_text, _TASK_INSTRUCTIONS),
+        },
+        {"role": "user", "content": _build_user(transcript)},
     ]
 
     resp = client.complete(
@@ -103,11 +101,14 @@ def run(
         response_format={"type": "json_object"},
     )
 
-    payload = _parse_json(resp.text)
+    try:
+        payload = parse_json_object(resp.text, "Stage 1a")
+    except ValueError as e:
+        raise Stage1aError(str(e)) from e
     structure = _payload_to_structure(
         payload,
         source_id=source_id,
-        generated_at=_now_iso(),
+        generated_at=format_iso_now(),
     )
 
     try:
@@ -119,33 +120,11 @@ def run(
     return structure
 
 
-def _build_system(preamble_text: str) -> str:
-    if preamble_text.strip():
-        return f"{preamble_text}\n\n---\n\n{_TASK_INSTRUCTIONS}"
-    return _TASK_INSTRUCTIONS
-
-
 def _build_user(transcript: LoadedTranscript) -> str:
     return (
         f"Transcript (total duration ~{transcript.total_duration:.0f}s):\n\n"
         f"{transcript.text_for_llm}"
     )
-
-
-def _parse_json(text: str) -> dict[str, Any]:
-    raw = text.strip()
-    m = _CODE_FENCE_RE.match(raw)
-    if m:
-        raw = m.group("body").strip()
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as e:
-        msg = f"Stage 1a response was not valid JSON: {e}"
-        raise Stage1aError(msg) from e
-    if not isinstance(parsed, dict):
-        msg = f"Stage 1a response must be a JSON object, got {type(parsed).__name__}"
-        raise Stage1aError(msg)
-    return parsed
 
 
 def _payload_to_structure(
@@ -159,14 +138,14 @@ def _payload_to_structure(
         msg = "Stage 1a response has no segments"
         raise Stage1aError(msg)
     try:
-        segments = [structure_mod._parse_segment(s) for s in segments_raw]  # noqa: SLF001
+        segments = [structure_mod.parse_segment(s) for s in segments_raw]
     except (KeyError, ValueError, TypeError) as e:
         msg = f"Stage 1a segment schema violation: {e}"
         raise Stage1aError(msg) from e
 
     flags_raw = payload.get("uncertainty_flags") or []
     try:
-        flags = [structure_mod._parse_flag(f) for f in flags_raw]  # noqa: SLF001
+        flags = [structure_mod.parse_flag(f) for f in flags_raw]
     except (KeyError, ValueError, TypeError) as e:
         msg = f"Stage 1a uncertainty_flag schema violation: {e}"
         raise Stage1aError(msg) from e
@@ -178,7 +157,3 @@ def _payload_to_structure(
         segments=segments,
         uncertainty_flags=flags,
     )
-
-
-def _now_iso() -> str:
-    return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

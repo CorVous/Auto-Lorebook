@@ -135,7 +135,7 @@ def _parse_override(raw: dict[str, Any]) -> Override:
     )
 
 
-def _parse_segment(raw: dict[str, Any]) -> Segment:
+def parse_segment(raw: dict[str, Any]) -> Segment:
     overrides_raw = raw.get("overrides") or []
     return Segment(
         id=str(raw["id"]),
@@ -148,7 +148,7 @@ def _parse_segment(raw: dict[str, Any]) -> Segment:
     )
 
 
-def _parse_flag(raw: dict[str, Any]) -> UncertaintyFlag:
+def parse_flag(raw: dict[str, Any]) -> UncertaintyFlag:
     return UncertaintyFlag(
         locator=parse_timestamp(str(raw["locator"])),
         span=str(raw.get("span") or ""),
@@ -178,9 +178,9 @@ def read(path: Path) -> Structure:
             source_id=str(raw["source_id"]),
             generated_at=str(raw["generated_at"]),
             default_speaker=str(raw.get("default_speaker") or ""),
-            segments=[_parse_segment(s) for s in (raw.get("segments") or [])],
+            segments=[parse_segment(s) for s in (raw.get("segments") or [])],
             uncertainty_flags=[
-                _parse_flag(f) for f in (raw.get("uncertainty_flags") or [])
+                parse_flag(f) for f in (raw.get("uncertainty_flags") or [])
             ],
         )
     except (KeyError, ValueError) as e:

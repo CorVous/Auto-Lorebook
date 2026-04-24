@@ -8,8 +8,6 @@ planner/extractor downstream.
 
 from __future__ import annotations
 
-import datetime
-import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -19,9 +17,11 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from auto_lorebook._io import atomic_write_text
+from auto_lorebook.llm_helpers import build_system_prompt, parse_json_object
 from auto_lorebook.schema import SchemaVersionError, read_schema_version
 from auto_lorebook.timestamps import (
     TimestampError,
+    format_iso_now,
     format_timestamp,
     parse_timestamp,
 )
@@ -38,7 +38,6 @@ _logger = logging.getLogger(__name__)
 DEFAULT_HINT_WINDOW_SECONDS = 15.0
 DEFAULT_MAX_CONCURRENCY = 4
 
-_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n(?P<body>.*?)\n```\s*$", re.DOTALL)
 _TIMESTAMP_LINE_RE = re.compile(r"^\[(?P<ts>[0-9:,.]+)\]\s?(?P<body>.*)$")
 
 _TASK_INSTRUCTIONS = """\
@@ -166,7 +165,7 @@ def run(
 
     return ReadingBullets(
         source_id=structure.source_id,
-        generated_at=_now_iso(),
+        generated_at=format_iso_now(),
         segments=results,
     )
 
@@ -179,33 +178,33 @@ def _run_one(
     model: str,
     hint_window_seconds: float,
 ) -> list[Bullet]:
-    segment_text = slice_transcript_for_segment(transcript, segment)
-    system_content = _build_system(preamble_text)
-    user_content = _build_user(segment, segment_text)
     messages = [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": user_content},
+        {
+            "role": "system",
+            "content": build_system_prompt(preamble_text, _TASK_INSTRUCTIONS),
+        },
+        {
+            "role": "user",
+            "content": _build_user(
+                segment, slice_transcript_for_segment(transcript, segment)
+            ),
+        },
     ]
     resp = client.complete(
         messages,
         model=model,
         response_format={"type": "json_object"},
     )
-    payload = _parse_json(resp.text, segment.id)
-    raw_bullets = payload.get("bullets")
-    if raw_bullets is None:
-        raw_bullets = []
+    try:
+        payload = parse_json_object(resp.text, f"Stage 1b for {segment.id}")
+    except ValueError as e:
+        raise Stage1bError(str(e)) from e
+    raw_bullets = payload.get("bullets") or []
     if not isinstance(raw_bullets, list):
         msg = f"Stage 1b for {segment.id}: 'bullets' must be a list"
         raise Stage1bError(msg)
 
     return [_parse_bullet(raw, segment, hint_window_seconds) for raw in raw_bullets]
-
-
-def _build_system(preamble_text: str) -> str:
-    if preamble_text.strip():
-        return f"{preamble_text}\n\n---\n\n{_TASK_INSTRUCTIONS}"
-    return _TASK_INSTRUCTIONS
 
 
 def _build_user(segment: Segment, segment_text: str) -> str:
@@ -215,22 +214,6 @@ def _build_user(segment: Segment, segment_text: str) -> str:
         f"Range: {segment.start:.0f}s - {segment.end:.0f}s\n\n"
         f"Transcript for this segment:\n\n{segment_text}"
     )
-
-
-def _parse_json(text: str, segment_id: str) -> dict[str, Any]:
-    raw = text.strip()
-    m = _CODE_FENCE_RE.match(raw)
-    if m:
-        raw = m.group("body").strip()
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as e:
-        msg = f"Stage 1b for {segment_id}: response was not valid JSON: {e}"
-        raise Stage1bError(msg) from e
-    if not isinstance(parsed, dict):
-        msg = f"Stage 1b for {segment_id}: response must be a JSON object"
-        raise Stage1bError(msg)
-    return parsed
 
 
 def _parse_bullet(
@@ -264,10 +247,6 @@ def _parse_bullet(
         locator_hint_start=hint_start,
         locator_hint_end=hint_end,
     )
-
-
-def _now_iso() -> str:
-    return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 _BULLETS_SCHEMA = 1

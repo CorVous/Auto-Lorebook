@@ -8,11 +8,10 @@ this module handles the wiring between stages.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
+from auto_lorebook import config as cfg_mod
 from auto_lorebook import (
     corrections as corrections_mod,
 )
@@ -31,7 +30,8 @@ from auto_lorebook import wiki_context as wiki_context_mod
 from auto_lorebook.openrouter import OpenRouterClient, OpenRouterError
 
 if TYPE_CHECKING:
-    from auto_lorebook import config as cfg_mod
+    from pathlib import Path
+
     from auto_lorebook.gap_check import GapWarning
     from auto_lorebook.info_yaml import Info
 
@@ -54,7 +54,7 @@ class GenerateResult:
 
 def generate(cfg: cfg_mod.Config, source_id: str) -> GenerateResult:
     """Run Stage 1a + 1b from scratch and write the draft reading.md."""
-    return _run_full(cfg, source_id, preserve_bullets_for=None)
+    return _run_full(cfg, source_id)
 
 
 def regenerate(
@@ -69,7 +69,7 @@ def regenerate(
         if segment_ids is not None:
             msg = "--segments is only valid with --from=summarize"
             raise ReadingPipelineError(msg)
-        return _run_full(cfg, source_id, preserve_bullets_for=None)
+        return _run_full(cfg, source_id)
     if from_stage == "summarize":
         return _run_summarize_only(cfg, source_id, segment_ids=segment_ids)
     msg = f"unknown --from value: {from_stage!r} (expected structure|summarize)"
@@ -78,43 +78,37 @@ def regenerate(
 
 def approve(cfg: cfg_mod.Config, source_id: str) -> Path:
     """Flip the draft to approved and copy it into the wiki."""
-    pending_path = pending_reading_path(cfg, source_id)
-    if not pending_path.exists():
+    pending_path = pending_reading_path(source_id)
+    try:
+        approved_text = reading_mod.with_status(pending_path, "approved")
+    except FileNotFoundError as e:
         msg = f"No draft reading for {source_id!r}. Run `generate-reading` first."
-        raise ReadingPipelineError(msg)
-
-    reading_mod.set_status(pending_path, "approved")
+        raise ReadingPipelineError(msg) from e
+    reading_mod.write(pending_path, approved_text)
     dest = cfg.wiki_repo_path / "sources" / source_id / "reading.md"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(pending_path.read_text(encoding="utf-8"), encoding="utf-8")
+    reading_mod.write(dest, approved_text)
     return dest
 
 
-def pending_dir(cfg: cfg_mod.Config, source_id: str) -> Path:  # noqa: ARG001
+def pending_dir(source_id: str) -> Path:
     """Return the pending directory for a source."""
-    home = os.environ.get("AUTO_LOREBOOK_HOME")
-    base = Path(home) if home else Path.home() / ".auto-lorebook"
-    return base / "pending" / source_id / "reading"
+    return cfg_mod.config_dir() / "pending" / source_id / "reading"
 
 
-def pending_reading_path(cfg: cfg_mod.Config, source_id: str) -> Path:
-    return pending_dir(cfg, source_id) / "reading.md"
+def pending_reading_path(source_id: str) -> Path:
+    return pending_dir(source_id) / "reading.md"
 
 
-def pending_structure_path(cfg: cfg_mod.Config, source_id: str) -> Path:
-    return pending_dir(cfg, source_id) / "structure.yaml"
+def pending_structure_path(source_id: str) -> Path:
+    return pending_dir(source_id) / "structure.yaml"
 
 
-def pending_bullets_path(cfg: cfg_mod.Config, source_id: str) -> Path:
-    return pending_dir(cfg, source_id) / "bullets.yaml"
+def pending_bullets_path(source_id: str) -> Path:
+    return pending_dir(source_id) / "bullets.yaml"
 
 
-def _run_full(
-    cfg: cfg_mod.Config,
-    source_id: str,
-    *,
-    preserve_bullets_for: list[str] | None,
-) -> GenerateResult:
+def _run_full(cfg: cfg_mod.Config, source_id: str) -> GenerateResult:
     info, ctx = _load_context(cfg, source_id)
     client = _build_client(cfg)
     model = cfg.models.primary
@@ -126,50 +120,36 @@ def _run_full(
         client=client,
         model=model,
     )
-    pdir = pending_dir(cfg, source_id)
+    pdir = pending_dir(source_id)
     pdir.mkdir(parents=True, exist_ok=True)
-    structure_mod.write(structure, pending_structure_path(cfg, source_id))
+    structure_mod.write(structure, pending_structure_path(source_id))
 
     warnings = gap_check_mod.check(structure)
 
-    preserved = (
-        {
-            sid: bullets
-            for sid, bullets in _load_existing_bullets(cfg, source_id).segments.items()
-            if sid in (preserve_bullets_for or [])
-        }
-        if preserve_bullets_for is not None
-        else {}
-    )
-    targets = [s.id for s in structure.segments if s.id not in preserved]
     bullets = stage1b_mod.run(
         transcript=ctx.transcript,
         structure=structure,
         preamble_text=ctx.preamble_text,
         client=client,
         model=model,
-        segment_ids=targets or None,
     )
-    for sid, existing in preserved.items():
-        bullets.segments[sid] = existing
-    # fill any segment missing from 1b output with an empty list
     for seg in structure.segments:
         bullets.segments.setdefault(seg.id, [])
-    stage1b_mod.write_bullets(bullets, pending_bullets_path(cfg, source_id))
+    stage1b_mod.write_bullets(bullets, pending_bullets_path(source_id))
 
-    name_corrections = _load_existing_name_corrections(cfg, source_id)
+    name_corrections = _load_existing_name_corrections(source_id)
     text = reading_mod.assemble(
         info=info,
         structure=structure,
         bullets=bullets,
         name_corrections=name_corrections,
     )
-    reading_mod.write(pending_reading_path(cfg, source_id), text)
+    reading_mod.write(pending_reading_path(source_id), text)
 
     return GenerateResult(
-        pending_reading_path=pending_reading_path(cfg, source_id),
-        structure_path=pending_structure_path(cfg, source_id),
-        bullets_path=pending_bullets_path(cfg, source_id),
+        pending_reading_path=pending_reading_path(source_id),
+        structure_path=pending_structure_path(source_id),
+        bullets_path=pending_bullets_path(source_id),
         gap_warnings=warnings,
     )
 
@@ -180,7 +160,7 @@ def _run_summarize_only(
     *,
     segment_ids: list[str] | None,
 ) -> GenerateResult:
-    structure_path = pending_structure_path(cfg, source_id)
+    structure_path = pending_structure_path(source_id)
     if not structure_path.exists():
         msg = (
             f"No prior structure.yaml for {source_id!r}. "
@@ -193,7 +173,7 @@ def _run_summarize_only(
     client = _build_client(cfg)
     model = cfg.models.primary
 
-    existing = _load_existing_bullets(cfg, source_id)
+    existing = _load_existing_bullets(source_id)
     new_bullets = stage1b_mod.run(
         transcript=ctx.transcript,
         structure=structure,
@@ -202,28 +182,28 @@ def _run_summarize_only(
         model=model,
         segment_ids=segment_ids,
     )
-    # merge: rebuilt segments overwrite; untouched segments keep existing bullets
+    # rebuilt segments overwrite; untouched segments keep existing bullets
     merged = existing.segments.copy()
     for sid, bullets_list in new_bullets.segments.items():
         merged[sid] = bullets_list
     for seg in structure.segments:
         merged.setdefault(seg.id, [])
     new_bullets.segments = merged
-    stage1b_mod.write_bullets(new_bullets, pending_bullets_path(cfg, source_id))
+    stage1b_mod.write_bullets(new_bullets, pending_bullets_path(source_id))
 
-    name_corrections = _load_existing_name_corrections(cfg, source_id)
+    name_corrections = _load_existing_name_corrections(source_id)
     text = reading_mod.assemble(
         info=info,
         structure=structure,
         bullets=new_bullets,
         name_corrections=name_corrections,
     )
-    reading_mod.write(pending_reading_path(cfg, source_id), text)
+    reading_mod.write(pending_reading_path(source_id), text)
 
     return GenerateResult(
-        pending_reading_path=pending_reading_path(cfg, source_id),
-        structure_path=pending_structure_path(cfg, source_id),
-        bullets_path=pending_bullets_path(cfg, source_id),
+        pending_reading_path=pending_reading_path(source_id),
+        structure_path=pending_structure_path(source_id),
+        bullets_path=pending_bullets_path(source_id),
         gap_warnings=gap_check_mod.check(structure),
     )
 
@@ -283,10 +263,8 @@ def _build_client(cfg: cfg_mod.Config) -> OpenRouterClient:
         raise ReadingPipelineError(str(e)) from e
 
 
-def _load_existing_bullets(
-    cfg: cfg_mod.Config, source_id: str
-) -> stage1b_mod.ReadingBullets:
-    path = pending_bullets_path(cfg, source_id)
+def _load_existing_bullets(source_id: str) -> stage1b_mod.ReadingBullets:
+    path = pending_bullets_path(source_id)
     if not path.exists():
         return stage1b_mod.ReadingBullets(
             source_id=source_id, generated_at="", segments={}
@@ -294,10 +272,8 @@ def _load_existing_bullets(
     return stage1b_mod.read_bullets(path)
 
 
-def _load_existing_name_corrections(
-    cfg: cfg_mod.Config, source_id: str
-) -> dict[str, str]:
-    path = pending_reading_path(cfg, source_id)
+def _load_existing_name_corrections(source_id: str) -> dict[str, str]:
+    path = pending_reading_path(source_id)
     if not path.exists():
         return {}
     try:
