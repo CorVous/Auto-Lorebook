@@ -6,7 +6,6 @@ Auto-Lorebook is a Python CLI managed with [uv](https://docs.astral.sh/uv/).
 
 - Python 3.13.
 - `uv` installed. On macOS: `brew install uv`.
-- `yt-dlp` on `PATH` for YouTube ingestion.
 - An OpenRouter API key for LLM access.
 
 ## Install

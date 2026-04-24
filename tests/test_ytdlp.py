@@ -1,23 +1,18 @@
-"""Tests for ytdlp.py subprocess wrapper."""
+"""Tests for ytdlp.py Python-API wrapper."""
 
 from __future__ import annotations
 
-import json
-import subprocess  # noqa: S404
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
+import imageio_ffmpeg
 import pytest
+from yt_dlp.utils import DownloadError
 
-from auto_lorebook.ytdlp import (
-    NoSubtitlesError,
-    YtDlpError,
-    YtDlpNotFoundError,
-    fetch,
-)
+from auto_lorebook.ytdlp import NoSubtitlesError, YtDlpError, fetch
+from tests._ytdlp_fakes import make_fake_youtubedl
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from pathlib import Path
 
 
@@ -32,31 +27,13 @@ _SAMPLE_SRT = (
 )
 
 
-def _fake_run_ok(
-    tmp_path: Path, video_id: str = "abc123"
-) -> Callable[..., subprocess.CompletedProcess[str]]:
-    """Build a patched subprocess.run that simulates a successful fetch."""
-    info = {"id": video_id, "title": "My Video", "duration": 123}
-
-    def side_effect(
-        cmd: list[str], **_kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        # yt-dlp writes info.json and .en.srt into cwd (the target_dir)
-        (tmp_path / f"{video_id}.info.json").write_text(
-            json.dumps(info), encoding="utf-8"
-        )
-        (tmp_path / f"{video_id}.en.srt").write_text(_SAMPLE_SRT, encoding="utf-8")
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    return side_effect
-
-
 class TestFetch:
     def test_success(self, tmp_path: Path) -> None:
-        with patch(
-            "auto_lorebook.ytdlp.subprocess.run",
-            side_effect=_fake_run_ok(tmp_path, "vid_ok"),
-        ):
+        info = {"id": "vid_ok", "title": "My Video", "duration": 123}
+        fake_ydl, _ = make_fake_youtubedl(
+            info=info, subs={"vid_ok.en.srt": _SAMPLE_SRT}
+        )
+        with patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl):
             result = fetch("https://youtu.be/vid_ok", tmp_path)
         assert result.video_id == "vid_ok"
         assert result.title == "My Video"
@@ -64,82 +41,64 @@ class TestFetch:
         assert result.srt_path.exists()
         assert result.srt_path.read_text(encoding="utf-8") == _SAMPLE_SRT
 
-    def test_yt_dlp_not_installed(self, tmp_path: Path) -> None:
+    def test_download_error_raises_ytdlp_error(self, tmp_path: Path) -> None:
+        fake_ydl, _ = make_fake_youtubedl(
+            info=None,
+            raises=DownloadError("ERROR: video unavailable"),
+        )
         with (
-            patch(
-                "auto_lorebook.ytdlp.subprocess.run",
-                side_effect=FileNotFoundError("yt-dlp"),
-            ),
-            pytest.raises(YtDlpNotFoundError),
-        ):
-            fetch("https://youtu.be/x", tmp_path)
-
-    def test_subprocess_nonzero_exit(self, tmp_path: Path) -> None:
-        with (
-            patch(
-                "auto_lorebook.ytdlp.subprocess.run",
-                return_value=subprocess.CompletedProcess(
-                    [], 1, stdout="", stderr="ERROR: video unavailable"
-                ),
-            ),
+            patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl),
             pytest.raises(YtDlpError, match="video unavailable"),
         ):
             fetch("https://youtu.be/bad", tmp_path)
 
+    def test_extract_info_returns_none_raises(self, tmp_path: Path) -> None:
+        fake_ydl, _ = make_fake_youtubedl(info=None)
+        with (
+            patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl),
+            pytest.raises(YtDlpError),
+        ):
+            fetch("https://youtu.be/x", tmp_path)
+
+    def test_extract_info_missing_fields_raises(self, tmp_path: Path) -> None:
+        fake_ydl, _ = make_fake_youtubedl(info={"id": "x"})  # no title/duration
+        with (
+            patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl),
+            pytest.raises(YtDlpError),
+        ):
+            fetch("https://youtu.be/x", tmp_path)
+
     def test_no_subtitles_written(self, tmp_path: Path) -> None:
         info = {"id": "v1", "title": "T", "duration": 10}
-
-        def side_effect(
-            cmd: list[str], **_kwargs: object
-        ) -> subprocess.CompletedProcess[str]:
-            (tmp_path / "v1.info.json").write_text(json.dumps(info), encoding="utf-8")
-            # no .srt file
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
+        fake_ydl, _ = make_fake_youtubedl(info=info)  # no subs written
         with (
-            patch("auto_lorebook.ytdlp.subprocess.run", side_effect=side_effect),
+            patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl),
             pytest.raises(NoSubtitlesError),
         ):
             fetch("https://youtu.be/v1", tmp_path)
 
-    def test_info_json_missing(self, tmp_path: Path) -> None:
-        def side_effect(
-            cmd: list[str], **_kwargs: object
-        ) -> subprocess.CompletedProcess[str]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        with (
-            patch("auto_lorebook.ytdlp.subprocess.run", side_effect=side_effect),
-            pytest.raises(YtDlpError),
-        ):
-            fetch("https://youtu.be/nope", tmp_path)
-
     def test_float_duration(self, tmp_path: Path) -> None:
         info = {"id": "vf", "title": "T", "duration": 123.5}
-
-        def side_effect(
-            cmd: list[str], **_kwargs: object
-        ) -> subprocess.CompletedProcess[str]:
-            (tmp_path / "vf.info.json").write_text(json.dumps(info), encoding="utf-8")
-            (tmp_path / "vf.en.srt").write_text(_SAMPLE_SRT, encoding="utf-8")
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        with patch("auto_lorebook.ytdlp.subprocess.run", side_effect=side_effect):
+        fake_ydl, _ = make_fake_youtubedl(info=info, subs={"vf.en.srt": _SAMPLE_SRT})
+        with patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl):
             result = fetch("https://youtu.be/vf", tmp_path)
         assert result.duration == pytest.approx(123.5)
 
     def test_prefers_manual_subs_over_auto(self, tmp_path: Path) -> None:
         info = {"id": "vm", "title": "T", "duration": 5}
-
-        def side_effect(
-            cmd: list[str], **_kwargs: object
-        ) -> subprocess.CompletedProcess[str]:
-            (tmp_path / "vm.info.json").write_text(json.dumps(info), encoding="utf-8")
-            # yt-dlp writes both; wrapper prefers the non-auto one
-            (tmp_path / "vm.en.srt").write_text("manual", encoding="utf-8")
-            (tmp_path / "vm.en.auto.srt").write_text("auto", encoding="utf-8")
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-        with patch("auto_lorebook.ytdlp.subprocess.run", side_effect=side_effect):
+        fake_ydl, _ = make_fake_youtubedl(
+            info=info,
+            subs={"vm.en.srt": "manual", "vm.en.auto.srt": "auto"},
+        )
+        with patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl):
             result = fetch("https://youtu.be/vm", tmp_path)
         assert result.srt_path.name == "vm.en.srt"
+
+    def test_ydl_opts_include_bundled_ffmpeg(self, tmp_path: Path) -> None:
+        info = {"id": "vff", "title": "T", "duration": 10}
+        fake_ydl, captured_opts = make_fake_youtubedl(
+            info=info, subs={"vff.en.srt": _SAMPLE_SRT}
+        )
+        with patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl):
+            fetch("https://youtu.be/vff", tmp_path)
+        assert captured_opts["ffmpeg_location"] == imageio_ffmpeg.get_ffmpeg_exe()

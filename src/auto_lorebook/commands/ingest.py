@@ -32,7 +32,7 @@ def add_parser(
         description=(
             "Fetch a source, gather context, and store it in the wiki. "
             "Local files (.srt, .txt, .md) are supported. "
-            "YouTube URLs are fetched via yt-dlp (must be on PATH)."
+            "YouTube URLs are fetched via yt-dlp (bundled)."
         ),
     )
     parser.add_argument(
