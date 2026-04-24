@@ -36,8 +36,11 @@ wiki_repo_path: /path/to/your/wiki
 openrouter:
   api_key_env: OPENROUTER_API_KEY
 models:
-  primary: openrouter/anthropic/claude-sonnet-4
-  extractor: openrouter/anthropic/claude-sonnet-4
+  primary: openrouter/anthropic/claude-sonnet-4-5
+  extractor: openrouter/anthropic/claude-sonnet-4-5   # accepted but unused in Phase 1
+  primary_context_window: 200000
+preamble:
+  budget_fraction: 0.8
 ```
 
 Set the API key in your shell:
