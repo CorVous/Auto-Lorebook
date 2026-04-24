@@ -6,15 +6,17 @@ implementation status.
 
 !!! info "Current status"
 
-    Phase 1 in progress. Foundations landed: CLI skeleton, config
-    loader, info.yaml, tolerant `.wiki-context.yaml` and
-    `.transcription-corrections.yaml` readers, interactive context
-    gathering with flag overrides, preamble assembly with
-    component-specific token-budget errors, canonical `h:mm:ss`
-    timestamp helpers, SRT parser, and a yt-dlp subprocess wrapper
-    wired into `ingest` for YouTube URLs. Stage 1a / 1b, the
-    `generate-reading` / `regenerate-reading` / `approve-reading`
-    commands, and the OpenRouter client are still outstanding.
+    Phase 1 substantially landed. The reading pipeline is runnable end
+    to end against a real OpenRouter backend: `ingest` fetches
+    YouTube transcripts via `yt-dlp`, `generate-reading` runs Stage 1a
+    (structure + mechanical validation) and Stage 1b (per-segment
+    summarize, parallelized) to produce a draft `reading.md`, the
+    mechanical gap check surfaces low-yield stretches during review,
+    `approve-reading` flips the draft into the wiki, and
+    `regenerate-reading --from=structure|summarize [--segments]`
+    supports targeted re-runs. Remaining Phase 1 polish: live
+    end-to-end validation against a real source and tuning the 1a/1b
+    prompts based on that run.
 
 ## Phase 1: Reading stage
 
