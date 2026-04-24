@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from auto_lorebook._io import atomic_write_text
 from auto_lorebook.schema import SchemaVersionError, read_schema_version
 
 _logger = logging.getLogger(__name__)
@@ -163,19 +162,4 @@ def save_last_context(last: LastContext, home: Path | None = None) -> None:
         data["perspective"] = last.perspective
     if last.source_nature is not None:
         data["source_nature"] = last.source_nature
-    _atomic_write(path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
-
-
-def _atomic_write(path: Path, text: str) -> None:
-    """Write text to path atomically via tempfile + os.replace."""
-    dir_ = path.parent
-    dir_.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=dir_, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        Path(tmp).replace(path)
-    except Exception:
-        with contextlib.suppress(OSError):
-            Path(tmp).unlink()
-        raise
+    atomic_write_text(path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False))

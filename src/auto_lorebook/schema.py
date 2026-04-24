@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+from typing import TYPE_CHECKING, Any
+
+import yaml
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 
 class SchemaVersionError(ValueError):
@@ -36,3 +44,43 @@ def read_schema_version(
         )
         raise SchemaVersionError(msg)
     return v
+
+
+def read_tolerant_yaml(
+    path: Path,
+    file_label: str,
+    *,
+    max_supported: int,
+) -> dict[str, Any] | None:
+    """Load a tolerant YAML mapping; None if missing/empty/malformed.
+
+    Missing schema_version logs a warning and is treated as 1.
+    Parse errors, non-mapping roots, and unsupported schema_version
+    all log a warning and return None.
+    """
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return None
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError:
+        _logger.warning("%s: could not parse YAML; ignoring", file_label)
+        return None
+    if not isinstance(raw, dict):
+        return None
+
+    if "schema_version" not in raw:
+        _logger.warning(
+            "%s: missing schema_version; treating as 1. "
+            "Add 'schema_version: 1' to suppress.",
+            file_label,
+        )
+        raw["schema_version"] = 1
+    try:
+        read_schema_version(raw, file_label, max_supported=max_supported)
+    except SchemaVersionError:
+        _logger.warning("%s: unrecognised schema_version; ignoring", file_label)
+        return None
+    return raw

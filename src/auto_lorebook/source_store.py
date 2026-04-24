@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
-import hashlib
 import logging
-import os
-import shutil
-import tempfile
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+from auto_lorebook._io import atomic_copy, hash_file
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _logger = logging.getLogger(__name__)
-
-_CHUNK = 65536
 
 
 class DuplicateSourceError(Exception):
@@ -21,15 +19,6 @@ class DuplicateSourceError(Exception):
 
 class CollisionError(Exception):
     """Different file hashes collide on the same source_id."""
-
-
-def _hash_bytes(path: Path) -> str:
-    """SHA-256 of file bytes, streamed."""
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        while chunk := fh.read(_CHUNK):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _transcript_filename(source_path: Path, source_type: str) -> str:
@@ -60,11 +49,9 @@ def copy_transcript(
     dest_dir = wiki_repo / "sources" / source_id
     fname = _transcript_filename(source_path, source_type)
     dest = dest_dir / fname
-    incoming_hash = _hash_bytes(source_path)
 
-    if dest_dir.exists() and dest.exists():
-        stored_hash = _hash_bytes(dest)
-        if stored_hash == incoming_hash:
+    if dest.exists():
+        if hash_file(dest) == hash_file(source_path):
             msg = (
                 f"Source '{source_id}' already ingested with the same content. "
                 "Run `configure-context` to edit its metadata."
@@ -76,17 +63,5 @@ def copy_transcript(
         )
         raise CollisionError(msg)
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-
-    # Atomic copy: write to temp, then replace
-    fd, tmp = tempfile.mkstemp(dir=dest_dir, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as out, source_path.open("rb") as src:
-            shutil.copyfileobj(src, out)
-        Path(tmp).replace(dest)
-    except Exception:
-        with contextlib.suppress(OSError):
-            Path(tmp).unlink()
-        raise
-
+    atomic_copy(source_path, dest)
     return dest, fname
