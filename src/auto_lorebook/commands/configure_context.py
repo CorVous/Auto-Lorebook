@@ -42,6 +42,7 @@ def add_parser(
     parser.add_argument("--perspective", dest="perspective", default=None)
     parser.add_argument("--source-nature", dest="source_nature", default=None)
     parser.add_argument("--setting", dest="setting", default=None)
+    parser.add_argument("--notes", dest="notes", default=None, help="One-line notes")
     parser.add_argument(
         "--no-interactive",
         dest="no_interactive",

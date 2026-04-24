@@ -78,6 +78,12 @@ def add_parser(
         help="Setting name",
     )
     parser.add_argument(
+        "--notes",
+        dest="notes",
+        default=None,
+        help="One-line notes for this source",
+    )
+    parser.add_argument(
         "--no-interactive",
         dest="no_interactive",
         action="store_true",
@@ -98,7 +104,7 @@ def run(args: argparse.Namespace) -> int:
 
     wiki_repo = cfg.wiki_repo_path
 
-    if args.url_or_path.startswith(("http://", "https://")) and not args.source_id:
+    if args.url_or_path.startswith(("http://", "https://")):
         _logger.error(
             "Fetching transcripts from URLs is not yet implemented. "
             "Download the transcript manually and pass the local file."
@@ -132,9 +138,13 @@ def run(args: argparse.Namespace) -> int:
     if info_path.exists():
         try:
             info = info_yaml.read(info_path)
-        except info_yaml.InfoError:
-            _logger.warning("Existing info.yaml unreadable; recreating")
-            info = _new_info(source_id, source_type, args, transcript_filename)
+        except info_yaml.InfoError as e:
+            _logger.error(
+                "Existing info.yaml is unreadable (%s). "
+                "Fix or delete it, then re-run `ingest`.",
+                e,
+            )
+            return 1
     else:
         info = _new_info(source_id, source_type, args, transcript_filename)
 

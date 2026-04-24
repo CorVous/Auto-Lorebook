@@ -45,6 +45,7 @@ def finalize_context(
         "perspective": args.perspective,
         "source_nature": args.source_nature,
         "setting": args.setting,
+        "notes": args.notes,
     }
     try:
         info = interactive.gather_context(

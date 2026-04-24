@@ -21,11 +21,10 @@ class CollisionError(Exception):
     """Different file hashes collide on the same source_id."""
 
 
-def _transcript_filename(source_path: Path, source_type: str) -> str:
-    suffix = source_path.suffix.lower()
-    if suffix == ".srt" or source_type == "srt":
+def _transcript_filename(source_type: str) -> str:
+    if source_type == "srt":
         return "transcript.en.srt"
-    if suffix == ".md" or source_type == "markdown":
+    if source_type == "markdown":
         return "transcript.md"
     return "transcript.txt"
 
@@ -47,7 +46,7 @@ def copy_transcript(
     :raises CollisionError: if source_id dir exists but hashes differ
     """
     dest_dir = wiki_repo / "sources" / source_id
-    fname = _transcript_filename(source_path, source_type)
+    fname = _transcript_filename(source_type)
     dest = dest_dir / fname
 
     if dest.exists():
