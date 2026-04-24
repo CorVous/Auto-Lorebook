@@ -27,8 +27,15 @@ uv run auto-lorebook --help
 
 ## Configure
 
-The tool reads configuration from `~/.auto-lorebook/config.yaml`. A
-minimal example:
+On first invocation of `auto-lorebook ingest`, the tool detects a
+missing `~/.auto-lorebook/config.yaml` and prompts for the values
+needed to write one (wiki repo path, API-key env var name, and primary
+model). It also seeds the wiki with the entity directories and the
+two convention files (`.wiki-context.yaml`,
+`.transcription-corrections.yaml`). Pass `--no-interactive` to suppress
+the prompt and require a pre-existing config instead.
+
+To write the file by hand, the minimal layout is:
 
 ```yaml
 schema_version: 1

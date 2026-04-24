@@ -10,6 +10,8 @@ import yaml
 from auto_lorebook.config import (
     ConfigError,
     LastContext,
+    MissingConfigError,
+    interactive_setup,
     load_config,
     load_last_context,
     save_last_context,
@@ -68,8 +70,81 @@ def test_load_config_with_all_fields(tmp_path: Path) -> None:
 
 
 def test_load_config_missing_file_raises(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match="not found"):
+    with pytest.raises(MissingConfigError, match="not found"):
         load_config(home=tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# interactive_setup
+# ---------------------------------------------------------------------------
+
+
+def test_interactive_setup_writes_config_and_skeleton(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    wiki = tmp_path / "wiki"
+    answers = iter([str(wiki), "", ""])  # accept defaults for env + model
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    cfg = interactive_setup(home=home)
+
+    assert (home / "config.yaml").exists()
+    assert cfg.wiki_repo_path == wiki.resolve()
+    assert cfg.openrouter.api_key_env == "OPENROUTER_API_KEY"
+    assert cfg.models.primary == "openrouter/anthropic/claude-sonnet-4-5"
+    # wiki skeleton created
+    assert (wiki / "characters").is_dir()
+    assert (wiki / "concepts").is_dir()
+    assert (wiki / ".wiki-context.yaml").exists()
+    assert (wiki / ".transcription-corrections.yaml").exists()
+
+
+def test_interactive_setup_custom_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    wiki = tmp_path / "mywiki"
+    answers = iter([str(wiki), "MY_KEY", "openrouter/anthropic/claude-opus-4-7"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    cfg = interactive_setup(home=home)
+
+    assert cfg.openrouter.api_key_env == "MY_KEY"
+    assert cfg.models.primary == "openrouter/anthropic/claude-opus-4-7"
+
+
+def test_interactive_setup_reprompts_on_blank_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    wiki = tmp_path / "wiki"
+    # first answer blank, second valid; defaults accepted for the rest
+    answers = iter(["", str(wiki), "", ""])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    cfg = interactive_setup(home=home)
+    assert cfg.wiki_repo_path == wiki.resolve()
+
+
+def test_interactive_setup_preserves_existing_wiki_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    existing = wiki / ".wiki-context.yaml"
+    existing.write_text(
+        "schema_version: 1\nsetting:\n  name: Aether\n", encoding="utf-8"
+    )
+
+    answers = iter([str(wiki), "", ""])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    interactive_setup(home=home)
+    # existing content preserved
+    assert "Aether" in existing.read_text(encoding="utf-8")
 
 
 def test_load_config_missing_wiki_repo_raises(tmp_path: Path) -> None:

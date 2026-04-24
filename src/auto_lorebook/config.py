@@ -68,6 +68,10 @@ class ConfigError(ValueError):
     """Raised when config.yaml is missing or malformed."""
 
 
+class MissingConfigError(ConfigError):
+    """Raised specifically when config.yaml does not exist (first run)."""
+
+
 def config_dir(home: Path | None = None) -> Path:
     """Resolve ~/.auto-lorebook, respecting AUTO_LOREBOOK_HOME override."""
     if home is not None:
@@ -88,15 +92,10 @@ def load_config(home: Path | None = None) -> Config:
     if not cfg_path.exists():
         msg = (
             f"Config file not found: {cfg_path}\n"
-            "Create it with at minimum:\n"
-            "  schema_version: 1\n"
-            "  wiki_repo_path: /path/to/your/wiki\n"
-            "  openrouter:\n"
-            "    api_key_env: OPENROUTER_API_KEY\n"
-            "  models:\n"
-            "    primary: openrouter/anthropic/claude-sonnet-4-5\n"
+            "Run an interactive command (e.g. `auto-lorebook ingest ...`) "
+            "to create one, or write it by hand."
         )
-        raise ConfigError(msg)
+        raise MissingConfigError(msg)
     raw = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         msg = f"{cfg_path}: expected a YAML mapping, got {type(raw).__name__}"
@@ -164,3 +163,81 @@ def save_last_context(last: LastContext, home: Path | None = None) -> None:
     if last.source_nature is not None:
         data["source_nature"] = last.source_nature
     atomic_write_text(path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
+
+
+_DEFAULT_API_KEY_ENV = "OPENROUTER_API_KEY"
+_DEFAULT_MODEL = "openrouter/anthropic/claude-sonnet-4-5"
+_WIKI_SUBDIRS = ("characters", "locations", "factions", "events", "items", "concepts")
+
+
+def _prompt(prompt_text: str, default: str | None = None) -> str:
+    """Prompt for a value; blank → default. Re-prompt if no default + blank."""
+    while True:
+        suffix = f" [{default}]" if default else ""
+        value = input(f"{prompt_text}{suffix}: ").strip()
+        if value:
+            return value
+        if default is not None:
+            return default
+        print("(required)")  # noqa: T201
+
+
+def interactive_setup(home: Path | None = None) -> Config:
+    """Prompt the user for first-run config and write `config.yaml`.
+
+    Creates the wiki repo skeleton (entity dirs + `.wiki-context.yaml` /
+    `.transcription-corrections.yaml` schema stubs) if it doesn't exist.
+
+    :raises KeyboardInterrupt: user pressed Ctrl-C
+    """
+    cfg_dir = config_dir(home)
+    cfg_path = cfg_dir / "config.yaml"
+
+    print("First run: setting up ~/.auto-lorebook/config.yaml.")  # noqa: T201
+    print()  # noqa: T201
+
+    wiki_raw = _prompt("Wiki repository directory")
+    wiki = Path(wiki_raw).expanduser().resolve()
+    api_key_env = _prompt(
+        "Environment variable holding your OpenRouter API key",
+        default=_DEFAULT_API_KEY_ENV,
+    )
+    model = _prompt(
+        "Primary model slug (used for both reading substages)",
+        default=_DEFAULT_MODEL,
+    )
+
+    data: dict[str, Any] = {
+        "schema_version": 1,
+        "wiki_repo_path": str(wiki),
+        "openrouter": {"api_key_env": api_key_env},
+        "models": {"primary": model},
+    }
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(
+        cfg_path,
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+    )
+
+    _bootstrap_wiki(wiki)
+
+    print()  # noqa: T201
+    print(f"Wrote {cfg_path}")  # noqa: T201
+    if not os.environ.get(api_key_env):
+        print(  # noqa: T201
+            f"Reminder: export {api_key_env}=<your OpenRouter key> before running "
+            "`generate-reading`."
+        )
+
+    return load_config(home=home)
+
+
+def _bootstrap_wiki(wiki: Path) -> None:
+    """Create the wiki entity dirs and tolerant-yaml stubs if absent."""
+    wiki.mkdir(parents=True, exist_ok=True)
+    for sub in _WIKI_SUBDIRS:
+        (wiki / sub).mkdir(exist_ok=True)
+    for fname in (".wiki-context.yaml", ".transcription-corrections.yaml"):
+        path = wiki / fname
+        if not path.exists():
+            atomic_write_text(path, "schema_version: 1\n")

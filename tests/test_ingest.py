@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    import pytest
+
 
 def _mock_config(wiki: Path) -> MagicMock:
     cfg = MagicMock()
@@ -132,6 +134,37 @@ def test_ytdlp_failure_returns_error(tmp_wiki: Path) -> None:
     ):
         result = ingest.run(args)
     assert result == 1
+
+
+def test_first_run_triggers_interactive_setup(
+    tmp_path: Path, tmp_wiki: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing config.yaml invokes interactive_setup when interactive."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
+    src = tmp_path / "notes.txt"
+    src.write_bytes(b"hello world")
+
+    setup_mock = MagicMock(return_value=_mock_config(tmp_wiki))
+    args = _args(url_or_path=str(src), no_interactive=False)
+    with patch("auto_lorebook.commands.ingest.cfg_mod.interactive_setup", setup_mock):
+        ingest.run(args)
+    assert setup_mock.called
+
+
+def test_first_run_no_interactive_propagates_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--no-interactive` surfaces the missing-config error without prompting."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
+    src = tmp_path / "notes.txt"
+    src.write_bytes(b"hello world")
+
+    args = _args(url_or_path=str(src), no_interactive=True)
+    result = ingest.run(args)
+    assert result == 1
+    assert not (home / "config.yaml").exists()
 
 
 def test_unreadable_info_yaml_returns_error(tmp_path: Path, tmp_wiki: Path) -> None:
