@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
-import os
-import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from auto_lorebook._io import atomic_write_text
 from auto_lorebook.schema import SchemaVersionError, read_schema_version
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _logger = logging.getLogger(__name__)
 
@@ -126,18 +126,4 @@ def write(info: Info, path: Path) -> None:
         sort_keys=False,
         default_flow_style=False,
     )
-    _atomic_write(path, text)
-
-
-def _atomic_write(path: Path, text: str) -> None:
-    dir_ = path.parent
-    dir_.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=dir_, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        Path(tmp).replace(path)
-    except Exception:
-        with contextlib.suppress(OSError):
-            Path(tmp).unlink()
-        raise
+    atomic_write_text(path, text)

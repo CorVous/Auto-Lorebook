@@ -8,17 +8,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from auto_lorebook import config as cfg_mod
-from auto_lorebook import (
-    corrections,
-    entity_index,
-    info_yaml,
-    interactive,
-    source_store,
-    wiki_context,
-)
-from auto_lorebook import preamble as preamble_mod
+from auto_lorebook import info_yaml, source_store
 from auto_lorebook import source_id as sid_mod
-from auto_lorebook.source_id import _extract_video_id
+from auto_lorebook.commands._shared import finalize_context
 
 if TYPE_CHECKING:
     import argparse
@@ -106,7 +98,6 @@ def run(args: argparse.Namespace) -> int:
 
     wiki_repo = cfg.wiki_repo_path
 
-    # Refuse bare URL (fetch not implemented)
     if args.url_or_path.startswith(("http://", "https://")) and not args.source_id:
         _logger.error(
             "Fetching transcripts from URLs is not yet implemented. "
@@ -114,14 +105,12 @@ def run(args: argparse.Namespace) -> int:
         )
         return 1
 
-    # Derive source ID
     try:
         source_id = sid_mod.derive(args.url_or_path, args.source_id, args.source_url)
     except sid_mod.SourceIdError as e:
         _logger.error("%s", e)
         return 1
 
-    # Validate local path
     local_path = Path(args.url_or_path)
     if not local_path.exists():
         _logger.error("File not found: %s", local_path)
@@ -129,21 +118,16 @@ def run(args: argparse.Namespace) -> int:
 
     source_type = _derive_source_type(local_path, args.source_url)
 
-    # Copy transcript
     try:
         dest, transcript_filename = source_store.copy_transcript(
             local_path, source_id, source_type, wiki_repo
         )
-    except source_store.DuplicateSourceError as e:
-        _logger.error("%s", e)
-        return 2
-    except source_store.CollisionError as e:
+    except (source_store.DuplicateSourceError, source_store.CollisionError) as e:
         _logger.error("%s", e)
         return 2
 
     _logger.info("Transcript stored as %s", dest)
 
-    # Load or create info.yaml
     info_path = wiki_repo / "sources" / source_id / "info.yaml"
     if info_path.exists():
         try:
@@ -156,60 +140,13 @@ def run(args: argparse.Namespace) -> int:
 
     info.transcript_filename = transcript_filename
 
-    wc = wiki_context.read(wiki_repo / ".wiki-context.yaml")
-    cors = corrections.read(wiki_repo / ".transcription-corrections.yaml")
-    last_ctx = cfg_mod.load_last_context()
-
-    flags = {
-        "session_date": args.session_date,
-        "perspective": args.perspective,
-        "source_nature": args.source_nature,
-        "setting": args.setting,
-        "notes": None,
-    }
-    try:
-        info = interactive.gather_context(
-            info,
-            flags,
-            wc,
-            last_ctx,
-            interactive=not args.no_interactive,
-            save_path=info_path,
-        )
-    except KeyboardInterrupt:
-        return 130
-
-    info_yaml.write(info, info_path)
-    print(f"Context saved to {info_path}")  # noqa: T201
-
-    cfg_mod.save_last_context(
-        cfg_mod.LastContext(
-            perspective=info.context.perspective,
-            source_nature=info.context.source_nature,
-        )
-    )
-
-    idx = entity_index.build(wiki_repo)
-    try:
-        p = preamble_mod.assemble(info, wc, cors, idx, reduced=False)
-        p.check_budget(
-            context_window=cfg.models.primary_context_window,
-            budget_fraction=cfg.preamble.budget_fraction,
-        )
-    except preamble_mod.PreambleTooLargeError as e:
-        _logger.error("%s", e)
-        return 1
-
-    char_count = len(p.text)
-    token_approx = char_count // 4
-    print(f"Preamble: {char_count} chars (~{token_approx} tokens) — budget OK")  # noqa: T201
-    return 0
+    return finalize_context(info, info_path, cfg, args)
 
 
 def _derive_source_type(local_path: Path, source_url: str | None) -> str:
-    suffix = local_path.suffix.lower()
-    if source_url and _extract_video_id(source_url):
+    if source_url and sid_mod.extract_video_id(source_url):
         return "youtube"
+    suffix = local_path.suffix.lower()
     if suffix == ".srt":
         return "srt"
     if suffix == ".md":
@@ -223,14 +160,13 @@ def _new_info(
     args: argparse.Namespace,
     transcript_filename: str,
 ) -> info_yaml.Info:
-    title = Path(args.url_or_path).stem
     fetched_at = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     return info_yaml.Info(
         source_id=source_id,
         source_type=source_type,
         fetched_at=fetched_at,
         source_url=args.source_url,
-        title=title,
+        title=Path(args.url_or_path).stem,
         transcript_filename=transcript_filename,
         context=info_yaml.SourceContext(),
     )

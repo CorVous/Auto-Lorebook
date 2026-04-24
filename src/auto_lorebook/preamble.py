@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from auto_lorebook.corrections import Corrections
@@ -63,6 +63,22 @@ class AssembledPreamble:
             )
 
 
+def _render_speakers(key: str, speakers: list[dict[str, Any]]) -> str:
+    lines = [f"{key}:"]
+    for sp in sorted(speakers, key=lambda s: s.get("name", "")):
+        items = ", ".join(f"{k}: {v}" for k, v in sorted(sp.items()))
+        lines.append(f"  - {items}")
+    return "\n".join(lines)
+
+
+def _join_parts(parts: dict[str, str], list_keys: set[str]) -> str:
+    if not parts:
+        return ""
+    return "\n".join(
+        parts[k] if k in list_keys else f"{k}: {parts[k]}" for k in sorted(parts)
+    )
+
+
 def _render_source_context(info: Info) -> str:
     ctx = info.context
     parts: dict[str, str] = {}
@@ -75,22 +91,13 @@ def _render_source_context(info: Info) -> str:
     if ctx.source_nature:
         parts["source_nature"] = ctx.source_nature
     if ctx.speakers:
-        lines = ["speakers:"]
-        for sp in sorted(ctx.speakers, key=lambda s: s.get("name", "")):
-            items = ", ".join(f"{k}: {v}" for k, v in sorted(sp.items()))
-            lines.append(f"  - {items}")
-        parts["speakers"] = "\n".join(lines)
-
-    if not parts:
-        return ""
-    return "\n".join(
-        f"{k}: {v}" if k != "speakers" else v for k, v in sorted(parts.items())
-    )
+        parts["speakers"] = _render_speakers("speakers", ctx.speakers)
+    return _join_parts(parts, {"speakers"})
 
 
 def _render_setting_context(wiki_context: WikiContext) -> str:
-    parts: dict[str, str] = {}
     wc = wiki_context
+    parts: dict[str, str] = {}
     if wc.setting.description:
         parts["description"] = wc.setting.description.rstrip()
     if wc.interpretation_defaults:
@@ -100,18 +107,10 @@ def _render_setting_context(wiki_context: WikiContext) -> str:
     if wc.naming_conventions:
         parts["naming_conventions"] = wc.naming_conventions.rstrip()
     if wc.recurring_speakers:
-        lines = ["recurring_speakers:"]
-        for sp in sorted(wc.recurring_speakers, key=lambda s: s.get("name", "")):
-            items = ", ".join(f"{k}: {v}" for k, v in sorted(sp.items()))
-            lines.append(f"  - {items}")
-        parts["recurring_speakers"] = "\n".join(lines)
-
-    if not parts:
-        return ""
-    return "\n".join(
-        f"{k}: {v}" if k != "recurring_speakers" else v
-        for k, v in sorted(parts.items())
-    )
+        parts["recurring_speakers"] = _render_speakers(
+            "recurring_speakers", wc.recurring_speakers
+        )
+    return _join_parts(parts, {"recurring_speakers"})
 
 
 def _render_corrections(corrections: Corrections) -> str:
@@ -154,7 +153,6 @@ def assemble(
     sections[_SEC_CORRECTIONS] = _render_corrections(corrections)
     sections[_SEC_ENTITIES] = _render_entities(entity_index)
 
-    # Emit sections in spec order
     if reduced:
         order = [_SEC_CORRECTIONS, _SEC_ENTITIES]
     else:

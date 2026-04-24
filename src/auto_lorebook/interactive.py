@@ -124,7 +124,6 @@ def gather_context(
         )
         return replace(info, session_date=session_date, context=updated_ctx)
 
-    # Interactive path
     captured: dict[str, str | None] = {
         "session_date": session_date,
         "perspective": perspective,

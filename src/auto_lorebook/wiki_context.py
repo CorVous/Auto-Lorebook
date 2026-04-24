@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from auto_lorebook.schema import read_tolerant_yaml
+
 if TYPE_CHECKING:
     from pathlib import Path
-
-import yaml
-
-from auto_lorebook.schema import read_schema_version
-
-_logger = logging.getLogger(__name__)
 
 _MAX_SCHEMA = 1
 _FILE_LABEL = ".wiki-context.yaml"
@@ -37,10 +32,6 @@ class WikiContext:
     recurring_speakers: list[dict[str, Any]] = field(default_factory=list)
 
 
-def _empty() -> WikiContext:
-    return WikiContext()
-
-
 def read(path: Path) -> WikiContext:
     """Load .wiki-context.yaml tolerantly.
 
@@ -48,33 +39,9 @@ def read(path: Path) -> WikiContext:
     Missing schema_version logs a warning instead of raising.
     Unknown keys are ignored.
     """
-    if not path.exists():
-        return _empty()
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        return _empty()
-    try:
-        raw = yaml.safe_load(text)
-    except yaml.YAMLError:
-        _logger.warning("%s: could not parse YAML; using empty context", _FILE_LABEL)
-        return _empty()
-    if not isinstance(raw, dict):
-        return _empty()
-
-    if "schema_version" not in raw:
-        _logger.warning(
-            "%s: missing schema_version; treating as 1. "
-            "Add 'schema_version: 1' to suppress.",
-            _FILE_LABEL,
-        )
-        raw["schema_version"] = 1
-    try:
-        read_schema_version(raw, _FILE_LABEL, max_supported=_MAX_SCHEMA)
-    except Exception:  # noqa: BLE001
-        _logger.warning(
-            "%s: unrecognised schema_version; using empty context", _FILE_LABEL
-        )
-        return _empty()
+    raw = read_tolerant_yaml(path, _FILE_LABEL, max_supported=_MAX_SCHEMA)
+    if raw is None:
+        return WikiContext()
 
     setting_raw: dict[str, Any] = raw.get("setting") or {}
     setting = SettingContext(
