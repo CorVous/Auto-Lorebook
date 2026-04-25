@@ -6,9 +6,17 @@ implementation status.
 
 !!! info "Current status"
 
-    MVP scaffolding only. CLI skeleton exists
-    (`src/auto_lorebook/cli.py` + `commands/`); no pipeline stage is
-    implemented yet. Phase 1 is the next target.
+    Phase 1 substantially landed. The reading pipeline is runnable end
+    to end against a real OpenRouter backend: `ingest` fetches
+    YouTube transcripts via `yt-dlp`, `generate-reading` runs Stage 1a
+    (structure + mechanical validation) and Stage 1b (per-segment
+    summarize, parallelized) to produce a draft `reading.md`, the
+    mechanical gap check surfaces low-yield stretches during review,
+    `approve-reading` flips the draft into the wiki, and
+    `regenerate-reading --from=structure|summarize [--segments]`
+    supports targeted re-runs. Remaining Phase 1 polish: live
+    end-to-end validation against a real source and tuning the 1a/1b
+    prompts based on that run.
 
 ## Phase 1: Reading stage
 

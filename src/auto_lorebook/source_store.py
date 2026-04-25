@@ -22,7 +22,7 @@ class CollisionError(Exception):
 
 
 def _transcript_filename(source_type: str) -> str:
-    if source_type == "srt":
+    if source_type in {"srt", "youtube"}:
         return "transcript.en.srt"
     if source_type == "markdown":
         return "transcript.md"
