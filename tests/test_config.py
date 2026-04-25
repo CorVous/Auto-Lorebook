@@ -37,13 +37,13 @@ def test_load_config_minimal(tmp_path: Path) -> None:
             "schema_version": 1,
             "wiki_repo_path": wiki_path,
             "openrouter": {"api_key_env": "OPENROUTER_API_KEY"},
-            "models": {"primary": "openrouter/anthropic/claude-sonnet-4-5"},
+            "models": {"primary": "anthropic/claude-sonnet-4-5"},
         },
     )
     cfg = load_config(home=tmp_path)
     assert cfg.wiki_repo_path == Path(wiki_path)
     assert cfg.openrouter.api_key_env == "OPENROUTER_API_KEY"
-    assert cfg.models.primary == "openrouter/anthropic/claude-sonnet-4-5"
+    assert cfg.models.primary == "anthropic/claude-sonnet-4-5"
     assert cfg.models.primary_context_window == 200_000
     assert cfg.preamble.budget_fraction == pytest.approx(0.8)
 
@@ -57,16 +57,16 @@ def test_load_config_with_all_fields(tmp_path: Path) -> None:
             "wiki_repo_path": wiki_path,
             "openrouter": {"api_key_env": "MY_KEY"},
             "models": {
-                "primary": "openrouter/anthropic/claude-opus-4-7",
+                "primary": "anthropic/claude-opus-4-7",
                 "primary_context_window": 100_000,
-                "extractor": "openrouter/anthropic/claude-haiku-4-5",
+                "extractor": "anthropic/claude-haiku-4-5",
             },
             "preamble": {"budget_fraction": 0.6},
         },
     )
     cfg = load_config(home=tmp_path)
     assert cfg.models.primary_context_window == 100_000
-    assert cfg.models.extractor == "openrouter/anthropic/claude-haiku-4-5"
+    assert cfg.models.extractor == "anthropic/claude-haiku-4-5"
     assert cfg.preamble.budget_fraction == pytest.approx(0.6)
 
 
@@ -104,7 +104,7 @@ def test_interactive_setup_writes_config_and_skeleton(
     assert (home / "config.yaml").exists()
     assert cfg.wiki_repo_path == wiki.resolve()
     assert cfg.openrouter.api_key_env == "OPENROUTER_API_KEY"
-    assert cfg.models.primary == "openrouter/anthropic/claude-sonnet-4-5"
+    assert cfg.models.primary == "anthropic/claude-sonnet-4-5"
     # wiki skeleton created
     assert (wiki / "characters").is_dir()
     assert (wiki / "concepts").is_dir()
@@ -118,13 +118,13 @@ def test_interactive_setup_custom_model(
     home = tmp_path / "home"
     wiki = tmp_path / "mywiki"
     _patch_setup_inputs(
-        monkeypatch, inputs=[str(wiki), "openrouter/anthropic/claude-opus-4-7"]
+        monkeypatch, inputs=[str(wiki), "anthropic/claude-opus-4-7"]
     )
 
     cfg = interactive_setup(home=home)
 
     assert cfg.openrouter.api_key_env == "OPENROUTER_API_KEY"
-    assert cfg.models.primary == "openrouter/anthropic/claude-opus-4-7"
+    assert cfg.models.primary == "anthropic/claude-opus-4-7"
 
 
 def test_interactive_setup_reprompts_on_blank_required(

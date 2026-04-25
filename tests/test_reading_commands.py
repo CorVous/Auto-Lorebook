@@ -145,7 +145,7 @@ def ingested_wiki(tmp_wiki: Path, tmp_home: Path) -> Path:  # noqa: ARG001
 
 
 def _write_user_config(
-    home: Path, wiki: Path, model: str = "openrouter/anthropic/claude-sonnet-4-5"
+    home: Path, wiki: Path, model: str = "anthropic/claude-sonnet-4-5"
 ) -> None:
     cfg_path = home / "config.yaml"
     cfg_path.write_text(
