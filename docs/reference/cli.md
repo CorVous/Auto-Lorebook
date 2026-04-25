@@ -84,9 +84,19 @@ Promote a per-source name correction to the global
 ## Entities
 
 ```bash
+auto-lorebook entities list [--category <cat>] [--created-by <ingest_id>]
+auto-lorebook entities show <slug-or-name>
+auto-lorebook entities new --category <cat> --name <name> [--slug <slug>]
 auto-lorebook entities rebuild-index
-auto-lorebook entities list [--created-by <ingest_id>]
 ```
+
+`list` prints a category/name/slug/alias-count table; filters compose.
+`show` resolves the query against slugs first, then canonical names
+(case-insensitive), then aliases. `new` writes a minimum-viable stub;
+slug defaults to a slugified `--name`. `rebuild-index` is a placeholder
+until an on-disk cache exists — today the in-memory index is rebuilt on
+every command anyway. See
+[hand-creating entities](../getting-started/entities.md).
 
 ```bash
 auto-lorebook reject-ingest <ingest_id>

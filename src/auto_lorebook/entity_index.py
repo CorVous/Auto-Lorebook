@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from auto_lorebook import entity_yaml
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-import yaml
-
 _logger = logging.getLogger(__name__)
 
-_CATEGORIES = ("characters", "locations", "factions", "events", "items", "concepts")
+_CATEGORIES = entity_yaml.CATEGORIES
 
 
 @dataclass
@@ -57,24 +57,17 @@ class EntityIndex:
 def _load_entry(path: Path) -> EntityEntry | None:
     """Parse a single entity YAML; return None on error or if superseded."""
     try:
-        raw: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+        e = entity_yaml.read(path)
+    except entity_yaml.EntityError:
         _logger.warning("entity_index: could not parse %s; skipping", path)
         return None
-    if not isinstance(raw, dict):
+    if e.superseded_by is not None:
         return None
-    if raw.get("superseded_by") is not None:
-        return None
-    entity = raw.get("entity")
-    category = raw.get("category")
-    slug = raw.get("slug")
-    if not entity or not category or not slug:
-        _logger.warning("entity_index: missing required fields in %s; skipping", path)
-        return None
-    aliases_raw: list[Any] = raw.get("aliases") or []
-    aliases = [a["name"] for a in aliases_raw if isinstance(a, dict) and a.get("name")]
     return EntityEntry(
-        entity=str(entity), category=str(category), slug=str(slug), aliases=aliases
+        entity=e.entity,
+        category=e.category,
+        slug=e.slug,
+        aliases=[a.name for a in e.aliases],
     )
 
 

@@ -54,6 +54,7 @@ nav:
   - Getting started:
       - getting-started/installation.md
       - getting-started/first-ingest.md
+      - getting-started/entities.md
   - Architecture:
       - architecture/overview.md
       - architecture/repository-layout.md
