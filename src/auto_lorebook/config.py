@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import getpass
 import logging
 import os
 from dataclasses import dataclass, field
@@ -52,8 +53,11 @@ class Config:
     preamble: PreambleConfig = field(default_factory=PreambleConfig)
 
     def get_api_key(self) -> str | None:
-        """Read API key from environment variable named in config."""
-        return os.environ.get(self.openrouter.api_key_env)
+        """Resolve API key. Env var wins; falls back to credentials file."""
+        env_value = os.environ.get(self.openrouter.api_key_env)
+        if env_value:
+            return env_value
+        return _read_credentials()
 
 
 @dataclass
@@ -168,6 +172,7 @@ def save_last_context(last: LastContext, home: Path | None = None) -> None:
 _DEFAULT_API_KEY_ENV = "OPENROUTER_API_KEY"
 _DEFAULT_MODEL = "openrouter/anthropic/claude-sonnet-4-5"
 _WIKI_SUBDIRS = ("characters", "locations", "factions", "events", "items", "concepts")
+_CREDENTIALS_FILE = "credentials"
 
 
 def _prompt(prompt_text: str, default: str | None = None) -> str:
@@ -182,8 +187,42 @@ def _prompt(prompt_text: str, default: str | None = None) -> str:
         print("(required)")  # noqa: T201
 
 
+def _credentials_path(home: Path | None = None) -> Path:
+    return config_dir(home) / _CREDENTIALS_FILE
+
+
+def _read_credentials(home: Path | None = None) -> str | None:
+    """Read API key from `<config_dir>/credentials`; missing/empty → None."""
+    path = _credentials_path(home)
+    if not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        _logger.warning("Could not read %s", path)
+        return None
+
+
+def _write_credentials(api_key: str, home: Path | None = None) -> Path:
+    """Write API key to credentials file with mode 0600."""
+    cfg_dir = config_dir(home)
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    path = _credentials_path(home)
+    atomic_write_text(path, api_key + "\n")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        # Windows / unusual filesystems may not support POSIX modes.
+        _logger.warning("Could not chmod %s to 0600", path)
+    return path
+
+
 def interactive_setup(home: Path | None = None) -> Config:
     """Prompt the user for first-run config and write `config.yaml`.
+
+    The API key is read with `getpass` (input hidden) and stored in
+    `<config_dir>/credentials` (mode 0600). Blank skips the file and
+    falls back to the `OPENROUTER_API_KEY` env var at runtime.
 
     Creates the wiki repo skeleton (entity dirs + `.wiki-context.yaml` /
     `.transcription-corrections.yaml` schema stubs) if it doesn't exist.
@@ -198,10 +237,10 @@ def interactive_setup(home: Path | None = None) -> Config:
 
     wiki_raw = _prompt("Wiki repository directory")
     wiki = Path(wiki_raw).expanduser().resolve()
-    api_key_env = _prompt(
-        "Environment variable holding your OpenRouter API key",
-        default=_DEFAULT_API_KEY_ENV,
-    )
+    api_key = getpass.getpass(
+        "OpenRouter API key (input hidden; leave blank to use "
+        f"${_DEFAULT_API_KEY_ENV}): "
+    ).strip()
     model = _prompt(
         "Primary model slug (used for both reading substages)",
         default=_DEFAULT_MODEL,
@@ -210,7 +249,7 @@ def interactive_setup(home: Path | None = None) -> Config:
     data: dict[str, Any] = {
         "schema_version": 1,
         "wiki_repo_path": str(wiki),
-        "openrouter": {"api_key_env": api_key_env},
+        "openrouter": {"api_key_env": _DEFAULT_API_KEY_ENV},
         "models": {"primary": model},
     }
     cfg_dir.mkdir(parents=True, exist_ok=True)
@@ -219,14 +258,20 @@ def interactive_setup(home: Path | None = None) -> Config:
         yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
     )
 
+    cred_path: Path | None = None
+    if api_key:
+        cred_path = _write_credentials(api_key, home=home)
+
     _bootstrap_wiki(wiki)
 
     print()  # noqa: T201
     print(f"Wrote {cfg_path}")  # noqa: T201
-    if not os.environ.get(api_key_env):
+    if cred_path is not None:
+        print(f"Wrote API key to {cred_path} (mode 0600)")  # noqa: T201
+    elif not os.environ.get(_DEFAULT_API_KEY_ENV):
         print(  # noqa: T201
-            f"Reminder: export {api_key_env}=<your OpenRouter key> before running "
-            "`generate-reading`."
+            f"Reminder: export {_DEFAULT_API_KEY_ENV}=<your OpenRouter key> "
+            "before running `generate-reading`."
         )
 
     return load_config(home=home)

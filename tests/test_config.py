@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from auto_lorebook.config import (
+    Config,
     ConfigError,
     LastContext,
     MissingConfigError,
@@ -79,14 +80,24 @@ def test_load_config_missing_file_raises(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _patch_setup_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    inputs: list[str],
+    api_key: str = "",
+) -> None:
+    """Mock the visible-input answers and the hidden API-key prompt."""
+    answers = iter(inputs)
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("auto_lorebook.config.getpass.getpass", lambda _prompt: api_key)
+
+
 def test_interactive_setup_writes_config_and_skeleton(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
     wiki = tmp_path / "wiki"
-    answers = iter([str(wiki), "", ""])  # accept defaults for env + model
-
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    _patch_setup_inputs(monkeypatch, inputs=[str(wiki), ""])
 
     cfg = interactive_setup(home=home)
 
@@ -101,17 +112,18 @@ def test_interactive_setup_writes_config_and_skeleton(
     assert (wiki / ".transcription-corrections.yaml").exists()
 
 
-def test_interactive_setup_custom_values(
+def test_interactive_setup_custom_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
     wiki = tmp_path / "mywiki"
-    answers = iter([str(wiki), "MY_KEY", "openrouter/anthropic/claude-opus-4-7"])
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    _patch_setup_inputs(
+        monkeypatch, inputs=[str(wiki), "openrouter/anthropic/claude-opus-4-7"]
+    )
 
     cfg = interactive_setup(home=home)
 
-    assert cfg.openrouter.api_key_env == "MY_KEY"
+    assert cfg.openrouter.api_key_env == "OPENROUTER_API_KEY"
     assert cfg.models.primary == "openrouter/anthropic/claude-opus-4-7"
 
 
@@ -120,9 +132,8 @@ def test_interactive_setup_reprompts_on_blank_required(
 ) -> None:
     home = tmp_path / "home"
     wiki = tmp_path / "wiki"
-    # first answer blank, second valid; defaults accepted for the rest
-    answers = iter(["", str(wiki), "", ""])
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    # first answer blank for wiki, second valid; default accepted for model
+    _patch_setup_inputs(monkeypatch, inputs=["", str(wiki), ""])
 
     cfg = interactive_setup(home=home)
     assert cfg.wiki_repo_path == wiki.resolve()
@@ -139,12 +150,75 @@ def test_interactive_setup_preserves_existing_wiki_files(
         "schema_version: 1\nsetting:\n  name: Aether\n", encoding="utf-8"
     )
 
-    answers = iter([str(wiki), "", ""])
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    _patch_setup_inputs(monkeypatch, inputs=[str(wiki), ""])
 
     interactive_setup(home=home)
     # existing content preserved
     assert "Aether" in existing.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# credentials file (~/.auto-lorebook/credentials)
+# ---------------------------------------------------------------------------
+
+
+def test_interactive_setup_writes_credentials_file_with_strict_perms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hidden API-key prompt → 0600 credentials file alongside config.yaml."""
+    home = tmp_path / "home"
+    wiki = tmp_path / "wiki"
+    _patch_setup_inputs(monkeypatch, inputs=[str(wiki), ""], api_key="sk-or-v1-test")
+
+    interactive_setup(home=home)
+
+    cred_path = home / "credentials"
+    assert cred_path.exists()
+    assert cred_path.read_text(encoding="utf-8").strip() == "sk-or-v1-test"
+    mode = cred_path.stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_interactive_setup_blank_api_key_skips_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blank → no credentials file written; user expected to use env var."""
+    home = tmp_path / "home"
+    wiki = tmp_path / "wiki"
+    _patch_setup_inputs(monkeypatch, inputs=[str(wiki), ""], api_key="")
+
+    interactive_setup(home=home)
+
+    assert not (home / "credentials").exists()
+
+
+def test_get_api_key_falls_back_to_credentials_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    (tmp_path / "credentials").write_text("sk-or-v1-fromfile\n", encoding="utf-8")
+    cfg = Config(wiki_repo_path=tmp_path / "wiki")
+    assert cfg.get_api_key() == "sk-or-v1-fromfile"
+
+
+def test_get_api_key_env_var_wins_over_credentials_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(tmp_path))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-fromenv")
+    (tmp_path / "credentials").write_text("sk-or-v1-fromfile", encoding="utf-8")
+    cfg = Config(wiki_repo_path=tmp_path / "wiki")
+    assert cfg.get_api_key() == "sk-or-v1-fromenv"
+
+
+def test_get_api_key_returns_none_when_neither_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    cfg = Config(wiki_repo_path=tmp_path / "wiki")
+    assert cfg.get_api_key() is None
 
 
 def test_load_config_missing_wiki_repo_raises(tmp_path: Path) -> None:

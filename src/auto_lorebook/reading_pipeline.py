@@ -249,8 +249,10 @@ def _build_client(cfg: cfg_mod.Config) -> OpenRouterClient:
     api_key = cfg.get_api_key()
     if not api_key:
         msg = (
-            f"OpenRouter API key not found (expected env var "
-            f"{cfg.openrouter.api_key_env}). Export it and retry."
+            "OpenRouter API key not found. Either export "
+            f"${cfg.openrouter.api_key_env} or store the key in "
+            "~/.auto-lorebook/credentials (the interactive ingest setup "
+            "writes this for you)."
         )
         raise ReadingPipelineError(msg)
     try:
