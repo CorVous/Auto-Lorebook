@@ -120,3 +120,18 @@ class TestFetch:
         with patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl):
             fetch("https://youtu.be/vd", tmp_path)
         assert "cookiesfrombrowser" not in captured_opts
+
+    def test_format_pins_permissive_selector(self, tmp_path: Path) -> None:
+        """Override yt-dlp's default `bv*+ba/b` to avoid format-selection failures.
+
+        Even with skip_download=True, yt-dlp validates format selection. The
+        default selector requires both video and audio streams and can fail
+        with 'Requested format is not available' on some videos.
+        """
+        info = {"id": "vfm", "title": "T", "duration": 10}
+        fake_ydl, captured_opts = make_fake_youtubedl(
+            info=info, subs={"vfm.en.srt": _SAMPLE_SRT}
+        )
+        with patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl):
+            fetch("https://youtu.be/vfm", tmp_path)
+        assert captured_opts["format"] == "bv*+ba/b/bv/ba/b"
