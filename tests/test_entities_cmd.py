@@ -59,7 +59,7 @@ def _write_entity(
 
 
 def _ns(action: str, **kwargs: object) -> argparse.Namespace:
-    base = {
+    base: dict[str, object] = {
         "entities_action": action,
         "category": None,
         "created_by": None,
