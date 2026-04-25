@@ -50,4 +50,12 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     print(f"Approved: {approved}")  # noqa: T201
+
+    try:
+        plan_result = pipeline.plan(cfg, args.source_id)
+    except pipeline.ReadingPipelineError as e:
+        _logger.error("planner failed: %s", e)
+        return 1
+
+    print(f"Plan: {plan_result.plan_path}")  # noqa: T201
     return 0

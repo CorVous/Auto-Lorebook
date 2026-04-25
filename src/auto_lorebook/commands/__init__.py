@@ -10,6 +10,7 @@ from auto_lorebook.commands import configure_context as configure_context_cmd
 from auto_lorebook.commands import entities as entities_cmd
 from auto_lorebook.commands import generate_reading as generate_reading_cmd
 from auto_lorebook.commands import ingest as ingest_cmd
+from auto_lorebook.commands import plans as plans_cmd
 from auto_lorebook.commands import regenerate_reading as regenerate_reading_cmd
 from auto_lorebook.commands import version as version_cmd
 
@@ -19,6 +20,7 @@ __all__ = [
     "entities_cmd",
     "generate_reading_cmd",
     "ingest_cmd",
+    "plans_cmd",
     "regenerate_reading_cmd",
     "version_cmd",
 ]
