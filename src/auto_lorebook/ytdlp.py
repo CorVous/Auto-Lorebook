@@ -62,10 +62,10 @@ def fetch(
         "subtitlesformat": "srt",
         "outtmpl": str(target_dir / "%(id)s.%(ext)s"),
         "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),
-        # yt-dlp validates format selection even with skip_download; the
-        # default `bv*+ba/b` can fail on videos lacking that combination.
-        # Chain falls back through video+audio, video-only, audio-only, any.
-        "format": "bv*+ba/b/bv/ba/b",
+        # SABR/PO-Token gating can leave only image formats exposed; format
+        # selection then aborts with "Requested format is not available"
+        # *after* subtitles have already been written. Make it non-fatal.
+        "ignore_no_formats_error": True,
         "quiet": True,
         "no_warnings": True,
     }
