@@ -117,9 +117,7 @@ def test_interactive_setup_custom_model(
 ) -> None:
     home = tmp_path / "home"
     wiki = tmp_path / "mywiki"
-    _patch_setup_inputs(
-        monkeypatch, inputs=[str(wiki), "anthropic/claude-opus-4-7"]
-    )
+    _patch_setup_inputs(monkeypatch, inputs=[str(wiki), "anthropic/claude-opus-4-7"])
 
     cfg = interactive_setup(home=home)
 
