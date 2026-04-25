@@ -38,16 +38,23 @@ class FetchResult:
     srt_path: Path
 
 
-def fetch(url: str, target_dir: Path) -> FetchResult:
+def fetch(
+    url: str,
+    target_dir: Path,
+    *,
+    cookies_from_browser: str | None = None,
+) -> FetchResult:
     """Fetch title, duration, and English SRT for a YouTube URL.
 
     Writes `<id>.en[.auto].srt` into `target_dir`.
 
+    :param cookies_from_browser: browser name to load cookies from
+        (e.g. "chrome", "firefox"); helps bypass YouTube rate limits
     :raises NoSubtitlesError: no English subtitles available
     :raises YtDlpError: download failed or info missing required fields
     """
     target_dir.mkdir(parents=True, exist_ok=True)
-    ydl_opts = {
+    ydl_opts: dict[str, object] = {
         "skip_download": True,
         "writesubtitles": True,
         "writeautomaticsub": True,
@@ -58,6 +65,8 @@ def fetch(url: str, target_dir: Path) -> FetchResult:
         "quiet": True,
         "no_warnings": True,
     }
+    if cookies_from_browser:
+        ydl_opts["cookiesfrombrowser"] = (cookies_from_browser,)
     try:
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)

@@ -92,6 +92,17 @@ def add_parser(
         default=False,
         help="Skip all interactive prompts; use flags only",
     )
+    parser.add_argument(
+        "--cookies-from-browser",
+        dest="cookies_from_browser",
+        default=None,
+        metavar="BROWSER",
+        help=(
+            "Load cookies from this browser for YouTube fetches "
+            "(e.g. chrome, firefox, safari, edge, brave). Helps avoid "
+            "HTTP 429 rate limits."
+        ),
+    )
     parser.set_defaults(func=run)
     return parser
 
@@ -175,7 +186,11 @@ def _run_from_url(
 
     with tempfile.TemporaryDirectory(prefix="auto-lorebook-yt-") as tmp:
         try:
-            fetched = ytdlp.fetch(args.url_or_path, Path(tmp))
+            fetched = ytdlp.fetch(
+                args.url_or_path,
+                Path(tmp),
+                cookies_from_browser=args.cookies_from_browser,
+            )
         except ytdlp.YtDlpError as e:
             _logger.error("%s", e)
             return 1

@@ -102,3 +102,21 @@ class TestFetch:
         with patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl):
             fetch("https://youtu.be/vff", tmp_path)
         assert captured_opts["ffmpeg_location"] == imageio_ffmpeg.get_ffmpeg_exe()
+
+    def test_cookies_from_browser_passed_through(self, tmp_path: Path) -> None:
+        info = {"id": "vc", "title": "T", "duration": 10}
+        fake_ydl, captured_opts = make_fake_youtubedl(
+            info=info, subs={"vc.en.srt": _SAMPLE_SRT}
+        )
+        with patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl):
+            fetch("https://youtu.be/vc", tmp_path, cookies_from_browser="firefox")
+        assert captured_opts["cookiesfrombrowser"] == ("firefox",)
+
+    def test_cookies_from_browser_omitted_by_default(self, tmp_path: Path) -> None:
+        info = {"id": "vd", "title": "T", "duration": 10}
+        fake_ydl, captured_opts = make_fake_youtubedl(
+            info=info, subs={"vd.en.srt": _SAMPLE_SRT}
+        )
+        with patch("auto_lorebook.ytdlp.YoutubeDL", fake_ydl):
+            fetch("https://youtu.be/vd", tmp_path)
+        assert "cookiesfrombrowser" not in captured_opts

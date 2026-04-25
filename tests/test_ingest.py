@@ -35,6 +35,7 @@ def _args(**kwargs: object) -> argparse.Namespace:
         "setting": None,
         "notes": None,
         "no_interactive": True,
+        "cookies_from_browser": None,
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
