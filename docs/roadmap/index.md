@@ -21,6 +21,13 @@ implementation status.
     `entities rebuild-index` is a placeholder until a disk cache
     materialises.
 
+    Phase 3 (planner) landed: Stage 2 LLM planner runs automatically
+    after `approve-reading`, writes `pending/<source_id>/plan.yaml`
+    with no filesystem side effects (new entities and aliases are
+    proposals only), supports multi-target routing per claim, and
+    exposes `plans list` / `plans show` for inspection. `replan` is
+    deferred to Phase 4.
+
 ## Phase 1: Reading stage
 
 **Goal** — ingest a YouTube URL, gather context, produce a reviewable,
@@ -93,7 +100,7 @@ exposes them to the next stage as an entity index. ✓
 this phase but are deferred — `rename` to whenever a real need surfaces,
 `wiki *` to Phase 5/6 where they overlap with summary rendering.
 
-## Phase 3: Planner
+## Phase 3: Planner (landed)
 
 **Scope**
 
@@ -112,7 +119,10 @@ this phase but are deferred — `rename` to whenever a real need surfaces,
 automatically and produces a plan. New entities are _proposals on the
 plan_, not files in the wiki. Aliases are proposed, not yet written.
 At least one planned claim in a representative session routes to
-multiple targets.
+multiple targets. ✓
+
+`replan` was spec'd alongside this phase but is deferred to Phase 4
+where the extractor + review loop give it something to discard.
 
 ## Phase 4: Extractor + review
 

@@ -34,6 +34,7 @@ class ModelsConfig:
     primary: str = "anthropic/claude-sonnet-4-5"
     primary_context_window: int = 200_000
     extractor: str | None = None
+    planner: str | None = None
 
 
 @dataclass
@@ -125,6 +126,7 @@ def load_config(home: Path | None = None) -> Config:
         primary=models_raw.get("primary", "anthropic/claude-sonnet-4-5"),
         primary_context_window=int(models_raw.get("primary_context_window", 200_000)),
         extractor=models_raw.get("extractor"),
+        planner=models_raw.get("planner"),
     )
     preamble = PreambleConfig(
         budget_fraction=float(preamble_raw.get("budget_fraction", 0.8)),

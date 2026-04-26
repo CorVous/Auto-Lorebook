@@ -60,6 +60,7 @@ def test_load_config_with_all_fields(tmp_path: Path) -> None:
                 "primary": "anthropic/claude-opus-4-7",
                 "primary_context_window": 100_000,
                 "extractor": "anthropic/claude-haiku-4-5",
+                "planner": "anthropic/claude-sonnet-4-5",
             },
             "preamble": {"budget_fraction": 0.6},
         },
@@ -67,6 +68,7 @@ def test_load_config_with_all_fields(tmp_path: Path) -> None:
     cfg = load_config(home=tmp_path)
     assert cfg.models.primary_context_window == 100_000
     assert cfg.models.extractor == "anthropic/claude-haiku-4-5"
+    assert cfg.models.planner == "anthropic/claude-sonnet-4-5"
     assert cfg.preamble.budget_fraction == pytest.approx(0.6)
 
 
