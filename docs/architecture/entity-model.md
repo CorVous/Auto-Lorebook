@@ -168,6 +168,10 @@ tool may cache the index at `.cache/entity-index.json`. The cache is
 never authoritative — it is rebuilt from YAMLs whenever any entity
 YAML changes.
 
+`auto-lorebook entities rebuild-index` is reserved for that future
+cache. Until a cache exists, it is a no-op that prints a status line —
+the in-memory index is rebuilt on every command run regardless.
+
 ## Global transcription corrections
 
 `.transcription-corrections.yaml` at the wiki root:

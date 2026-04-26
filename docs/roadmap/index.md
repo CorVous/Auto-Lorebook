@@ -6,17 +6,20 @@ implementation status.
 
 !!! info "Current status"
 
-    Phase 1 substantially landed. The reading pipeline is runnable end
-    to end against a real OpenRouter backend: `ingest` fetches
-    YouTube transcripts via `yt-dlp`, `generate-reading` runs Stage 1a
-    (structure + mechanical validation) and Stage 1b (per-segment
-    summarize, parallelized) to produce a draft `reading.md`, the
-    mechanical gap check surfaces low-yield stretches during review,
-    `approve-reading` flips the draft into the wiki, and
-    `regenerate-reading --from=structure|summarize [--segments]`
-    supports targeted re-runs. Remaining Phase 1 polish: live
+    Phase 1 substantially landed; the reading pipeline is runnable end
+    to end against a real OpenRouter backend (Stage 1a + 1b, gap
+    check, approve, targeted re-runs). Remaining Phase 1 polish: live
     end-to-end validation against a real source and tuning the 1a/1b
     prompts based on that run.
+
+    Phase 2 (entity scaffolding) landed: schema-validated entity YAML
+    read/write (`auto_lorebook.entity_yaml`), the existing in-memory
+    `EntityIndex` migrated onto it, and an `entities` subcommand
+    group (`list`, `show`, `new`, `rebuild-index`). Hand-creating
+    entities is documented at
+    [hand-creating entities](../getting-started/entities.md);
+    `entities rebuild-index` is a placeholder until a disk cache
+    materialises.
 
 ## Phase 1: Reading stage
 
@@ -72,7 +75,7 @@ fires at least once on real content and the warning is actionable.
 Total human review time for a two-hour source fits inside the
 10–20 min/hour target on a representative session.
 
-## Phase 2: Entity scaffolding
+## Phase 2: Entity scaffolding (landed)
 
 **Scope**
 
@@ -84,7 +87,11 @@ Total human review time for a two-hour source fits inside the
   are normally created via approved facts).
 
 **Exit criterion** — hand-create a few entities; tool lists them and
-exposes them to the next stage as an entity index.
+exposes them to the next stage as an entity index. ✓
+
+`entities rename` and `wiki list` / `wiki show` were spec'd alongside
+this phase but are deferred — `rename` to whenever a real need surfaces,
+`wiki *` to Phase 5/6 where they overlap with summary rendering.
 
 ## Phase 3: Planner
 

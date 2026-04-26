@@ -9,6 +9,8 @@ import yaml
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
+
 from auto_lorebook.entity_index import build
 
 
@@ -115,3 +117,19 @@ def test_render_deterministic(tmp_wiki: Path) -> None:
     r1 = build(tmp_wiki).render_for_preamble()
     r2 = build(tmp_wiki).render_for_preamble()
     assert r1 == r2
+
+
+def test_malformed_entity_skipped_with_warning(
+    tmp_wiki: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    _write_entity(tmp_wiki, "characters", "good", "Good")
+    # missing schema_version: rejected by entity_yaml reader
+    (tmp_wiki / "characters" / "bad.yaml").write_text(
+        "entity: Bad\ncategory: characters\nslug: bad\n", encoding="utf-8"
+    )
+    with caplog.at_level("WARNING"):
+        idx = build(tmp_wiki)
+    rendered = idx.render_for_preamble()
+    assert "Good" in rendered
+    assert "Bad" not in rendered
+    assert any("could not parse" in r.message for r in caplog.records)
