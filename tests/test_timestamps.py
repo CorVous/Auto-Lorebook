@@ -7,6 +7,7 @@ import pytest
 from auto_lorebook.timestamps import (
     TimestampError,
     format_timestamp,
+    parse_locator_hint,
     parse_timestamp,
 )
 
@@ -80,3 +81,32 @@ class TestRoundTrip:
     def test_canonical_round_trip(self) -> None:
         for s in (0, 7, 65, 3_661, 36_000):
             assert parse_timestamp(format_timestamp(s)) == pytest.approx(float(s))
+
+
+class TestParseLocatorHint:
+    def test_canonical_range(self) -> None:
+        start, end = parse_locator_hint("0:04:25-0:04:50")
+        assert start == pytest.approx(265.0)
+        assert end == pytest.approx(290.0)
+
+    def test_lenient_components(self) -> None:
+        start, end = parse_locator_hint("4:25-4:50")
+        assert start == pytest.approx(265.0)
+        assert end == pytest.approx(290.0)
+
+    def test_whitespace_around_range(self) -> None:
+        start, end = parse_locator_hint("  0:00:01 - 0:00:02  ")
+        assert start == pytest.approx(1.0)
+        assert end == pytest.approx(2.0)
+
+    def test_missing_dash_raises(self) -> None:
+        with pytest.raises(TimestampError):
+            parse_locator_hint("0:04:25")
+
+    def test_empty_raises(self) -> None:
+        with pytest.raises(TimestampError):
+            parse_locator_hint("")
+
+    def test_end_before_start_raises(self) -> None:
+        with pytest.raises(TimestampError):
+            parse_locator_hint("0:00:10-0:00:05")

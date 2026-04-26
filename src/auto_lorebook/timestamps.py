@@ -73,3 +73,24 @@ def parse_timestamp(text: str) -> float:
         raise TimestampError(msg)
 
     return h * 3_600 + m * 60 + s
+
+
+def parse_locator_hint(text: str) -> tuple[float, float]:
+    """Parse `h:mm:ss-h:mm:ss` (or lenient variants) to `(start, end)` seconds.
+
+    :raises TimestampError: empty, missing dash, malformed, or end < start
+    """
+    raw = text.strip()
+    if not raw:
+        msg = "empty locator hint"
+        raise TimestampError(msg)
+    if "-" not in raw:
+        msg = f"locator hint missing '-': {text!r}"
+        raise TimestampError(msg)
+    left, right = raw.rsplit("-", 1)
+    start = parse_timestamp(left)
+    end = parse_timestamp(right)
+    if end < start:
+        msg = f"locator hint end < start: {text!r}"
+        raise TimestampError(msg)
+    return start, end

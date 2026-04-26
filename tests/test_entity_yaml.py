@@ -13,6 +13,7 @@ from auto_lorebook.entity_yaml import (
     EntityError,
     normalize_alias_name,
     read,
+    slugify,
     write,
 )
 from auto_lorebook.schema import SchemaVersionError
@@ -238,3 +239,24 @@ def test_schema_version_error_subclass() -> None:
     # SchemaVersionError underlies our errors; this is just a sanity check
     # that it's importable from where we expect.
     assert issubclass(SchemaVersionError, ValueError)
+
+
+def test_slugify_basic() -> None:
+    assert slugify("Aldara") == "aldara"
+    assert slugify("War of the Dusk") == "war-of-the-dusk"
+
+
+def test_slugify_punctuation_collapsed() -> None:
+    assert slugify("Théron's Sword!") == "th-ron-s-sword"
+    assert slugify("--Multi  Spaces--") == "multi-spaces"
+
+
+def test_slugify_empty_or_pure_punctuation() -> None:
+    assert not slugify("")
+    assert not slugify("   ")
+    assert not slugify("???")
+
+
+def test_slugify_idempotent() -> None:
+    once = slugify("The Second Age")
+    assert slugify(once) == once

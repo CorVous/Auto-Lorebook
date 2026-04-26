@@ -8,6 +8,7 @@ read→write round-trip.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -88,6 +89,17 @@ class Entity:
 def normalize_alias_name(name: str) -> str:
     """Case-fold + whitespace-trim for dedup and lookup comparisons."""
     return name.strip().casefold()
+
+
+_SLUG_STRIP_RE = re.compile(r"[^a-z0-9-]+")
+_SLUG_DASH_RE = re.compile(r"-+")
+
+
+def slugify(name: str) -> str:
+    """Canonical slug for an entity name. Empty input → empty string."""
+    s = name.strip().casefold().replace(" ", "-")
+    s = _SLUG_STRIP_RE.sub("-", s)
+    return _SLUG_DASH_RE.sub("-", s).strip("-")
 
 
 def _alias_from_dict(data: Any) -> Alias | None:  # noqa: ANN401

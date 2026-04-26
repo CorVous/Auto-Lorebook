@@ -119,6 +119,42 @@ def test_render_deterministic(tmp_wiki: Path) -> None:
     assert r1 == r2
 
 
+# ---------------------------------------------------------------------------
+# Lookup
+# ---------------------------------------------------------------------------
+
+
+def test_lookup_by_canonical_name(tmp_wiki: Path) -> None:
+    _write_entity(tmp_wiki, "locations", "aldara", "Aldara")
+    idx = build(tmp_wiki)
+    entry = idx.lookup("Aldara")
+    assert entry is not None
+    assert entry.entity == "Aldara"
+    assert entry.category == "locations"
+    assert entry.slug == "aldara"
+
+
+def test_lookup_case_insensitive(tmp_wiki: Path) -> None:
+    _write_entity(tmp_wiki, "locations", "aldara", "Aldara")
+    idx = build(tmp_wiki)
+    assert idx.lookup("aldara") is not None
+    assert idx.lookup("ALDARA") is not None
+    assert idx.lookup("  Aldara  ") is not None
+
+
+def test_lookup_unknown_returns_none(tmp_wiki: Path) -> None:
+    _write_entity(tmp_wiki, "locations", "aldara", "Aldara")
+    idx = build(tmp_wiki)
+    assert idx.lookup("Theron") is None
+
+
+def test_lookup_does_not_match_aliases(tmp_wiki: Path) -> None:
+    """`lookup` is canonical-name only; alias resolution is a separate path."""
+    _write_entity(tmp_wiki, "locations", "aldara", "Aldara", aliases=["the Realm"])
+    idx = build(tmp_wiki)
+    assert idx.lookup("the Realm") is None
+
+
 def test_malformed_entity_skipped_with_warning(
     tmp_wiki: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

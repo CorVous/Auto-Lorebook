@@ -28,6 +28,19 @@ implementation status.
     exposes `plans list` / `plans show` for inspection. `replan` is
     deferred to Phase 4.
 
+    Phase 4 extractor landed: Stage 3 runs automatically after the
+    planner, parallelised per `PlannedClaim`, with reduced preamble,
+    windowed transcript per claim driven by `locator_hint`, mechanical
+    fallback to the parent-segment window with `hint_widened` logged,
+    claim-group dedup (one LLM call per claim, span copied to every
+    sibling target), and post-extraction substring verification.
+    Proposals land at `pending/<source_id>/proposals/<proposed_id>.yaml`
+    with provisional `proposed_id`s allocated single-threaded before
+    fan-out. The terminal review loop, atomic stub creation on first
+    approval, alias confirmation, in-memory index refresh,
+    per-fact append, edited-text handling, `replan`, and
+    `reject-ingest` remain deferred within Phase 4.
+
 ## Phase 1: Reading stage
 
 **Goal** — ingest a YouTube URL, gather context, produce a reviewable,

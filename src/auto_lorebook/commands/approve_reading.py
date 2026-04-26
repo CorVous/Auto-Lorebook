@@ -58,4 +58,17 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     print(f"Plan: {plan_result.plan_path}")  # noqa: T201
+
+    try:
+        extract_result = pipeline.extract(cfg, args.source_id)
+    except pipeline.ReadingPipelineError as e:
+        _logger.error("extractor failed: %s", e)
+        return 1
+
+    n = len(extract_result.proposals)
+    flagged = extract_result.flagged_count
+    print(  # noqa: T201
+        f"Extracted {n} proposal(s) ({flagged} flagged) → "
+        f"{extract_result.proposals_dir}"
+    )
     return 0

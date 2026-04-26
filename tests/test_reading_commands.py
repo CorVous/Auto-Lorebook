@@ -98,7 +98,7 @@ def _stub_plan_payload() -> str:
                 "reading_section": "[0:02:00-0:10:00] Founding of Aldara",
                 "reading_bullet_index": 0,
                 "locator": "0:02:30",
-                "locator_hint": "0:02:20-0:02:45",
+                "locator_hint": "0:02:00-0:02:30",
                 "proposed_speaker": "DM",
                 "proposed_status": "authoritative",
                 "proposed_status_reason": None,
@@ -123,6 +123,15 @@ def _stub_plan_payload() -> str:
     })
 
 
+def _stub_extractor_payload() -> str:
+    return json.dumps({
+        "text": "King Theron founded Aldara in the Second Age.",
+        "raw_transcript_span": "King Theron founded Aldara in the Second Age.",
+        "text_corrects_transcript": False,
+        "corrections_applied": [],
+    })
+
+
 def _wire_client_responses(client_mock: MagicMock) -> None:
     """Route client.complete by message content (structure / 1b / planner)."""
 
@@ -138,6 +147,8 @@ def _wire_client_responses(client_mock: MagicMock) -> None:
             text = _stub_structure_payload()
         elif "routing claim bullets" in system_text:
             text = _stub_plan_payload()
+        elif "locate the verbatim transcript span" in system_text:
+            text = _stub_extractor_payload()
         else:
             # stage 1b: find which segment id is in user_text
             for seg_id in ("seg-001", "seg-002"):
@@ -318,6 +329,37 @@ class TestApproveReading:
         _write_user_config(tmp_home, ingested_wiki)
         rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678"))
         assert rc == 1
+
+    def test_writes_proposals_via_stage3(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678"))
+
+        assert rc == 0
+        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        assert proposals_dir.is_dir()
+        # multi-target plan claim → two proposal files (Aldara, Second Age)
+        files = sorted(proposals_dir.glob("*.yaml"))
+        assert len(files) == 2
+        names = {f.name for f in files}
+        assert "aldara-f001.yaml" in names
+        assert "second-age-f001.yaml" in names
+        out = capsys.readouterr().out
+        assert "Extracted 2 proposal" in out
+        assert "(0 flagged)" in out
 
 
 class TestRegenerateReading:
