@@ -581,26 +581,135 @@ class TestParallel:
 
 
 class TestErrors:
-    def test_malformed_json_raises_stage3error(self) -> None:
+    def test_malformed_json_emits_flagged_proposal(self) -> None:
+        """Unparseable JSON for one claim group does not kill the run."""
         transcript, structure = _default_setup()
         plan = Plan(
             source_id="yt-x",
             planned_at="2026-04-20T00:00:00Z",
             planned_claims=[_claim()],
         )
-        with pytest.raises(Stage3Error):
-            stage3.run(
-                plan=plan,
-                transcript=transcript,
-                structure=structure,
-                info=_info(),
-                preamble_text="",
-                source_id="yt-x",
-                client=_mock_client("not-json"),
-                model="m/one",
-                existing_fact_counts={"Aldara": 0},
-                existing_slugs={"Aldara": "aldara"},
-            )
+        proposals = stage3.run(
+            plan=plan,
+            transcript=transcript,
+            structure=structure,
+            info=_info(),
+            preamble_text="",
+            source_id="yt-x",
+            client=_mock_client("not-json"),
+            model="m/one",
+            existing_fact_counts={"Aldara": 0},
+            existing_slugs={"Aldara": "aldara"},
+        )
+        assert len(proposals) == 1
+        assert proposals[0].extractor_flagged is True
+        assert "unparseable JSON" in (proposals[0].flag_reason or "")
+        assert proposals[0].locator == _claim().locator_hint
+
+    def test_missing_raw_span_emits_flagged_proposal(self) -> None:
+        """LLM JSON missing raw_transcript_span flags the claim, doesn't raise."""
+        transcript, structure = _default_setup()
+        plan = Plan(
+            source_id="yt-x",
+            planned_at="2026-04-20T00:00:00Z",
+            planned_claims=[_claim()],
+        )
+        payload = json.dumps({
+            "text": "King Theron rules Aldara.",
+            # raw_transcript_span deliberately absent
+            "text_corrects_transcript": False,
+            "corrections_applied": [],
+        })
+        proposals = stage3.run(
+            plan=plan,
+            transcript=transcript,
+            structure=structure,
+            info=_info(),
+            preamble_text="",
+            source_id="yt-x",
+            client=_mock_client(payload),
+            model="m/one",
+            existing_fact_counts={"Aldara": 0},
+            existing_slugs={"Aldara": "aldara"},
+        )
+        assert len(proposals) == 1
+        assert proposals[0].extractor_flagged is True
+        assert "missing required fields" in (proposals[0].flag_reason or "")
+
+    def test_one_bad_claim_does_not_kill_others(self) -> None:
+        """Mix of good + malformed claim groups: good ones land, bad ones flag."""
+        transcript, structure = _default_setup()
+        plan = Plan(
+            source_id="yt-x",
+            planned_at="2026-04-20T00:00:00Z",
+            planned_claims=[
+                _claim(cg_id="cg-001"),
+                _claim(cg_id="cg-002"),
+            ],
+        )
+        client = _client_seq([_aldara_payload(), "not-json"])
+        proposals = stage3.run(
+            plan=plan,
+            transcript=transcript,
+            structure=structure,
+            info=_info(),
+            preamble_text="",
+            source_id="yt-x",
+            client=client,
+            model="m/one",
+            existing_fact_counts={"Aldara": 0},
+            existing_slugs={"Aldara": "aldara"},
+        )
+        assert len(proposals) == 2
+        flagged = [p for p in proposals if p.extractor_flagged]
+        clean = [p for p in proposals if not p.extractor_flagged]
+        assert len(flagged) == 1
+        assert len(clean) == 1
+        assert flagged[0].claim_group_id == "cg-002"
+        assert clean[0].claim_group_id == "cg-001"
+
+    def test_malformed_correction_dropped_silently(self) -> None:
+        """One bad correction in `corrections_applied` shouldn't fail the proposal."""
+        transcript, structure = _default_setup()
+        plan = Plan(
+            source_id="yt-x",
+            planned_at="2026-04-20T00:00:00Z",
+            planned_claims=[_claim()],
+        )
+        payload = json.dumps({
+            "text": "King Theron rules Aldara.",
+            "raw_transcript_span": "King Theron rules Aldara.",
+            "text_corrects_transcript": True,
+            "corrections_applied": [
+                {
+                    "from": "Fair-on",
+                    "to": "Theron",
+                    "source": "global-transcription-correction",
+                },
+                # Malformed: missing `to`
+                {"from": "x", "source": "reading-name-correction"},
+                # Malformed: empty `to`
+                {"from": "y", "to": "", "source": "reading-name-correction"},
+            ],
+        })
+        proposals = stage3.run(
+            plan=plan,
+            transcript=transcript,
+            structure=structure,
+            info=_info(),
+            preamble_text="",
+            source_id="yt-x",
+            client=_mock_client(payload),
+            model="m/one",
+            existing_fact_counts={"Aldara": 0},
+            existing_slugs={"Aldara": "aldara"},
+        )
+        assert len(proposals) == 1
+        p = proposals[0]
+        assert p.extractor_flagged is False
+        # Only the valid correction survives.
+        assert len(p.corrections_applied) == 1
+        assert p.corrections_applied[0].from_ == "Fair-on"
 
     def test_plain_text_transcript_raises(self) -> None:
         transcript = LoadedTranscript(

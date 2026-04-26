@@ -216,8 +216,12 @@ def _parse_extracted_span(payload: dict[str, Any], *, context: str) -> _Extracte
         try:
             corrections.append(proposal_yaml_mod.parse_correction(entry))
         except proposal_yaml_mod.ProposalError as e:
-            msg = f"{context}: {e}"
-            raise Stage3Error(msg) from e
+            # LLM output quality issue — drop the malformed entry rather than
+            # killing the whole proposal. Disk reads stay strict via
+            # `proposal_yaml.read`.
+            _logger.warning(
+                "%s: dropping malformed correction %r: %s", context, entry, e
+            )
     return _ExtractedSpan(
         text=text,
         raw_transcript_span=raw_span,
@@ -361,6 +365,14 @@ def _build_proposals(
     return out
 
 
+_EMPTY_EXTRACTED = _ExtractedSpan(
+    text="",
+    raw_transcript_span="",
+    text_corrects_transcript=False,
+    corrections=(),
+)
+
+
 def _build_flagged_proposals(
     *,
     claim: PlannedClaim,
@@ -445,8 +457,31 @@ def _extract_one(
     try:
         payload = parse_json_object(resp.text, context)
     except ValueError as e:
-        raise Stage3Error(str(e)) from e
-    extracted = _parse_extracted_span(payload, context=context)
+        # LLM emitted unparseable JSON. Don't kill the whole run — flag the
+        # claim so the reviewer sees it and can edit/reject.
+        _logger.warning("%s: malformed JSON; flagging claim group: %s", context, e)
+        return _build_flagged_proposals(
+            claim=claim,
+            allocations=allocations,
+            extracted=_EMPTY_EXTRACTED,
+            info=info,
+            source_id=source_id,
+            flag_reason=f"Stage 3 LLM returned unparseable JSON: {e}",
+        )
+    try:
+        extracted = _parse_extracted_span(payload, context=context)
+    except Stage3Error as e:
+        # Schema-level degeneracy (missing raw_transcript_span / text). Same
+        # treatment: flag and continue so other claim groups land their work.
+        _logger.warning("%s: schema violation; flagging claim group: %s", context, e)
+        return _build_flagged_proposals(
+            claim=claim,
+            allocations=allocations,
+            extracted=_EMPTY_EXTRACTED,
+            info=info,
+            source_id=source_id,
+            flag_reason=f"Stage 3 LLM output missing required fields: {e}",
+        )
 
     # Try to anchor in the hint window first.
     located = _locate_span_in_cues(transcript, hint_cues, extracted.raw_transcript_span)
