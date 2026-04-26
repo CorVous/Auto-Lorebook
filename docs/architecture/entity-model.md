@@ -45,6 +45,7 @@ facts:
         source: reading-name-correction
     edited_by_human: false
     edited_at: null
+    text_source: null              # set to original LLM text when edited_by_human
     source_id: yt-abc123
     locator: "0:04:32-0:04:41"
     speaker: DM
@@ -103,6 +104,9 @@ facts:
 - **`corrections_applied`** — audit trail of substitutions, with
   source (`global-transcription-correction`, `reading-name-correction`,
   or `human-edit`).
+- **`text_source`** — when `edited_by_human` is true, the original
+  pre-edit `text` (post-corrections) is preserved here so the audit
+  trail isn't lost. `null` when the fact was approved without edits.
 - **`source_id`** — foreign key to `sources/<source_id>/info.yaml`.
 - **`locator`** — timestamp range in canonical `h:mm:ss-h:mm:ss`
   format for audio/video, or line range for text. See

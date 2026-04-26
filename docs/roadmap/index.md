@@ -36,9 +36,20 @@ implementation status.
     sibling target), and post-extraction substring verification.
     Proposals land at `pending/<source_id>/proposals/<proposed_id>.yaml`
     with provisional `proposed_id`s allocated single-threaded before
-    fan-out. The terminal review loop, atomic stub creation on first
-    approval, alias confirmation, in-memory index refresh,
-    per-fact append, edited-text handling, `replan`, and
+    fan-out.
+
+    Phase 4 review loop also landed: `auto-lorebook review <id>` walks
+    each pending proposal, prompts approve / edit / reject / play, and
+    on approval atomically creates the entity stub (for proposed-new
+    entities) or appends a fact to the existing entity YAML.
+    Inline alias-confirmation sub-prompts merge planner-suggested
+    aliases as `stub-creation` (first-approval batch) or
+    `alias-confirmation` (later additions). The in-memory entity
+    index refreshes after each approval so siblings created earlier in
+    the same session resolve as existing. `--auto-approve` provides
+    non-interactive bulk approval (and explicitly *declines* alias
+    suggestions) for CI. Ctrl-C leaves untouched proposal files in
+    place so the next invocation resumes. `replan` and
     `reject-ingest` remain deferred within Phase 4.
 
 ## Phase 1: Reading stage

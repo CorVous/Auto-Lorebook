@@ -12,6 +12,7 @@ from auto_lorebook.commands import generate_reading as generate_reading_cmd
 from auto_lorebook.commands import ingest as ingest_cmd
 from auto_lorebook.commands import plans as plans_cmd
 from auto_lorebook.commands import regenerate_reading as regenerate_reading_cmd
+from auto_lorebook.commands import review as review_cmd
 from auto_lorebook.commands import version as version_cmd
 
 __all__ = [
@@ -22,5 +23,6 @@ __all__ = [
     "ingest_cmd",
     "plans_cmd",
     "regenerate_reading_cmd",
+    "review_cmd",
     "version_cmd",
 ]
