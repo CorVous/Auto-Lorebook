@@ -218,7 +218,7 @@ class TestReplan:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id=SOURCE_ID))
-            approve_reading_cmd.run(_args(source_id=SOURCE_ID))
+            approve_reading_cmd.run(_args(source_id=SOURCE_ID, yes=True))
             review_cmd.run(_args(source_id=SOURCE_ID, auto_approve=True))
             # Now the entity stub exists and the proposals dir is empty.
             aldara_path = ingested_wiki / "locations" / "aldara.yaml"
@@ -252,7 +252,7 @@ class TestReplan:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id=SOURCE_ID))
-            approve_reading_cmd.run(_args(source_id=SOURCE_ID))
+            approve_reading_cmd.run(_args(source_id=SOURCE_ID, yes=True))
             # Drop a stale file into the proposals dir as if from an earlier
             # run that we want overwritten.
             proposals_dir = reading_pipeline.pending_proposals_dir(SOURCE_ID)
@@ -292,7 +292,7 @@ class TestReplan:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id=SOURCE_ID))
-            approve_reading_cmd.run(_args(source_id=SOURCE_ID))
+            approve_reading_cmd.run(_args(source_id=SOURCE_ID, yes=True))
             # Remove structure.yaml to break the prerequisite.
             reading_pipeline.pending_structure_path(SOURCE_ID).unlink()
             rc = replan_cmd.run(_args(source_id=SOURCE_ID))

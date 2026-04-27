@@ -214,7 +214,7 @@ def _approve_one(
     _wire_client(client)
     with patch("auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client):
         generate_reading_cmd.run(_args(source_id=SOURCE_ID))
-        approve_reading_cmd.run(_args(source_id=SOURCE_ID))
+        approve_reading_cmd.run(_args(source_id=SOURCE_ID, yes=True))
         review_cmd.run(_args(source_id=SOURCE_ID, auto_approve=True))
 
 
