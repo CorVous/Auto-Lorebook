@@ -22,6 +22,8 @@ Always follow red/green TDD:
 
 **Import errors do not count as red.** A test that fails due to an `ImportError` or `ModuleNotFoundError` is not a valid red test — the module/function must exist before the test can legitimately fail for the right reason.
 
+**Live integration tests.** Code that talks to a real external service (OpenRouter, yt-dlp/YouTube, future providers) gets a `@pytest.mark.live` test in `tests/test_live_integration.py` alongside its mocked unit tests. These are skipped by default and never run in CI; opt in locally with `uv run pytest --run-live`. Whenever you add or change a real-world integration boundary, add or update the matching live test in the same commit.
+
 ## After Every Code Assignment
 
 1. Run `uv sync --dev` to keep dependencies up to date
