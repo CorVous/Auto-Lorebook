@@ -45,6 +45,9 @@ ENV_VAR_ALLOWLIST: frozenset[str] = frozenset({
     # the OpenRouter client. Read path lands with Phase 1's config
     # module.
     "OPENROUTER_API_KEY",
+    # Test-only: read in tests/test_live_integration.py to override the
+    # model used by live OpenRouter tests. Not a runtime config knob.
+    "LIVE_TEST_MODEL",
 })
 
 #: Markdown files under ``docs/`` intentionally outside the published

@@ -11,6 +11,32 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+_LIVE_OPT = "--run-live"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register --run-live to opt in to live integration tests."""
+    parser.addoption(
+        _LIVE_OPT,
+        action="store_true",
+        default=False,
+        help="run @pytest.mark.live tests (real external services; costs money)",
+    )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    """Skip @pytest.mark.live tests unless --run-live passed."""
+    if config.getoption(_LIVE_OPT):
+        return
+    skip_live = pytest.mark.skip(reason=f"need {_LIVE_OPT} to run")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip_live)
+
+
 @pytest.fixture
 def package_name() -> str:
     """Return the package name (snake_case for imports)."""

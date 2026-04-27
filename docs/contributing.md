@@ -24,6 +24,29 @@ Always follow red/green TDD:
 module or function must exist before the test can legitimately fail for
 the right reason.
 
+## Live integration tests
+
+Code that talks to a real external service (OpenRouter, yt-dlp /
+YouTube, future providers) gets a `@pytest.mark.live` test in
+`tests/test_live_integration.py` alongside its mocked unit tests.
+
+Live tests are skipped by default and **not run in CI**: they cost real
+money (OpenRouter) and depend on third-party availability (YouTube).
+Opt in locally:
+
+```bash
+uv run pytest --run-live
+```
+
+Each test additionally skips if its required env var is missing
+(`OPENROUTER_API_KEY` for OpenRouter), so `--run-live` on a fresh
+checkout still passes for whatever subset the runner has credentials
+for. Override the OpenRouter model with `LIVE_TEST_MODEL=...` to run
+against a cheaper model than the project default.
+
+When you add or change a real-world integration boundary, add or
+update the matching live test in the same commit.
+
 ## After every code assignment
 
 Run these in order:

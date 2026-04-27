@@ -48,6 +48,11 @@ fallback-version = "0.1.0"
 [tool.hatch.build.hooks.vcs]
 version-file = "src/auto_lorebook/_version.py"
 
+[tool.pytest.ini_options]
+markers = [
+    "live: hits real external services (OpenRouter, YouTube). Skipped unless --run-live; never in CI.",
+]
+
 [tool.uv]
 exclude-newer = "7d"
 
