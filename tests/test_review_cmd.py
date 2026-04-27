@@ -715,3 +715,124 @@ class TestInteractiveReviewerUndo:
         assert "unknown choice" in out
         assert "u" in out  # undo advertised in the hint
         assert isinstance(decision.decision, ApproveDecision)
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: undo through the full pipeline
+# ---------------------------------------------------------------------------
+
+
+class TestInteractiveReviewerUndoIntegration:
+    """End-to-end stdin-driven review with [u]ndo through generate→approve→review."""
+
+    def test_undo_reverses_toggle_and_edit_through_pipeline(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Toggle off route 2, enter a bundle edit, [u]ndo, [a]pprove.
+
+        After undo, all three stubs should be created and every fact's
+        text should match the original (untouched) proposal text.
+        """
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        monkeypatch.setattr(
+            "auto_lorebook.commands.review._is_interactive", lambda: True
+        )
+        scripted = iter([
+            "t",  # enter targets sub-prompt
+            "toggle 2",  # uncheck Theron
+            "done",
+            "e",  # enter bundle edit
+            "Tampered text.",  # bundle text override
+            "",  # status (keep)
+            "",  # status_reason (keep)
+            "u",  # undo: re-checks Theron AND clears edits
+            "a",  # approve all three routes
+        ])
+        monkeypatch.setattr("builtins.input", lambda *_a, **_kw: next(scripted))
+
+        client = MagicMock()
+        _wire_multi_target_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            assert (
+                approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+                == 0
+            )
+            rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=False))
+        assert rc == 0
+
+        # All three stubs created — undo re-checked the toggled-off route.
+        original_text = "King Theron founded Aldara in the Second Age."
+        for slug, cat in (
+            ("aldara", "locations"),
+            ("theron", "characters"),
+            ("second-age", "events"),
+        ):
+            path = ingested_wiki / cat / f"{slug}.yaml"
+            assert path.exists(), f"{slug} stub missing; undo didn't re-check route"
+            e = entity_yaml.read(path)
+            assert len(e.facts) == 1
+            # Undo dropped the bundle edit; original text preserved.
+            assert e.facts[0]["text"] == original_text
+            assert e.facts[0]["text_source"] is None
+            assert e.facts[0]["edited_by_human"] is False
+
+        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        assert list(proposals_dir.glob("*.yaml")) == []
+        out = capsys.readouterr().out
+        assert "approved=3" in out
+
+    def test_undo_then_reject_still_rejects_whole_bundle(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """[u]ndo doesn't block a subsequent [r]eject — rejection still wins."""
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        monkeypatch.setattr(
+            "auto_lorebook.commands.review._is_interactive", lambda: True
+        )
+        scripted = iter([
+            "e",  # enter edit
+            "Tampered text.",
+            "",
+            "",
+            "u",  # undo edit
+            "r",  # reject the whole bundle
+        ])
+        monkeypatch.setattr("builtins.input", lambda *_a, **_kw: next(scripted))
+
+        client = MagicMock()
+        _wire_multi_target_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            assert (
+                approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+                == 0
+            )
+            rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=False))
+        assert rc == 0
+
+        for slug, cat in (
+            ("aldara", "locations"),
+            ("theron", "characters"),
+            ("second-age", "events"),
+        ):
+            assert not (ingested_wiki / cat / f"{slug}.yaml").exists()
+
+        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        assert list(proposals_dir.glob("*.yaml")) == []
+        out = capsys.readouterr().out
+        assert "rejected=3" in out
