@@ -79,7 +79,7 @@ Routes:
   3. [x] Second Age (NEW — events, will be created on approval)
                                        section=events-in-era    speaker=DM
 
-[a]pprove  [e]dit  [r]eject  [p]lay  [t]argets
+[a]pprove  [e]dit  [r]eject  [p]lay  [t]argets  [u]ndo
 >
 ```
 
@@ -148,6 +148,12 @@ seeds its dedup set from on-disk alias records whose
 - **Targets** — sub-prompt to toggle individual routes on / off and
   to set per-target `section` / `speaker` overrides on kept rows.
   Returns to the main prompt; the bundle then re-renders.
+- **Undo** — resets the current bundle's accumulated state back to
+  defaults: clears bundle-level edits, drops every per-target
+  override, and re-checks every route (un-rejecting any routes
+  toggled off via `[t]argets`). Scope is the bundle currently on
+  screen — once a bundle has been approved or rejected and the next
+  one is shown, undo cannot bring it back.
 
 ## No skip, no defer
 

@@ -16,19 +16,21 @@ import pytest
 import yaml
 
 from auto_lorebook import config as cfg_mod
-from auto_lorebook import entity_yaml
+from auto_lorebook import entity_yaml, proposal_yaml
 from auto_lorebook import review as review_mod
 from auto_lorebook.commands import (
     approve_reading_cmd,
     generate_reading_cmd,
     review_cmd,
 )
+from auto_lorebook.commands.review import InteractiveReviewer
 from auto_lorebook.openrouter import OpenRouterResponse
 from auto_lorebook.review import (
     ApproveDecision,
     BundleDecision,
     BundleView,
     RejectDecision,
+    TargetView,
 )
 
 if TYPE_CHECKING:
@@ -559,3 +561,157 @@ class TestMultiTargetBundle:
         proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
         assert list(proposals_dir.glob("*.yaml")) == []
         capsys.readouterr()
+
+
+# ---------------------------------------------------------------------------
+# InteractiveReviewer [u]ndo
+# ---------------------------------------------------------------------------
+
+
+def _make_proposal_for_view(
+    *, target: str, proposed_id: str, section: str = "founding"
+) -> proposal_yaml.Proposal:
+    return proposal_yaml.Proposal(
+        proposal_type="new_entity_with_facts",
+        target_entity=target,
+        proposed_id=proposed_id,
+        claim_group_id="cg-001",
+        text=f"{target} was founded in the Second Age.",
+        raw_transcript_span=f"{target} was founded in the Second Age.",
+        text_corrects_transcript=False,
+        source_id="yt-x",
+        locator="0:00:08-0:00:18",
+        speaker="DM",
+        reading_section="[0:00:00-0:00:30] Founding",
+        reading_bullet_index=0,
+        status="authoritative",
+        session_date="2026-04-15",
+        section=section,
+        context_before="",
+        context_after="",
+    )
+
+
+def _two_target_view() -> BundleView:
+    targets = (
+        TargetView(
+            proposal=_make_proposal_for_view(
+                target="Aldara", proposed_id="aldara-f001"
+            ),
+            is_new_entity=True,
+            new_entity_category="locations",
+            created_earlier_in_session=False,
+            suggested_aliases=(),
+            matched_via=None,
+        ),
+        TargetView(
+            proposal=_make_proposal_for_view(
+                target="Theron", proposed_id="theron-f001", section="lineage"
+            ),
+            is_new_entity=True,
+            new_entity_category="characters",
+            created_earlier_in_session=False,
+            suggested_aliases=(),
+            matched_via=None,
+        ),
+    )
+    return BundleView(
+        bundle_index=1,
+        bundle_total=1,
+        claim_group_id="cg-001",
+        targets=targets,
+        source_url=None,
+        source_title="Test source",
+    )
+
+
+def _scripted_input(monkeypatch: pytest.MonkeyPatch, lines: list[str]) -> None:
+    """Patch builtins.input to feed `lines` in order."""
+    it = iter(lines)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: next(it))
+
+
+class TestInteractiveReviewerUndo:
+    """[u]ndo resets bundle edits, target selection, and per-target overrides."""
+
+    def test_undo_clears_bundle_edits(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        view = _two_target_view()
+        _scripted_input(
+            monkeypatch,
+            [
+                "e",  # enter edit
+                "Edited text.",  # bundle text override
+                "",  # status (keep)
+                "",  # status_reason (keep)
+                "u",  # undo
+                "a",  # approve
+            ],
+        )
+        decision = InteractiveReviewer().decide_bundle(view)
+        capsys.readouterr()
+        assert isinstance(decision.decision, ApproveDecision)
+        assert decision.selected_indices == (0, 1)
+        assert decision.per_target_overrides == {}
+
+    def test_undo_re_checks_toggled_off_routes(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        view = _two_target_view()
+        _scripted_input(
+            monkeypatch,
+            [
+                "t",  # enter targets sub-prompt
+                "toggle 1",  # uncheck Aldara (route 0)
+                "done",
+                "u",  # undo re-checks all routes
+                "a",  # approve
+            ],
+        )
+        decision = InteractiveReviewer().decide_bundle(view)
+        capsys.readouterr()
+        assert decision.selected_indices == (0, 1)
+
+    def test_undo_clears_per_target_override(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        view = _two_target_view()
+        _scripted_input(
+            monkeypatch,
+            [
+                "t",  # enter targets sub-prompt
+                "edit 2",  # override Theron (route 1)
+                "ancestry",  # new section
+                "Player-Thorin",  # new speaker
+                "done",
+                "u",  # undo
+                "a",  # approve
+            ],
+        )
+        decision = InteractiveReviewer().decide_bundle(view)
+        capsys.readouterr()
+        assert decision.per_target_overrides == {}
+        assert isinstance(decision.decision, ApproveDecision)
+
+    def test_undo_after_no_changes_is_safe_noop(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        view = _two_target_view()
+        _scripted_input(monkeypatch, ["u", "a"])
+        decision = InteractiveReviewer().decide_bundle(view)
+        capsys.readouterr()
+        assert isinstance(decision.decision, ApproveDecision)
+        assert decision.selected_indices == (0, 1)
+
+    def test_unknown_choice_still_reprompts(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Unknown-choice path lists [u]ndo alongside the other actions."""
+        view = _two_target_view()
+        _scripted_input(monkeypatch, ["x", "a"])
+        decision = InteractiveReviewer().decide_bundle(view)
+        out = capsys.readouterr().out
+        assert "unknown choice" in out
+        assert "u" in out  # undo advertised in the hint
+        assert isinstance(decision.decision, ApproveDecision)
