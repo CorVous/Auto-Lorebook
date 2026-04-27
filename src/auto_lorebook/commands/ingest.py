@@ -134,7 +134,7 @@ def _load_or_create_config(*, no_interactive: bool) -> cfg_mod.Config:
 
 
 @dataclass
-class _ResolvedSource:
+class ResolvedSource:
     """Local file + initial metadata produced by resolving the positional arg."""
 
     local_path: Path
@@ -161,7 +161,7 @@ def _run_from_local(
         _logger.error("File not found: %s", local_path)
         return 1
 
-    resolved = _ResolvedSource(
+    resolved = ResolvedSource(
         local_path=local_path,
         source_url=args.source_url,
         source_type=_derive_source_type(local_path, args.source_url),
@@ -196,7 +196,7 @@ def _run_from_url(
             return 1
 
         caption_type = "auto" if ".auto." in fetched.srt_path.name else "manual"
-        resolved = _ResolvedSource(
+        resolved = ResolvedSource(
             local_path=fetched.srt_path,
             source_url=args.url_or_path,
             source_type="youtube",
@@ -212,7 +212,7 @@ def _store_and_finalize(
     cfg: cfg_mod.Config,
     wiki_repo: Path,
     source_id: str,
-    resolved: _ResolvedSource,
+    resolved: ResolvedSource,
 ) -> int:
     try:
         dest, transcript_filename = source_store.copy_transcript(
@@ -236,7 +236,7 @@ def _store_and_finalize(
             )
             return 1
     else:
-        info = _new_info(source_id, resolved, args, transcript_filename)
+        info = new_info(source_id, resolved, args.url_or_path, transcript_filename)
 
     info.transcript_filename = transcript_filename
 
@@ -254,14 +254,15 @@ def _derive_source_type(local_path: Path, source_url: str | None) -> str:
     return "text"
 
 
-def _new_info(
+def new_info(
     source_id: str,
-    resolved: _ResolvedSource,
-    args: argparse.Namespace,
+    resolved: ResolvedSource,
+    url_or_path: str,
     transcript_filename: str,
 ) -> info_yaml.Info:
+    """Build a fresh Info from a resolved source."""
     fetched_at = format_iso_now()
-    title = resolved.fetched_title or Path(args.url_or_path).stem
+    title = resolved.fetched_title or Path(url_or_path).stem
     duration = (
         int(resolved.fetched_duration)
         if resolved.fetched_duration is not None

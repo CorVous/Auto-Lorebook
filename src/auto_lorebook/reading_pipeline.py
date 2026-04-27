@@ -77,6 +77,15 @@ class ExtractResult:
     flagged_count: int
 
 
+@dataclass
+class ApproveAndExtractResult:
+    """Combined result of approve → plan → extract."""
+
+    approved_path: Path
+    plan_result: PlanResult
+    extract_result: ExtractResult
+
+
 def generate(cfg: cfg_mod.Config, source_id: str) -> GenerateResult:
     """Run Stage 1a + 1b from scratch and write the draft reading.md."""
     return _run_full(cfg, source_id)
@@ -114,6 +123,26 @@ def approve(cfg: cfg_mod.Config, source_id: str) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     reading_mod.write(dest, approved_text)
     return dest
+
+
+def approve_and_extract(cfg: cfg_mod.Config, source_id: str) -> ApproveAndExtractResult:
+    """Approve reading, run Stage 2 plan, run Stage 3 extract.
+
+    :raises ReadingPipelineError: any stage failure.
+    """
+    approved_path = approve(cfg, source_id)
+    plan_result = plan(cfg, source_id)
+    extract_result = extract(cfg, source_id)
+    return ApproveAndExtractResult(
+        approved_path=approved_path,
+        plan_result=plan_result,
+        extract_result=extract_result,
+    )
+
+
+def pending_root(source_id: str) -> Path:
+    """Parent dir for all pending artifacts (plan.yaml, proposals/, tombstones)."""
+    return cfg_mod.config_dir() / "pending" / source_id
 
 
 def pending_dir(source_id: str) -> Path:

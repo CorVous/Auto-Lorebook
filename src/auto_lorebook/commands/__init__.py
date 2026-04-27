@@ -11,6 +11,7 @@ from auto_lorebook.commands import entities as entities_cmd
 from auto_lorebook.commands import generate_reading as generate_reading_cmd
 from auto_lorebook.commands import ingest as ingest_cmd
 from auto_lorebook.commands import plans as plans_cmd
+from auto_lorebook.commands import process as process_cmd
 from auto_lorebook.commands import regenerate_reading as regenerate_reading_cmd
 from auto_lorebook.commands import reject_ingest as reject_ingest_cmd
 from auto_lorebook.commands import replan as replan_cmd
@@ -24,6 +25,7 @@ __all__ = [
     "generate_reading_cmd",
     "ingest_cmd",
     "plans_cmd",
+    "process_cmd",
     "regenerate_reading_cmd",
     "reject_ingest_cmd",
     "replan_cmd",

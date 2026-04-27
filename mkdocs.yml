@@ -57,6 +57,7 @@ nav:
       - getting-started/entities.md
   - Architecture:
       - architecture/overview.md
+      - architecture/tui.md
       - architecture/repository-layout.md
       - architecture/schema-versioning.md
       - architecture/staleness.md

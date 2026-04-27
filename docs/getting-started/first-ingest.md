@@ -1,7 +1,17 @@
 # First ingest
 
 This walkthrough takes a YouTube URL from raw source to approved entity
-facts.
+facts. The fastest path is the guided TUI:
+
+```bash
+auto-lorebook process https://youtube.com/watch?v=abc123
+```
+
+`process` walks every stage inside a Textual terminal UI. It auto-detects
+partial progress and resumes where you left off on the next run. Individual
+commands (`ingest`, `approve-reading`, `review`, …) remain available for
+power-user workflows; everything below describes the manual command-by-command
+path for reference.
 
 ## 1. Ingest the source
 

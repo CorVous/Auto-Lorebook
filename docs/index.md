@@ -69,8 +69,10 @@ during fact review, with `replan` as the escape hatch.
 
 - [Installation](getting-started/installation.md) — set up the tool.
 - [First ingest](getting-started/first-ingest.md) — walk through a
-  single source end to end.
+  single source end to end using the guided TUI or individual commands.
 - [Architecture overview](architecture/overview.md) — how the pieces
   fit together.
+- [TUI architecture](architecture/tui.md) — screen graph, reviewer
+  wiring, and concurrency model for the `process` command.
 - [Roadmap](roadmap/index.md) — what's built, what's planned.
 - [Contributing](contributing.md) — dev workflow and style.

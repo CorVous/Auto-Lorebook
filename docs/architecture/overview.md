@@ -68,6 +68,15 @@ YouTube URL / SRT / text file
   readable entity prose from approved facts. The YAML is truth; the
   markdown is a view.
 
+## Running the pipeline
+
+The recommended path is `auto-lorebook process <url>`, which walks all stages
+inside a Textual TUI and auto-resumes partial runs. Individual commands
+(`ingest`, `generate-reading`, `approve-reading`, `review`, …) remain available
+for scripted or power-user workflows.
+
+See [TUI architecture](tui.md) for the screen graph and concurrency model.
+
 ## Two gates, not three
 
 The reading gate catches "what was actually said"; the fact gate

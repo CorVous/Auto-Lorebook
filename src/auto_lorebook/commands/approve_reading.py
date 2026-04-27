@@ -70,34 +70,20 @@ def run(args: argparse.Namespace) -> int:
 
 
 def _approve_and_extract(cfg: cfg_mod.Config, source_id: str) -> int:
-    """Original one-shot flow: approve → plan → extract."""
+    """One-shot flow: approve → plan → extract (delegates to reading_pipeline)."""
     try:
-        approved = pipeline.approve(cfg, source_id)
+        result = pipeline.approve_and_extract(cfg, source_id)
     except pipeline.ReadingPipelineError as e:
         _logger.error("%s", e)
         return 1
 
-    print(f"Approved: {approved}")  # noqa: T201
-
-    try:
-        plan_result = pipeline.plan(cfg, source_id)
-    except pipeline.ReadingPipelineError as e:
-        _logger.error("planner failed: %s", e)
-        return 1
-
-    print(f"Plan: {plan_result.plan_path}")  # noqa: T201
-
-    try:
-        extract_result = pipeline.extract(cfg, source_id)
-    except pipeline.ReadingPipelineError as e:
-        _logger.error("extractor failed: %s", e)
-        return 1
-
-    n = len(extract_result.proposals)
-    flagged = extract_result.flagged_count
+    print(f"Approved: {result.approved_path}")  # noqa: T201
+    print(f"Plan: {result.plan_result.plan_path}")  # noqa: T201
+    n = len(result.extract_result.proposals)
+    flagged = result.extract_result.flagged_count
     print(  # noqa: T201
         f"Extracted {n} proposal(s) ({flagged} flagged) → "
-        f"{extract_result.proposals_dir}"
+        f"{result.extract_result.proposals_dir}"
     )
     return 0
 

@@ -3,6 +3,18 @@
 All commands are invoked as `auto-lorebook <command>`. Each command
 links to the page that explains its semantics.
 
+## Process (interactive pipeline)
+
+```bash
+auto-lorebook process [<url-or-path>] [--source-id <id>]
+```
+
+Walk a single source through the full ingest → reading → review pipeline
+in an interactive Textual TUI. Resumes automatically from wherever the
+previous run left off. Pass a YouTube URL or local file path to start
+fresh, or use `--source-id` to resume a partially-processed source.
+See [TUI architecture](../architecture/tui.md).
+
 ## Ingest
 
 ```bash

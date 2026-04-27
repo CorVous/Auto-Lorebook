@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-_SOURCE_NATURES = (
+SOURCE_NATURES = (
     "actual-play",
     "dm-lore",
     "worldbuilding-video",
@@ -28,7 +28,7 @@ _SOURCE_NATURES = (
     "notes",
     "other",
 )
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _DATE_HINT = "YYYY-MM-DD"
 
 
@@ -52,19 +52,19 @@ def _prompt_date(default: str | None) -> str | None:
         raw = _prompt(f"Session date ({_DATE_HINT})", default)
         if raw is None:
             return None
-        if _DATE_RE.fullmatch(raw):
+        if DATE_RE.fullmatch(raw):
             return raw
         print(f"  Expected {_DATE_HINT}, got '{raw}'. Press Enter to skip.")  # noqa: T201
 
 
 def _prompt_nature(default: str | None) -> str | None:
     """Prompt for source_nature; re-prompt on invalid; blank → skip."""
-    allowed = "/".join(_SOURCE_NATURES)
+    allowed = "/".join(SOURCE_NATURES)
     while True:
         raw = _prompt(f"Source nature [{allowed}]", default)
         if raw is None:
             return None
-        if raw in _SOURCE_NATURES:
+        if raw in SOURCE_NATURES:
             return raw
         print(f"  Expected one of: {allowed}. Press Enter to skip.")  # noqa: T201
 
