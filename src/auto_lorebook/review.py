@@ -1,4 +1,4 @@
-"""Stage 4 (review) engine: walk proposals, mutate entity YAMLs.
+"""Stage 4 (review) engine: walk bundles, mutate entity YAMLs.
 
 Pure-logic module. No `input()` calls. Display + prompt I/O lives in
 `commands/review.py` and is injected via the `Reviewer` protocol. Tests
@@ -7,9 +7,9 @@ script a `Reviewer` to drive the engine deterministically.
 Walk order is authoritative from the plan: we iterate
 `plan.planned_claims` then `claim.targets`, looking up each
 `(claim_group_id, target_entity)` against the on-disk proposal files.
-This preserves the spec's "siblings shown contiguously, transcript
-order across groups" no matter how proposed_id slugs sort
-lexicographically.
+Consecutive proposals sharing a `claim_group_id` are surfaced as one
+`BundleView`; the reviewer decides once per bundle and may drop
+individual routes before approval via `BundleDecision.selected_indices`.
 """
 
 from __future__ import annotations
@@ -92,21 +92,43 @@ Decision = ApproveDecision | EditDecision | RejectDecision
 
 
 @dataclass(frozen=True)
-class ProposalView:
-    """All display-relevant data for one proposal."""
+class TargetView:
+    """Per-route display data inside a bundle."""
 
     proposal: Proposal
-    proposal_index: int  # 1-of-N across this run
-    proposal_total: int
-    group_position: int  # 1-of-K within claim group
-    group_size: int
     is_new_entity: bool
     new_entity_category: str | None
     created_earlier_in_session: bool
     suggested_aliases: tuple[str, ...]
     matched_via: str | None
+
+
+@dataclass(frozen=True)
+class BundleView:
+    """One claim-group, shown as a single review screen."""
+
+    bundle_index: int  # 1-of-N bundles
+    bundle_total: int
+    claim_group_id: str
+    targets: tuple[TargetView, ...]  # plan order
     source_url: str | None
     source_title: str | None
+
+
+@dataclass(frozen=True)
+class BundleDecision:
+    """Result of one `decide_bundle` call.
+
+    `decision` is bundle-wide. `selected_indices` lists which target
+    rows the user kept checked. Unselected targets are dropped on
+    Approve / Edit. Reject discards the whole bundle (selection
+    ignored). `per_target_overrides[i]` overlays an `EditDecision`
+    on top of the bundle-level edit, last-write-wins per field.
+    """
+
+    decision: ApproveDecision | EditDecision | RejectDecision
+    selected_indices: tuple[int, ...]
+    per_target_overrides: dict[int, EditDecision] = field(default_factory=dict)
 
 
 class Reviewer(Protocol):
@@ -117,7 +139,7 @@ class Reviewer(Protocol):
         """Recorded as `status_history[].by` on approved facts."""
         ...
 
-    def decide(self, view: ProposalView) -> Decision: ...
+    def decide_bundle(self, view: BundleView) -> BundleDecision: ...
 
     def confirm_alias(self, entity: str, mention: str) -> bool: ...
 
@@ -387,15 +409,8 @@ def _reject(proposal_path: Path) -> None:
 # ------------- main loop -------------------------------------------------
 
 
-def _build_view(
-    ctx: _ApprovalContext,
-    proposal: Proposal,
-    *,
-    proposal_index: int,
-    proposal_total: int,
-    group_position: int,
-    group_size: int,
-) -> ProposalView:
+def _build_target_view(ctx: _ApprovalContext, proposal: Proposal) -> TargetView:
+    """Per-target slice of a `BundleView`; filters aliases via merged_aliases."""
     is_new = proposal.proposal_type == "new_entity_with_facts"
     category = _category_for_new(ctx.plan, proposal.target_entity) if is_new else None
     suggested = _suggested_aliases_for(ctx.plan, proposal)
@@ -406,8 +421,6 @@ def _build_view(
         if (target_key, normalize_alias_name(a)) not in ctx.merged_aliases
     )
     matched_via = _matched_via_for(ctx.plan, proposal)
-    # "created earlier in session": entity exists on disk and was created
-    # by this same ingest run.
     created_earlier = False
     if is_new:
         existing_entry = ctx.index.lookup(proposal.target_entity)
@@ -423,20 +436,120 @@ def _build_view(
                     created_earlier = True
             except entity_yaml_mod.EntityError:
                 pass
-    return ProposalView(
+    return TargetView(
         proposal=proposal,
-        proposal_index=proposal_index,
-        proposal_total=proposal_total,
-        group_position=group_position,
-        group_size=group_size,
         is_new_entity=is_new,
         new_entity_category=category,
         created_earlier_in_session=created_earlier,
         suggested_aliases=suggested,
         matched_via=matched_via,
+    )
+
+
+def _build_bundle_view(
+    ctx: _ApprovalContext,
+    proposals: list[Proposal],
+    *,
+    bundle_index: int,
+    bundle_total: int,
+) -> BundleView:
+    """Wrap claim-group `proposals` (plan order) into a `BundleView`."""
+    targets = tuple(_build_target_view(ctx, p) for p in proposals)
+    return BundleView(
+        bundle_index=bundle_index,
+        bundle_total=bundle_total,
+        claim_group_id=proposals[0].claim_group_id,
+        targets=targets,
         source_url=ctx.info.source_url,
         source_title=ctx.info.title,
     )
+
+
+def _bundle_proposals(ordered: list[Proposal]) -> list[list[Proposal]]:
+    """Group proposals into runs of consecutive matching `claim_group_id`.
+
+    Input is already in plan order (siblings contiguous), so a single
+    pass collecting consecutive runs preserves both within-bundle and
+    cross-bundle order.
+    """
+    if not ordered:
+        return []
+    bundles: list[list[Proposal]] = [[ordered[0]]]
+    for p in ordered[1:]:
+        if p.claim_group_id == bundles[-1][0].claim_group_id:
+            bundles[-1].append(p)
+        else:
+            bundles.append([p])
+    return bundles
+
+
+def _merge_edits(
+    bundle_decision: ApproveDecision | EditDecision,
+    override: EditDecision | None,
+) -> EditDecision | None:
+    """Layer per-target override on top of bundle-level edit.
+
+    Per-target wins per field. Returns None when both are absent /
+    no-op so `_approve` takes the plain-approve path.
+    """
+    if isinstance(bundle_decision, ApproveDecision):
+        if override is None or override.is_noop():
+            return None
+        return override
+    if override is None:
+        return bundle_decision if not bundle_decision.is_noop() else None
+    merged = EditDecision(
+        new_text=override.new_text or bundle_decision.new_text,
+        new_speaker=override.new_speaker or bundle_decision.new_speaker,
+        new_status=override.new_status or bundle_decision.new_status,
+        new_status_reason=(
+            override.new_status_reason
+            if override.new_status_reason is not None
+            else bundle_decision.new_status_reason
+        ),
+        new_section=override.new_section or bundle_decision.new_section,
+    )
+    return None if merged.is_noop() else merged
+
+
+def _count_remaining(source_id: str) -> int:
+    """Count proposal files still on disk. Used for KI accounting."""
+    proposals_dir = reading_pipeline.pending_proposals_dir(source_id)
+    if not proposals_dir.is_dir():
+        return 0
+    return sum(1 for _ in proposals_dir.glob("*.yaml"))
+
+
+def _seed_merged_aliases_from_disk(ctx: _ApprovalContext) -> None:
+    """Seed `ctx.merged_aliases` with aliases this ingest already wrote.
+
+    Without this, Ctrl-C resume re-prompts for aliases the user
+    already confirmed earlier in the same ingest. Walks each entity
+    referenced by the plan; cheap because plan size bounds the scan.
+    """
+    seen: set[str] = set()
+    for claim in ctx.plan.planned_claims:
+        for target in claim.targets:
+            if target.entity in seen:
+                continue
+            seen.add(target.entity)
+            entry = ctx.index.lookup(target.entity)
+            if entry is None:
+                continue
+            path = ctx.cfg.wiki_repo_path / entry.category / f"{entry.slug}.yaml"
+            if not path.exists():
+                continue
+            try:
+                entity = entity_yaml_mod.read(path)
+            except entity_yaml_mod.EntityError:
+                continue
+            target_key = target.entity.casefold()
+            for alias in entity.aliases:
+                if alias.added_by_ingest == ctx.source_id:
+                    ctx.merged_aliases.add((
+                        target_key,
+                        normalize_alias_name(alias.name),
+                    ))
 
 
 def run(
@@ -445,10 +558,12 @@ def run(
     source_id: str,
     reviewer: Reviewer,
 ) -> ReviewResult:
-    """Walk pending proposals; mutate entity YAMLs; return counts.
+    """Walk pending bundles; mutate entity YAMLs; return counts.
 
-    KeyboardInterrupt from `reviewer.decide` propagates after marking
-    the not-yet-decided proposals as `remaining`.
+    Multi-target claims share one `claim_group_id` and surface as a
+    single `BundleView`; one `decide_bundle` call covers every checked
+    route. KeyboardInterrupt propagates after recording the count of
+    proposal files left on disk as `remaining`.
     """
     wiki_repo = cfg.wiki_repo_path
     info_path = wiki_repo / "sources" / source_id / "info.yaml"
@@ -462,55 +577,92 @@ def run(
     ctx = _ApprovalContext(
         cfg=cfg, source_id=source_id, info=info, plan=plan, index=index
     )
+    _seed_merged_aliases_from_disk(ctx)
 
     ordered = sorted_proposals(plan, source_id)
     if not ordered:
         return ReviewResult()
-
-    # claim-group sizes for "K of M" header
-    group_sizes: dict[str, int] = {}
-    for p in ordered:
-        group_sizes[p.claim_group_id] = group_sizes.get(p.claim_group_id, 0) + 1
-    group_seen: dict[str, int] = {}
+    bundles = _bundle_proposals(ordered)
+    bundle_total = len(bundles)
 
     result = ReviewResult()
-    total = len(ordered)
-    for i, proposal in enumerate(ordered, start=1):
-        group_seen[proposal.claim_group_id] = (
-            group_seen.get(proposal.claim_group_id, 0) + 1
-        )
-        view = _build_view(
-            ctx,
-            proposal,
-            proposal_index=i,
-            proposal_total=total,
-            group_position=group_seen[proposal.claim_group_id],
-            group_size=group_sizes[proposal.claim_group_id],
-        )
+    for bundle_idx, bundle in enumerate(bundles, start=1):
         try:
-            decision = reviewer.decide(view)
+            _process_bundle(
+                ctx,
+                bundle,
+                reviewer=reviewer,
+                bundle_index=bundle_idx,
+                bundle_total=bundle_total,
+                result=result,
+            )
         except KeyboardInterrupt:
-            result.remaining = total - (i - 1)
+            result.remaining = _count_remaining(source_id)
             raise
-        if isinstance(decision, RejectDecision):
+    return result
+
+
+def _process_bundle(
+    ctx: _ApprovalContext,
+    bundle: list[Proposal],
+    *,
+    reviewer: Reviewer,
+    bundle_index: int,
+    bundle_total: int,
+    result: ReviewResult,
+) -> None:
+    """Drive one bundle: ask reviewer, fan out approvals / rejects."""
+    view = _build_bundle_view(
+        ctx, bundle, bundle_index=bundle_index, bundle_total=bundle_total
+    )
+    bundle_decision = reviewer.decide_bundle(view)
+
+    if isinstance(bundle_decision.decision, RejectDecision):
+        for proposal in bundle:
             proposal_path = reading_pipeline.pending_proposal_path(
-                source_id, proposal.proposed_id
+                ctx.source_id, proposal.proposed_id
             )
             _reject(proposal_path)
             result.rejected += 1
+        return
+
+    selected = set(bundle_decision.selected_indices)
+    # drop unselected routes first so they're gone before any writes
+    for i, proposal in enumerate(bundle):
+        if i in selected:
             continue
-        # approve / edit: gather alias confirmations
-        confirmed: list[str] = []
-        for alias in view.suggested_aliases:
-            try:
-                if reviewer.confirm_alias(proposal.target_entity, alias):
-                    confirmed.append(alias)
-            except KeyboardInterrupt:
-                result.remaining = total - (i - 1)
-                raise
-        edits = decision if isinstance(decision, EditDecision) else None
         proposal_path = reading_pipeline.pending_proposal_path(
-            source_id, proposal.proposed_id
+            ctx.source_id, proposal.proposed_id
+        )
+        _reject(proposal_path)
+        result.rejected += 1
+
+    # approve checked routes in plan order so NEW-entity siblings land
+    # before any sibling that depends on the entity existing.
+    for i, proposal in enumerate(bundle):
+        if i not in selected:
+            continue
+        # re-filter aliases against ctx.merged_aliases — earlier
+        # selected siblings in this same bundle may have already merged
+        # an alias that this target also suggests.
+        target_key = proposal.target_entity.casefold()
+        fresh_aliases = tuple(
+            a
+            for a in _suggested_aliases_for(ctx.plan, proposal)
+            if (target_key, normalize_alias_name(a)) not in ctx.merged_aliases
+        )
+        confirmed: list[str] = [
+            alias
+            for alias in fresh_aliases
+            if reviewer.confirm_alias(proposal.target_entity, alias)
+        ]
+
+        edits = _merge_edits(
+            bundle_decision.decision,
+            bundle_decision.per_target_overrides.get(i),
+        )
+        proposal_path = reading_pipeline.pending_proposal_path(
+            ctx.source_id, proposal.proposed_id
         )
         appended = _approve(
             ctx,
@@ -520,9 +672,9 @@ def run(
             confirmed_aliases=confirmed,
             by_label=reviewer.by_label,
         )
-        if appended:
-            if isinstance(decision, EditDecision):
-                result.edited += 1
-            else:
-                result.approved += 1
-    return result
+        if not appended:
+            continue
+        if edits is not None:
+            result.edited += 1
+        else:
+            result.approved += 1

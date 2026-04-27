@@ -38,19 +38,20 @@ defer. If the user exits (Ctrl-C or closes the terminal), untouched
 proposal files remain in `pending/<ingest_id>/proposals/`, and the
 next invocation of `review` resumes with the first remaining file.
 
-### Claim-group ordering
+### Claim-group bundling
 
-Proposals sharing a `claim_group_id` are shown in a contiguous block,
-so the human reads the claim once and then decides per-target. The
-header names the group's position and size. Review order within a
-group is arbitrary; across groups, order follows transcript position.
+Proposals sharing a `claim_group_id` are shown as **one bundle
+screen**: the claim text appears once, followed by a numbered
+checklist of routes — one row per target. A single
+approve / edit / reject decision covers every checked route. The
+`[t]argets` action toggles individual routes on or off and is also
+the home for per-target `section` / `speaker` overrides. Singletons
+(claim groups with only one target) render the same screen with one
+checked row and no `[t]` clutter; bundles span across groups in
+transcript order.
 
 ```
-─── Proposal 1 of 12  ·  Claim group cg-001 (1 of 3 targets) ────────
-
-Target entity: Aldara (existing)
-  Matched via: alias "the Aldaran Realm"
-Section: founding
+─── Bundle 1 of 8  ·  Claim group cg-001 (3 of 3 routes selected) ────────
 
 Proposed text:
   "Theron's grandfather founded Aldara in the Second Age."
@@ -64,7 +65,6 @@ Corrections applied:
 
 Source: Worldbuilding Session 3
 Locator: 0:04:32-0:04:41  → https://youtube.com/watch?v=abc123&t=272
-Speaker: DM
 Status: authoritative
 Session date: 2026-01-15
 
@@ -72,53 +72,38 @@ Context:
   Before: "So let's talk about the founding of Aldara."
   After:  "And that's why the Theron name matters so much now."
 
-Also routes to:
-  → Theron (lineage)              — next
-  → Second Age (events-in-era)    — then
+Routes:
+  1. [x] Aldara (existing)            section=founding         speaker=DM
+        Matched via: alias "the Aldaran Realm"
+  2. [x] Theron (existing)            section=lineage          speaker=DM
+  3. [x] Second Age (NEW — events, will be created on approval)
+                                       section=events-in-era    speaker=DM
 
-[a]pprove  [e]dit  [r]eject  [p]lay (open URL)
+[a]pprove  [e]dit  [r]eject  [p]lay  [t]argets
 >
 ```
 
-After approval or rejection, the next claim-group sibling shows with
-an abbreviated header — the claim text and locator are unchanged; only
-the target and section differ:
+Bundle-level edits to `text`, `status`, or `status_reason` propagate
+to every checked route — those are claim-level facts about the world,
+so they should agree across siblings. Per-target overrides for
+`section` and `speaker` live in the `[t]argets` sub-prompt because
+they're inherently route-shaped (different entities have different
+sections).
+
+### New-entity routes
+
+A route targeting a proposed new entity that does not yet exist on
+disk renders inline in the checklist:
 
 ```
-─── Proposal 2 of 12  ·  Claim group cg-001 (2 of 3 targets) ────────
-
-Target entity: Theron (existing)
-Section: lineage
-
-(Same claim text, locator, and context as previous proposal.)
-
-[a]pprove  [e]dit  [r]eject  [p]lay (open URL)
->
+  3. [x] War of the Dusk (NEW — events, will be created on approval)
+        Suggested aliases: "the Dusk War"
 ```
 
-An edit to `text` inside a claim group applies only to the proposal
-being edited — sibling proposals keep the original text. This is
-deliberate: the human might want to phrase the founding claim
-differently on Theron's page than on Aldara's, and forcing edits to
-propagate across siblings would undercut that. If propagation _is_
-wanted, the user edits each sibling in turn.
-
-### New-entity proposals
-
-For proposals targeting a proposed new entity that does not yet exist
-on disk:
+A route whose entity was created earlier in the same review session:
 
 ```
-Target entity: War of the Dusk (NEW — events, will be created on approval)
-  Proposed aliases: (none)
-```
-
-For proposals targeting an entity created earlier in the same review
-session:
-
-```
-Target entity: War of the Dusk (events)
-  Created earlier in this review session
+  2. [x] War of the Dusk (events) — created earlier this session
 ```
 
 This note is derived at display time by comparing the entity's
@@ -127,39 +112,42 @@ required.
 
 ### Alias confirmation
 
-For proposals where the planner matched via a mention that isn't yet
-an alias, the display offers alias confirmation:
+For checked routes whose planner matched via a mention that isn't yet
+an alias, alias confirmation fires as a per-route sub-prompt **after**
+the user picks approve / edit, **before** any writes:
 
 ```
-Target entity: Aldara (existing)
-  Matched via: "the Realm" (not currently an alias)
-  Add "the Realm" as alias? [y/n]
+  Add "the Realm" as alias for Aldara? [y/n]
 ```
 
-Alias confirmation is a sub-prompt, not a main action. It applies
-immediately on `y` and is recorded in the entity YAML as an alias
-record with `source: alias-confirmation` and `added_by_ingest` set to
-the current ingest — or merged into the stub at creation time if the
-entity is new and this is its first approval, in which case the source
-on the first-approval aliases is `stub-creation`. Aliases added via
-alias confirmation are cleanly removable by `reject-ingest`.
+Alias confirmation only fires for routes that survived the bundle
+selection — dropping a route via `[t]argets` skips its alias prompt.
+Confirmed aliases are recorded with `source: alias-confirmation` and
+`added_by_ingest` set to the current ingest — or merged into the
+stub at creation time if the entity is new and this is its first
+approval, in which case the source on the first-approval aliases is
+`stub-creation`. Aliases added via alias confirmation are cleanly
+removable by `reject-ingest`. On Ctrl-C resume, prompts already
+answered earlier in the same ingest are not re-asked: the engine
+seeds its dedup set from on-disk alias records whose
+`added_by_ingest` matches the current source.
 
 ### Actions
 
-- **Approve** — proposal becomes a fact, appended to the entity's YAML
-  (creating the YAML if this is the first approval for a new entity),
-  summary regenerated. Proposal file deleted.
-- **Edit** — opens `text` (and optionally other fields) for inline
-  editing. Tracks original as `text_source` on the approved fact.
-  Then approves.
-- **Reject** — proposal discarded.
+- **Approve** — every checked route becomes a fact, appended to its
+  target entity's YAML (creating the YAML if this is the first
+  approval for a new entity); summary regenerated. Unchecked routes
+  are dropped — their proposal files are deleted.
+- **Edit** — bundle-level edits to `text`, `status`, and
+  `status_reason` propagate to every checked route. Tracks original
+  text as `text_source` on each affected fact.
+- **Reject** — discards the whole bundle: every route's proposal
+  file is removed, no entity is touched.
 - **Play** — prints the URL; user clicks through to verify against
-  audio. Play is not a decision — after playing, the user still must
-  approve, edit, or reject the current proposal.
-
-Status, speaker, and section can all be overridden during review.
-Text edits are supported but optional — approving as-is is fine since
-the summarizer produces readable prose downstream.
+  audio. Play is not a decision.
+- **Targets** — sub-prompt to toggle individual routes on / off and
+  to set per-target `section` / `speaker` overrides on kept rows.
+  Returns to the main prompt; the bundle then re-renders.
 
 ## No skip, no defer
 

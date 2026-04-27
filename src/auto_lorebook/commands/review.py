@@ -18,10 +18,11 @@ from auto_lorebook import review as review_mod
 from auto_lorebook.interactive import _is_interactive
 from auto_lorebook.review import (
     ApproveDecision,
-    Decision,
+    BundleDecision,
+    BundleView,
     EditDecision,
-    ProposalView,
     RejectDecision,
+    TargetView,
 )
 from auto_lorebook.timestamps import TimestampError, parse_locator_hint
 
@@ -111,49 +112,65 @@ def run(args: argparse.Namespace) -> int:
 
 
 class AutoApproveReviewer:
-    """Approves everything; declines every alias suggestion."""
+    """Approves every bundle; declines every alias suggestion."""
 
     by_label = "auto-approve"
 
-    def decide(self, view: ProposalView) -> Decision:  # noqa: ARG002
-        return ApproveDecision()
+    def decide_bundle(self, view: BundleView) -> BundleDecision:
+        return BundleDecision(
+            decision=ApproveDecision(),
+            selected_indices=tuple(range(len(view.targets))),
+        )
 
     def confirm_alias(self, entity: str, mention: str) -> bool:  # noqa: ARG002
         return False
 
 
 class InteractiveReviewer:
-    """Renders the spec'd display and prompts for the next action."""
+    """Renders one bundle screen and prompts for the next action."""
 
     by_label = "human-review"
 
-    def decide(self, view: ProposalView) -> Decision:
-        _render(view)
+    def decide_bundle(self, view: BundleView) -> BundleDecision:
+        # `selected[i]` toggles route i. Default: every route checked.
+        selected = [True] * len(view.targets)
+        # Per-target overrides accumulated via `[t]`.
+        overrides: dict[int, EditDecision] = {}
+        bundle_edits: EditDecision | None = None
+        _render_bundle(view, selected, overrides, bundle_edits)
         while True:
             try:
-                choice = (
-                    input("[a]pprove  [e]dit  [r]eject  [p]lay (open URL)\n> ")
-                    .strip()
-                    .lower()
-                )
+                choice = input(_prompt_line(view)).strip().lower()
             except EOFError:
                 # No more stdin (non-interactive harness w/o --auto-approve);
                 # treat as reject so we don't loop forever.
-                return RejectDecision()
+                return BundleDecision(decision=RejectDecision(), selected_indices=())
             if choice in {"a", "approve"}:
-                return ApproveDecision()
-            if choice in {"r", "reject"}:
-                return RejectDecision()
-            if choice in {"e", "edit"}:
-                edits = self._gather_edits(view)
-                if edits.is_noop():
-                    print("  (no edits; re-prompting)")  # noqa: T201
+                indices = tuple(i for i, on in enumerate(selected) if on)
+                if not indices:
+                    print("  No routes selected; toggle with [t] or reject.")  # noqa: T201
                     continue
-                return edits
+                return BundleDecision(
+                    decision=bundle_edits or ApproveDecision(),
+                    selected_indices=indices,
+                    per_target_overrides={
+                        i: ov for i, ov in overrides.items() if selected[i]
+                    },
+                )
+            if choice in {"r", "reject"}:
+                return BundleDecision(decision=RejectDecision(), selected_indices=())
+            if choice in {"e", "edit"}:
+                bundle_edits = _gather_bundle_edits(view, bundle_edits)
+                _render_bundle(view, selected, overrides, bundle_edits)
+                continue
+            if choice in {"t", "targets"}:
+                _gather_target_toggles(view, selected, overrides)
+                _render_bundle(view, selected, overrides, bundle_edits)
+                continue
             if choice in {"p", "play"}:
                 _print_play(view)
                 continue
-            print(f"  unknown choice {choice!r}; try a/e/r/p")  # noqa: T201
+            print(f"  unknown choice {choice!r}; try a/e/r/p/t")  # noqa: T201
 
     def confirm_alias(self, entity: str, mention: str) -> bool:
         while True:
@@ -171,22 +188,102 @@ class InteractiveReviewer:
                 return False
             print("  please answer y or n")  # noqa: T201
 
-    def _gather_edits(self, view: ProposalView) -> EditDecision:
-        """Walk each editable field; blank input keeps the current value."""
-        p = view.proposal
-        print("  Edit (Enter to keep current value):")  # noqa: T201
-        new_text = _prompt_optional("text", p.text)
-        new_speaker = _prompt_optional("speaker", p.speaker)
-        new_status = _prompt_status(p.status)
-        new_status_reason = _prompt_optional("status_reason", p.status_reason or "")
-        new_section = _prompt_optional("section", p.section)
-        return EditDecision(
-            new_text=new_text,
-            new_speaker=new_speaker,
-            new_status=new_status,
-            new_status_reason=new_status_reason,
-            new_section=new_section,
+
+def _gather_bundle_edits(
+    view: BundleView, current: EditDecision | None
+) -> EditDecision | None:
+    """Bundle-level edits: text / status / status_reason only.
+
+    `section` and `speaker` vary per route, so they live in the
+    `[t]argets` sub-prompt as per-target overrides.
+    """
+    sample = view.targets[0].proposal
+    print("  Bundle edit (Enter to keep current value; applies to checked routes):")  # noqa: T201
+    new_text = _prompt_optional(
+        "text", current.new_text if current and current.new_text else sample.text
+    )
+    new_status = _prompt_status(
+        current.new_status if current and current.new_status else sample.status
+    )
+    new_status_reason = _prompt_optional(
+        "status_reason",
+        (
+            current.new_status_reason
+            if current and current.new_status_reason is not None
+            else sample.status_reason or ""
+        ),
+    )
+    edits = EditDecision(
+        new_text=new_text,
+        new_status=new_status,
+        new_status_reason=new_status_reason,
+    )
+    return None if edits.is_noop() else edits
+
+
+def _gather_target_toggles(
+    view: BundleView,
+    selected: list[bool],
+    overrides: dict[int, EditDecision],
+) -> None:
+    """Toggle inclusion per route; for kept rows, override section / speaker."""
+    print("  Targets (per route):")  # noqa: T201
+    for i, target in enumerate(view.targets):
+        mark = "[x]" if selected[i] else "[ ]"
+        print(  # noqa: T201
+            f"    {i + 1}. {mark} {target.proposal.target_entity}  "
+            f"(section={target.proposal.section}, speaker={target.proposal.speaker})"
         )
+    while True:
+        try:
+            raw = input("    toggle # / edit # / done: ").strip().lower()
+        except EOFError:
+            return
+        if raw in {"", "done", "d"}:
+            return
+        parts = raw.split()
+        if len(parts) == 2 and parts[0] in {"toggle", "t"} and parts[1].isdigit():
+            idx = int(parts[1]) - 1
+            if 0 <= idx < len(selected):
+                selected[idx] = not selected[idx]
+                mark = "[x]" if selected[idx] else "[ ]"
+                print(  # noqa: T201
+                    f"    {mark} {view.targets[idx].proposal.target_entity}"
+                )
+            continue
+        if len(parts) == 2 and parts[0] in {"edit", "e"} and parts[1].isdigit():
+            idx = int(parts[1]) - 1
+            if 0 <= idx < len(view.targets):
+                _edit_target_override(view.targets[idx], idx, overrides)
+            continue
+        print("    expected: 'toggle N' / 'edit N' / 'done'")  # noqa: T201
+
+
+def _edit_target_override(
+    target: TargetView, idx: int, overrides: dict[int, EditDecision]
+) -> None:
+    """Prompt for per-target section / speaker; merge into overrides."""
+    p = target.proposal
+    current = overrides.get(idx)
+    new_section = _prompt_optional(
+        "section",
+        current.new_section if current and current.new_section else p.section,
+    )
+    new_speaker = _prompt_optional(
+        "speaker",
+        current.new_speaker if current and current.new_speaker else p.speaker,
+    )
+    edits = EditDecision(new_section=new_section, new_speaker=new_speaker)
+    if edits.is_noop():
+        overrides.pop(idx, None)
+    else:
+        overrides[idx] = edits
+
+
+def _prompt_line(view: BundleView) -> str:
+    if len(view.targets) > 1:
+        return "[a]pprove  [e]dit  [r]eject  [p]lay  [t]argets\n> "
+    return "[a]pprove  [e]dit  [r]eject  [p]lay (open URL)\n> "
 
 
 # ---------------------------------------------------------------------------
@@ -194,83 +291,120 @@ class InteractiveReviewer:
 # ---------------------------------------------------------------------------
 
 
-def _render(view: ProposalView) -> None:
-    p = view.proposal
-    print(  # noqa: T201
-        f"\n─── Proposal {view.proposal_index} of {view.proposal_total}  ·  "
-        f"Claim group {p.claim_group_id} "
-        f"({view.group_position} of {view.group_size} targets) {_SEP[:8]}"
+def _render_bundle(
+    view: BundleView,
+    selected: list[bool],
+    overrides: dict[int, EditDecision],
+    bundle_edits: EditDecision | None,
+) -> None:
+    """Render one claim-group bundle.
+
+    Singletons render an abbreviated form (no checklist). Multi-target
+    bundles show the claim text once, then a numbered route checklist
+    with per-row entity / category / section / matched_via.
+    """
+    head_proposal = view.targets[0].proposal
+    text = (
+        bundle_edits.new_text
+        if bundle_edits and bundle_edits.new_text
+        else head_proposal.text
     )
-    print(_target_line(view))  # noqa: T201
-    if view.matched_via:
-        print(f"  Matched via: {view.matched_via}")  # noqa: T201
-    if p.extractor_flagged:
-        print(f"  Flagged: {p.flag_reason or 'extractor flagged this proposal'}")  # noqa: T201
-    if p.hint_widened:
-        print("  Hint widened to parent segment")  # noqa: T201
-    print(f"Section: {p.section}")  # noqa: T201
-    print()  # noqa: T201
-    print(f"Proposed text:\n  {p.text!r}")  # noqa: T201
-    print(f"\nRaw transcript:\n  {p.raw_transcript_span!r}")  # noqa: T201
-    if p.corrections_applied:
+    status = (
+        bundle_edits.new_status
+        if bundle_edits and bundle_edits.new_status
+        else head_proposal.status
+    )
+    status_reason = (
+        bundle_edits.new_status_reason
+        if bundle_edits and bundle_edits.new_status_reason is not None
+        else head_proposal.status_reason
+    )
+    is_singleton = len(view.targets) == 1
+    header_kind = "Proposal" if is_singleton else "Bundle"
+    route_count = len(view.targets)
+    selected_count = sum(1 for b in selected if b)
+    print(  # noqa: T201
+        f"\n─── {header_kind} {view.bundle_index} of {view.bundle_total}  ·  "
+        f"Claim group {view.claim_group_id} "
+        f"({selected_count} of {route_count} routes selected) {_SEP[:8]}"
+    )
+    print(f"Proposed text:\n  {text!r}")  # noqa: T201
+    print(f"\nRaw transcript:\n  {head_proposal.raw_transcript_span!r}")  # noqa: T201
+    if head_proposal.corrections_applied:
         print("\nCorrections applied:")  # noqa: T201
-        for c in p.corrections_applied:
+        for c in head_proposal.corrections_applied:
             print(f'  • "{c.from_}" → "{c.to}"  ({c.source})')  # noqa: T201
     print()  # noqa: T201
-    print(f"Source: {view.source_title or view.proposal.source_id}")  # noqa: T201
-    print(f"Locator: {p.locator}  → {_play_url(view) or '(no source URL)'}")  # noqa: T201
-    print(f"Speaker: {p.speaker}")  # noqa: T201
-    status_line = f"Status: {p.status}"
-    if p.status_reason:
-        status_line += f"  ({p.status_reason})"
+    print(f"Source: {view.source_title or head_proposal.source_id}")  # noqa: T201
+    print(  # noqa: T201
+        f"Locator: {head_proposal.locator}  → {_play_url(view) or '(no source URL)'}"
+    )
+    status_line = f"Status: {status}"
+    if status_reason:
+        status_line += f"  ({status_reason})"
     print(status_line)  # noqa: T201
-    if p.session_date:
-        print(f"Session date: {p.session_date}")  # noqa: T201
-    if p.context_before or p.context_after:
+    if head_proposal.session_date:
+        print(f"Session date: {head_proposal.session_date}")  # noqa: T201
+    if head_proposal.context_before or head_proposal.context_after:
         print("\nContext:")  # noqa: T201
-        if p.context_before:
-            print(f"  Before: {p.context_before!r}")  # noqa: T201
-        if p.context_after:
-            print(f"  After:  {p.context_after!r}")  # noqa: T201
-    if p.claim_group_siblings:
-        print("\nAlso routes to:")  # noqa: T201
-        for s in p.claim_group_siblings:
-            print(f"  → {s.entity}  ({s.proposed_id})")  # noqa: T201
+        if head_proposal.context_before:
+            print(f"  Before: {head_proposal.context_before!r}")  # noqa: T201
+        if head_proposal.context_after:
+            print(f"  After:  {head_proposal.context_after!r}")  # noqa: T201
+    if head_proposal.extractor_flagged:
+        print(  # noqa: T201
+            f"Flagged: {head_proposal.flag_reason or 'extractor flagged this'}"
+        )
+    if head_proposal.hint_widened:
+        print("Hint widened to parent segment")  # noqa: T201
+
+    print()  # noqa: T201
+    print("Routes:")  # noqa: T201
+    for i, target in enumerate(view.targets):
+        mark = "[x]" if selected[i] else "[ ]"
+        ov = overrides.get(i)
+        section = ov.new_section if ov and ov.new_section else target.proposal.section
+        speaker = ov.new_speaker if ov and ov.new_speaker else target.proposal.speaker
+        prefix = "  " if is_singleton else f"  {i + 1}. "
+        print(  # noqa: T201
+            f"{prefix}{mark} {_route_label(target)}  "
+            f"section={section}  speaker={speaker}"
+        )
+        if target.matched_via:
+            print(f"      Matched via: {target.matched_via}")  # noqa: T201
+        if target.suggested_aliases:
+            joined = ", ".join(f'"{a}"' for a in target.suggested_aliases)
+            print(f"      Suggested aliases: {joined}")  # noqa: T201
     print()  # noqa: T201
 
 
-def _target_line(view: ProposalView) -> str:
-    if view.is_new_entity:
-        cat = view.new_entity_category or "?"
-        if view.created_earlier_in_session:
-            return (
-                f"Target entity: {view.proposal.target_entity} ({cat})\n"
-                f"  Created earlier in this review session"
-            )
-        return (
-            f"Target entity: {view.proposal.target_entity} "
-            f"(NEW — {cat}, will be created on approval)"
-        )
-    return f"Target entity: {view.proposal.target_entity} (existing)"
+def _route_label(target: TargetView) -> str:
+    name = target.proposal.target_entity
+    if target.is_new_entity:
+        cat = target.new_entity_category or "?"
+        if target.created_earlier_in_session:
+            return f"{name} ({cat}) — created earlier this session"
+        return f"{name} (NEW — {cat}, will be created on approval)"
+    return f"{name} (existing)"
 
 
-def _play_url(view: ProposalView) -> str | None:
-    """Return a URL with the start timestamp tacked on, or None."""
+def _play_url(view: BundleView) -> str | None:
+    """URL with start timestamp tacked on, derived from the head target."""
     if not view.source_url:
         return None
     try:
-        start_seconds, _ = parse_locator_hint(view.proposal.locator)
+        start_seconds, _ = parse_locator_hint(view.targets[0].proposal.locator)
     except TimestampError:
         return view.source_url
     return reading_mod.linkify_timestamp(view.source_url, start_seconds)
 
 
-def _print_play(view: ProposalView) -> None:
+def _print_play(view: BundleView) -> None:
     url = _play_url(view)
     if url:
         print(f"  → {url}")  # noqa: T201
     else:
-        print("  (no source URL for this proposal)")  # noqa: T201
+        print("  (no source URL for this bundle)")  # noqa: T201
 
 
 # ---------------------------------------------------------------------------
