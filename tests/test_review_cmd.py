@@ -16,19 +16,21 @@ import pytest
 import yaml
 
 from auto_lorebook import config as cfg_mod
-from auto_lorebook import entity_yaml
+from auto_lorebook import entity_yaml, proposal_yaml
 from auto_lorebook import review as review_mod
 from auto_lorebook.commands import (
     approve_reading_cmd,
     generate_reading_cmd,
     review_cmd,
 )
+from auto_lorebook.commands.review import InteractiveReviewer
 from auto_lorebook.openrouter import OpenRouterResponse
 from auto_lorebook.review import (
     ApproveDecision,
     BundleDecision,
     BundleView,
     RejectDecision,
+    TargetView,
 )
 
 if TYPE_CHECKING:
@@ -559,3 +561,278 @@ class TestMultiTargetBundle:
         proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
         assert list(proposals_dir.glob("*.yaml")) == []
         capsys.readouterr()
+
+
+# ---------------------------------------------------------------------------
+# InteractiveReviewer [u]ndo
+# ---------------------------------------------------------------------------
+
+
+def _make_proposal_for_view(
+    *, target: str, proposed_id: str, section: str = "founding"
+) -> proposal_yaml.Proposal:
+    return proposal_yaml.Proposal(
+        proposal_type="new_entity_with_facts",
+        target_entity=target,
+        proposed_id=proposed_id,
+        claim_group_id="cg-001",
+        text=f"{target} was founded in the Second Age.",
+        raw_transcript_span=f"{target} was founded in the Second Age.",
+        text_corrects_transcript=False,
+        source_id="yt-x",
+        locator="0:00:08-0:00:18",
+        speaker="DM",
+        reading_section="[0:00:00-0:00:30] Founding",
+        reading_bullet_index=0,
+        status="authoritative",
+        session_date="2026-04-15",
+        section=section,
+        context_before="",
+        context_after="",
+    )
+
+
+def _two_target_view() -> BundleView:
+    targets = (
+        TargetView(
+            proposal=_make_proposal_for_view(
+                target="Aldara", proposed_id="aldara-f001"
+            ),
+            is_new_entity=True,
+            new_entity_category="locations",
+            created_earlier_in_session=False,
+            suggested_aliases=(),
+            matched_via=None,
+        ),
+        TargetView(
+            proposal=_make_proposal_for_view(
+                target="Theron", proposed_id="theron-f001", section="lineage"
+            ),
+            is_new_entity=True,
+            new_entity_category="characters",
+            created_earlier_in_session=False,
+            suggested_aliases=(),
+            matched_via=None,
+        ),
+    )
+    return BundleView(
+        bundle_index=1,
+        bundle_total=1,
+        claim_group_id="cg-001",
+        targets=targets,
+        source_url=None,
+        source_title="Test source",
+    )
+
+
+def _scripted_input(monkeypatch: pytest.MonkeyPatch, lines: list[str]) -> None:
+    """Patch builtins.input to feed `lines` in order."""
+    it = iter(lines)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: next(it))
+
+
+class TestInteractiveReviewerUndo:
+    """[u]ndo resets bundle edits, target selection, and per-target overrides."""
+
+    def test_undo_clears_bundle_edits(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        view = _two_target_view()
+        _scripted_input(
+            monkeypatch,
+            [
+                "e",  # enter edit
+                "Edited text.",  # bundle text override
+                "",  # status (keep)
+                "",  # status_reason (keep)
+                "u",  # undo
+                "a",  # approve
+            ],
+        )
+        decision = InteractiveReviewer().decide_bundle(view)
+        capsys.readouterr()
+        assert isinstance(decision.decision, ApproveDecision)
+        assert decision.selected_indices == (0, 1)
+        assert decision.per_target_overrides == {}
+
+    def test_undo_re_checks_toggled_off_routes(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        view = _two_target_view()
+        _scripted_input(
+            monkeypatch,
+            [
+                "t",  # enter targets sub-prompt
+                "toggle 1",  # uncheck Aldara (route 0)
+                "done",
+                "u",  # undo re-checks all routes
+                "a",  # approve
+            ],
+        )
+        decision = InteractiveReviewer().decide_bundle(view)
+        capsys.readouterr()
+        assert decision.selected_indices == (0, 1)
+
+    def test_undo_clears_per_target_override(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        view = _two_target_view()
+        _scripted_input(
+            monkeypatch,
+            [
+                "t",  # enter targets sub-prompt
+                "edit 2",  # override Theron (route 1)
+                "ancestry",  # new section
+                "Player-Thorin",  # new speaker
+                "done",
+                "u",  # undo
+                "a",  # approve
+            ],
+        )
+        decision = InteractiveReviewer().decide_bundle(view)
+        capsys.readouterr()
+        assert decision.per_target_overrides == {}
+        assert isinstance(decision.decision, ApproveDecision)
+
+    def test_undo_after_no_changes_is_safe_noop(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        view = _two_target_view()
+        _scripted_input(monkeypatch, ["u", "a"])
+        decision = InteractiveReviewer().decide_bundle(view)
+        capsys.readouterr()
+        assert isinstance(decision.decision, ApproveDecision)
+        assert decision.selected_indices == (0, 1)
+
+    def test_unknown_choice_still_reprompts(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Unknown-choice path lists [u]ndo alongside the other actions."""
+        view = _two_target_view()
+        _scripted_input(monkeypatch, ["x", "a"])
+        decision = InteractiveReviewer().decide_bundle(view)
+        out = capsys.readouterr().out
+        assert "unknown choice" in out
+        assert "u" in out  # undo advertised in the hint
+        assert isinstance(decision.decision, ApproveDecision)
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: undo through the full pipeline
+# ---------------------------------------------------------------------------
+
+
+class TestInteractiveReviewerUndoIntegration:
+    """End-to-end stdin-driven review with [u]ndo through generate→approve→review."""
+
+    def test_undo_reverses_toggle_and_edit_through_pipeline(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Toggle off route 2, enter a bundle edit, [u]ndo, [a]pprove.
+
+        After undo, all three stubs should be created and every fact's
+        text should match the original (untouched) proposal text.
+        """
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        monkeypatch.setattr(
+            "auto_lorebook.commands.review._is_interactive", lambda: True
+        )
+        scripted = iter([
+            "t",  # enter targets sub-prompt
+            "toggle 2",  # uncheck Theron
+            "done",
+            "e",  # enter bundle edit
+            "Tampered text.",  # bundle text override
+            "",  # status (keep)
+            "",  # status_reason (keep)
+            "u",  # undo: re-checks Theron AND clears edits
+            "a",  # approve all three routes
+        ])
+        monkeypatch.setattr("builtins.input", lambda *_a, **_kw: next(scripted))
+
+        client = MagicMock()
+        _wire_multi_target_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            assert (
+                approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+                == 0
+            )
+            rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=False))
+        assert rc == 0
+
+        # All three stubs created — undo re-checked the toggled-off route.
+        original_text = "King Theron founded Aldara in the Second Age."
+        for slug, cat in (
+            ("aldara", "locations"),
+            ("theron", "characters"),
+            ("second-age", "events"),
+        ):
+            path = ingested_wiki / cat / f"{slug}.yaml"
+            assert path.exists(), f"{slug} stub missing; undo didn't re-check route"
+            e = entity_yaml.read(path)
+            assert len(e.facts) == 1
+            # Undo dropped the bundle edit; original text preserved.
+            assert e.facts[0]["text"] == original_text
+            assert e.facts[0]["text_source"] is None
+            assert e.facts[0]["edited_by_human"] is False
+
+        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        assert list(proposals_dir.glob("*.yaml")) == []
+        out = capsys.readouterr().out
+        assert "approved=3" in out
+
+    def test_undo_then_reject_still_rejects_whole_bundle(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """[u]ndo doesn't block a subsequent [r]eject — rejection still wins."""
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        monkeypatch.setattr(
+            "auto_lorebook.commands.review._is_interactive", lambda: True
+        )
+        scripted = iter([
+            "e",  # enter edit
+            "Tampered text.",
+            "",
+            "",
+            "u",  # undo edit
+            "r",  # reject the whole bundle
+        ])
+        monkeypatch.setattr("builtins.input", lambda *_a, **_kw: next(scripted))
+
+        client = MagicMock()
+        _wire_multi_target_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            assert (
+                approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+                == 0
+            )
+            rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=False))
+        assert rc == 0
+
+        for slug, cat in (
+            ("aldara", "locations"),
+            ("theron", "characters"),
+            ("second-age", "events"),
+        ):
+            assert not (ingested_wiki / cat / f"{slug}.yaml").exists()
+
+        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        assert list(proposals_dir.glob("*.yaml")) == []
+        out = capsys.readouterr().out
+        assert "rejected=3" in out

@@ -170,7 +170,18 @@ class InteractiveReviewer:
             if choice in {"p", "play"}:
                 _print_play(view)
                 continue
-            print(f"  unknown choice {choice!r}; try a/e/r/p/t")  # noqa: T201
+            if choice in {"u", "undo"}:
+                # Reset accumulated bundle state: clears edits, re-checks
+                # every route (un-rejecting per-target rejections), and
+                # drops per-target overrides.
+                bundle_edits = None
+                overrides.clear()
+                for i in range(len(selected)):
+                    selected[i] = True
+                print("  Undid bundle edits, re-checked every route.")  # noqa: T201
+                _render_bundle(view, selected, overrides, bundle_edits)
+                continue
+            print(f"  unknown choice {choice!r}; try a/e/r/p/t/u")  # noqa: T201
 
     def confirm_alias(self, entity: str, mention: str) -> bool:
         while True:
@@ -282,8 +293,8 @@ def _edit_target_override(
 
 def _prompt_line(view: BundleView) -> str:
     if len(view.targets) > 1:
-        return "[a]pprove  [e]dit  [r]eject  [p]lay  [t]argets\n> "
-    return "[a]pprove  [e]dit  [r]eject  [p]lay (open URL)\n> "
+        return "[a]pprove  [e]dit  [r]eject  [p]lay  [t]argets  [u]ndo\n> "
+    return "[a]pprove  [e]dit  [r]eject  [p]lay (open URL)  [u]ndo\n> "
 
 
 # ---------------------------------------------------------------------------
