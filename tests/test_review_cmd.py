@@ -339,7 +339,10 @@ class TestAutoApprove:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            assert approve_reading_cmd.run(_args(source_id="yt-abc12345678")) == 0
+            assert (
+                approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+                == 0
+            )
             rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=True))
         assert rc == 0
         # Stub created
@@ -386,7 +389,7 @@ class TestEmptyDir:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            approve_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
             # Drain via auto-approve, then run again — should be empty.
             review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=True))
             capsys.readouterr()
@@ -447,7 +450,10 @@ class TestMultiTargetBundle:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            assert approve_reading_cmd.run(_args(source_id="yt-abc12345678")) == 0
+            assert (
+                approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+                == 0
+            )
             rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=True))
         assert rc == 0
 
@@ -490,7 +496,10 @@ class TestMultiTargetBundle:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            assert approve_reading_cmd.run(_args(source_id="yt-abc12345678")) == 0
+            assert (
+                approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+                == 0
+            )
 
         result = review_mod.run(
             cfg=cfg_mod.load_config(),
@@ -531,7 +540,10 @@ class TestMultiTargetBundle:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            assert approve_reading_cmd.run(_args(source_id="yt-abc12345678")) == 0
+            assert (
+                approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+                == 0
+            )
 
         result = review_mod.run(
             cfg=cfg_mod.load_config(),

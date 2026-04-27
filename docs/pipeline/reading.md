@@ -274,6 +274,19 @@ reading.
 auto-lorebook approve-reading <source_id>
 ```
 
+`approve-reading` opens an interactive session over the draft:
+
+| Key | Action |
+|-----|--------|
+| `a` | Approve: flip status to `approved`, copy to wiki, run plan + extract. |
+| `e` | Edit: open the draft in `$EDITOR` (defaults to `vi`); on save, return to the prompt. |
+| `r` | Reject: queue the pending reading dir for deletion. Deferred — nothing happens until you `q`. |
+| `u` | Undo: restore the draft to its session-start contents and clear any queued reject. |
+| `q` | Quit: if a reject is queued, confirm and delete `pending/<id>/reading/`; otherwise no-op. |
+
+`--yes` skips the loop and auto-approves; required for non-TTY runs
+(scripts, CI). Ctrl-C exits 130 with no changes.
+
 After approval, the reading is committed to the wiki alongside the
 raw transcript. The intermediate `structure.yaml` is retained in the
 pending directory as an audit artifact for the lifetime of the ingest,

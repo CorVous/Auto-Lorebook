@@ -285,7 +285,7 @@ class TestApproveReading:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
 
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
@@ -310,7 +310,7 @@ class TestApproveReading:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
 
         assert rc == 0
         plan_path = tmp_home / "pending" / "yt-abc12345678" / "plan.yaml"
@@ -327,7 +327,7 @@ class TestApproveReading:
 
     def test_no_draft_errors(self, tmp_home: Path, ingested_wiki: Path) -> None:
         _write_user_config(tmp_home, ingested_wiki)
-        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678"))
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
         assert rc == 1
 
     def test_writes_proposals_via_stage3(
@@ -346,7 +346,7 @@ class TestApproveReading:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
 
         assert rc == 0
         proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
@@ -360,6 +360,266 @@ class TestApproveReading:
         out = capsys.readouterr().out
         assert "Extracted 2 proposal" in out
         assert "(0 flagged)" in out
+
+
+class TestApproveReadingInteractive:
+    """Interactive approve-reading loop ([a]/[e]/[r]/[u]/[q] + --yes)."""
+
+    def _patch_inputs(
+        self, monkeypatch: pytest.MonkeyPatch, answers: list[str]
+    ) -> list[str]:
+        """Feed scripted answers to input(); return mutable record of prompts seen."""
+        prompts: list[str] = []
+        it = iter(answers)
+
+        def fake_input(prompt: str = "") -> str:
+            prompts.append(prompt)
+            try:
+                return next(it)
+            except StopIteration as e:
+                raise EOFError from e
+
+        monkeypatch.setattr("builtins.input", fake_input)
+        return prompts
+
+    def _force_tty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "auto_lorebook.commands.approve_reading._is_interactive",
+            lambda: True,
+        )
+
+    def test_approve_keystroke_runs_full_pipeline(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        self._force_tty(monkeypatch)
+        prompts = self._patch_inputs(monkeypatch, ["a"])
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        # Loop must have prompted before approving.
+        assert len(prompts) >= 1
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert approved.exists()
+        assert "reading_status: approved" in approved.read_text(encoding="utf-8")
+        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        assert proposals_dir.is_dir()
+
+    def test_non_tty_without_yes_errors(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        monkeypatch.setattr(
+            "auto_lorebook.commands.approve_reading._is_interactive",
+            lambda: False,
+        )
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 1
+        # Pipeline must not have copied to wiki.
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert not approved.exists()
+
+    def test_quit_without_action_is_noop(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        self._force_tty(monkeypatch)
+        self._patch_inputs(monkeypatch, ["q"])
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        # No wiki copy, no plan, pending dir intact.
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert not approved.exists()
+        assert not (tmp_home / "pending" / "yt-abc12345678" / "plan.yaml").exists()
+        assert (
+            tmp_home / "pending" / "yt-abc12345678" / "reading" / "reading.md"
+        ).exists()
+
+    def test_reject_then_quit_with_confirm_deletes_pending(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        self._force_tty(monkeypatch)
+        self._patch_inputs(monkeypatch, ["r", "q", "y"])
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        assert not (tmp_home / "pending" / "yt-abc12345678" / "reading").exists()
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert not approved.exists()
+
+    def test_reject_then_quit_decline_confirm_keeps_pending(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        self._force_tty(monkeypatch)
+        self._patch_inputs(monkeypatch, ["r", "q", "n"])
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        assert (
+            tmp_home / "pending" / "yt-abc12345678" / "reading" / "reading.md"
+        ).exists()
+
+    def test_reject_then_undo_then_approve(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        self._force_tty(monkeypatch)
+        self._patch_inputs(monkeypatch, ["r", "u", "a"])
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert approved.exists()
+        assert "reading_status: approved" in approved.read_text(encoding="utf-8")
+
+    def test_undo_restores_edited_file(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """[u] rolls back any in-session edits to the pending reading."""
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        self._force_tty(monkeypatch)
+        self._patch_inputs(monkeypatch, ["e", "u", "a"])
+
+        pending_path = (
+            tmp_home / "pending" / "yt-abc12345678" / "reading" / "reading.md"
+        )
+
+        def fake_editor(_cmd: list[str], **_kwargs: object) -> object:
+            # Simulate the user destructively rewriting the file.
+            pending_path.write_text("REWRITTEN", encoding="utf-8")
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr(
+            "auto_lorebook.commands.approve_reading.subprocess.run", fake_editor
+        )
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            original = pending_path.read_bytes()
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        # After [e][u][a]: wiki copy must reflect ORIGINAL content, not "REWRITTEN".
+        assert approved.exists()
+        assert "REWRITTEN" not in approved.read_text(encoding="utf-8")
+        assert "King Theron" in approved.read_text(encoding="utf-8")
+        # Sanity: the original we snapshotted before the run matches what
+        # generate-reading produced.
+        assert b"King Theron" in original
+
+    def test_edit_invokes_editor_then_reprompts(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        monkeypatch.setenv("EDITOR", "my-fake-editor")
+        self._force_tty(monkeypatch)
+        self._patch_inputs(monkeypatch, ["e", "a"])
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_kwargs: object) -> object:
+            calls.append(cmd)
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr(
+            "auto_lorebook.commands.approve_reading.subprocess.run", fake_run
+        )
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        assert len(calls) == 1
+        assert calls[0][0] == "my-fake-editor"
+        assert calls[0][1].endswith("reading.md")
 
 
 class TestRegenerateReading:

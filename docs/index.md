@@ -38,7 +38,7 @@ YouTube URL / SRT / text file
   Stage 1b: Summarize (LLM)    per-segment claim bullets
         │
         ▼
-  [Human review gate]   approve reading
+  [Human review gate]   approve / edit / reject reading
         │
         ▼
   Stage 2: Planner (LLM)       route claims → entities

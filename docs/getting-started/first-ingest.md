@@ -47,24 +47,32 @@ LLM quality but don't block the pipeline. See
 
 ## 3. Review the reading
 
-After Stage 1a (structure) and Stage 1b (summarize) run, the tool opens
-`sources/yt-abc123/reading.md` — a segmented, attributed, claim-bulleted
-version of the transcript. Edit what's wrong:
-
-- Segment boundaries or titles.
-- Speaker attributions.
-- Claim bullets that don't match what was said, are invented, or are
-  missing.
-- Name corrections — add to the `name_corrections` frontmatter map.
-
-When satisfied:
+After Stage 1a (structure) and Stage 1b (summarize) run, you get a
+draft at `pending/yt-abc123/reading/reading.md` — a segmented,
+attributed, claim-bulleted version of the transcript. Open the
+interactive review:
 
 ```bash
 auto-lorebook approve-reading yt-abc123
 ```
 
-This flips `reading_status` from `draft` to `approved` and unlocks the
-downstream stages. See [reading stage](../pipeline/reading.md) for
+The session prints the draft and prompts:
+
+- `a` — approve (flips status, copies to wiki, kicks off plan + extract).
+- `e` — edit in `$EDITOR`. Fix:
+    - Segment boundaries or titles.
+    - Speaker attributions.
+    - Claim bullets that don't match what was said, are invented, or
+      are missing.
+    - `name_corrections` frontmatter map.
+- `r` — queue the draft for deletion.
+- `u` — restore the draft to its session-start contents and clear any
+  queued reject.
+- `q` — quit; commits a queued reject (after a `y/N` confirm) or
+  exits cleanly.
+
+Pass `--yes` to skip the loop and auto-approve (required for
+scripted/CI runs). See [reading stage](../pipeline/reading.md) for
 deeper treatment.
 
 ## 4. Review facts
