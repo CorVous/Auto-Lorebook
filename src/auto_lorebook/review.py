@@ -54,9 +54,33 @@ class ApproveDecision:
 
 @dataclass(frozen=True)
 class EditDecision:
-    """Approve with edited text. `text_source` will retain the original."""
+    """Approve with one or more field overrides.
 
-    new_text: str
+    Fields default to ``None`` meaning "keep the original value". A
+    non-None ``new_text`` triggers ``edited_by_human=True`` and stashes
+    the original in ``text_source``; the other overrides change the
+    fact value silently (status changes are reflected in
+    ``status_history``).
+    """
+
+    new_text: str | None = None
+    new_speaker: str | None = None
+    new_status: str | None = None
+    new_status_reason: str | None = None
+    new_section: str | None = None
+
+    def is_noop(self) -> bool:
+        """Return True when no field override is set."""
+        return all(
+            v is None
+            for v in (
+                self.new_text,
+                self.new_speaker,
+                self.new_status,
+                self.new_status_reason,
+                self.new_section,
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -180,17 +204,29 @@ def _category_for_new(plan: Plan, target_entity: str) -> str | None:
 def proposal_to_fact_dict(
     proposal: Proposal,
     *,
-    edited_text: str | None,
+    edits: EditDecision | None,
     ingest_id: str,
     by_label: str,
 ) -> dict[str, Any]:
     """Build the dict appended to `entity.facts`.
 
-    `edited_text=None` means approve as-is. Non-None means human edited.
+    ``edits=None`` means approve as-is. A non-None ``edits.new_text``
+    triggers ``edited_by_human=True`` + ``text_source``; speaker /
+    status / status_reason / section overrides change the recorded
+    value (and ``status_history`` reflects the *final* status).
     """
     now = format_iso_now()
-    text = edited_text if edited_text is not None else proposal.text
+    edited_text = edits.new_text if edits else None
     edited_by_human = edited_text is not None
+    text = edited_text if edited_text is not None else proposal.text
+    speaker = edits.new_speaker if edits and edits.new_speaker else proposal.speaker
+    status = edits.new_status if edits and edits.new_status else proposal.status
+    status_reason = (
+        edits.new_status_reason
+        if edits and edits.new_status_reason is not None
+        else proposal.status_reason
+    )
+    section = edits.new_section if edits and edits.new_section else proposal.section
     return {
         "id": proposal.proposed_id,
         "text": text,
@@ -206,22 +242,22 @@ def proposal_to_fact_dict(
         "text_source": proposal.text if edited_by_human else None,
         "source_id": proposal.source_id,
         "locator": proposal.locator,
-        "speaker": proposal.speaker,
-        "status": proposal.status,
-        "status_reason": proposal.status_reason,
+        "speaker": speaker,
+        "status": status,
+        "status_reason": status_reason,
         "status_history": [
             {
-                "status": proposal.status,
+                "status": status,
                 "at": now,
                 "by": by_label,
-                "reason": proposal.status_reason,
+                "reason": status_reason,
             },
         ],
         "session_date": proposal.session_date,
         "approved_at": now,
         "created_by_ingest": ingest_id,
         "claim_group_id": proposal.claim_group_id,
-        "section": proposal.section,
+        "section": section,
     }
 
 
@@ -277,7 +313,7 @@ def _approve(
     proposal: Proposal,
     proposal_path: Path,
     *,
-    edited_text: str | None,
+    edits: EditDecision | None,
     confirmed_aliases: list[str],
     by_label: str,
 ) -> bool:
@@ -286,7 +322,7 @@ def _approve(
     now = format_iso_now()
     fact = proposal_to_fact_dict(
         proposal,
-        edited_text=edited_text,
+        edits=edits,
         ingest_id=ctx.source_id,
         by_label=by_label,
     )
@@ -472,7 +508,7 @@ def run(
             except KeyboardInterrupt:
                 result.remaining = total - (i - 1)
                 raise
-        edited_text = decision.new_text if isinstance(decision, EditDecision) else None
+        edits = decision if isinstance(decision, EditDecision) else None
         proposal_path = reading_pipeline.pending_proposal_path(
             source_id, proposal.proposed_id
         )
@@ -480,7 +516,7 @@ def run(
             ctx,
             proposal,
             proposal_path,
-            edited_text=edited_text,
+            edits=edits,
             confirmed_aliases=confirmed,
             by_label=reviewer.by_label,
         )

@@ -265,7 +265,7 @@ class TestFactDict:
     def test_plain_approve(self) -> None:
         p = _make_proposal(target="Aldara", proposed_id="aldara-f001")
         fact = review.proposal_to_fact_dict(
-            p, edited_text=None, ingest_id="yt-x", by_label="human-review"
+            p, edits=None, ingest_id="yt-x", by_label="human-review"
         )
         assert fact["id"] == "aldara-f001"
         assert fact["text"] == p.text
@@ -282,7 +282,7 @@ class TestFactDict:
         p = _make_proposal(target="Aldara", proposed_id="aldara-f001")
         fact = review.proposal_to_fact_dict(
             p,
-            edited_text="Aldara was founded earlier than that.",
+            edits=EditDecision(new_text="Aldara was founded earlier than that."),
             ingest_id="yt-x",
             by_label="human-review",
         )
@@ -296,9 +296,62 @@ class TestFactDict:
     def test_by_label_passed_through(self) -> None:
         p = _make_proposal(target="Aldara", proposed_id="aldara-f001")
         fact = review.proposal_to_fact_dict(
-            p, edited_text=None, ingest_id="yt-x", by_label="auto-approve"
+            p, edits=None, ingest_id="yt-x", by_label="auto-approve"
         )
         assert fact["status_history"][0]["by"] == "auto-approve"
+
+    def test_speaker_status_section_overrides(self) -> None:
+        p = _make_proposal(target="Aldara", proposed_id="aldara-f001")
+        fact = review.proposal_to_fact_dict(
+            p,
+            edits=EditDecision(
+                new_speaker="Player-Thorin",
+                new_status="hearsay",
+                new_status_reason="Speaker is a tavern rumor source.",
+                new_section="legends",
+            ),
+            ingest_id="yt-x",
+            by_label="human-review",
+        )
+        assert fact["speaker"] == "Player-Thorin"
+        assert fact["status"] == "hearsay"
+        assert fact["status_reason"] == "Speaker is a tavern rumor source."
+        assert fact["section"] == "legends"
+        # status_history reflects the *edited* status, not the proposal's.
+        assert fact["status_history"][0]["status"] == "hearsay"
+        assert (
+            fact["status_history"][0]["reason"] == "Speaker is a tavern rumor source."
+        )
+        # Text untouched, so edited_by_human stays false.
+        assert fact["edited_by_human"] is False
+        assert fact["text_source"] is None
+
+    def test_partial_edit_only_changes_specified_fields(self) -> None:
+        p = _make_proposal(target="Aldara", proposed_id="aldara-f001")
+        fact = review.proposal_to_fact_dict(
+            p,
+            edits=EditDecision(new_status="trustworthy"),
+            ingest_id="yt-x",
+            by_label="human-review",
+        )
+        assert fact["status"] == "trustworthy"
+        assert fact["speaker"] == p.speaker  # untouched
+        assert fact["section"] == p.section  # untouched
+        assert fact["text"] == p.text  # untouched
+
+    def test_noop_edit_keeps_proposal_values(self) -> None:
+        p = _make_proposal(target="Aldara", proposed_id="aldara-f001")
+        fact = review.proposal_to_fact_dict(
+            p,
+            edits=EditDecision(),  # no overrides
+            ingest_id="yt-x",
+            by_label="human-review",
+        )
+        assert fact["text"] == p.text
+        assert fact["speaker"] == p.speaker
+        assert fact["status"] == p.status
+        assert fact["section"] == p.section
+        assert fact["edited_by_human"] is False
 
 
 # ---------------------------------------------------------------------------

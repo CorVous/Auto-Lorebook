@@ -145,11 +145,11 @@ class InteractiveReviewer:
             if choice in {"r", "reject"}:
                 return RejectDecision()
             if choice in {"e", "edit"}:
-                new_text = input(f"  current: {view.proposal.text}\n  edited: ").strip()
-                if not new_text:
-                    print("  (empty edit; re-prompting)")  # noqa: T201
+                edits = self._gather_edits(view)
+                if edits.is_noop():
+                    print("  (no edits; re-prompting)")  # noqa: T201
                     continue
-                return EditDecision(new_text=new_text)
+                return edits
             if choice in {"p", "play"}:
                 _print_play(view)
                 continue
@@ -170,6 +170,23 @@ class InteractiveReviewer:
             if raw in {"n", "no", ""}:
                 return False
             print("  please answer y or n")  # noqa: T201
+
+    def _gather_edits(self, view: ProposalView) -> EditDecision:
+        """Walk each editable field; blank input keeps the current value."""
+        p = view.proposal
+        print("  Edit (Enter to keep current value):")  # noqa: T201
+        new_text = _prompt_optional("text", p.text)
+        new_speaker = _prompt_optional("speaker", p.speaker)
+        new_status = _prompt_status(p.status)
+        new_status_reason = _prompt_optional("status_reason", p.status_reason or "")
+        new_section = _prompt_optional("section", p.section)
+        return EditDecision(
+            new_text=new_text,
+            new_speaker=new_speaker,
+            new_status=new_status,
+            new_status_reason=new_status_reason,
+            new_section=new_section,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -254,3 +271,37 @@ def _print_play(view: ProposalView) -> None:
         print(f"  → {url}")  # noqa: T201
     else:
         print("  (no source URL for this proposal)")  # noqa: T201
+
+
+# ---------------------------------------------------------------------------
+# Edit prompts
+# ---------------------------------------------------------------------------
+
+
+_VALID_STATUSES = ("authoritative", "trustworthy", "hearsay", "disproven")
+
+
+def _prompt_optional(label: str, current: str) -> str | None:
+    """Prompt with `current` shown as default; blank → None (keep)."""
+    try:
+        raw = input(f"    {label} [{current}]: ")
+    except EOFError:
+        return None
+    raw = raw.strip()
+    return raw or None
+
+
+def _prompt_status(current: str) -> str | None:
+    """Prompt for a valid status; re-prompt on unknown; blank → keep."""
+    options = "/".join(_VALID_STATUSES)
+    while True:
+        try:
+            raw = input(f"    status [{current}] ({options}): ")
+        except EOFError:
+            return None
+        raw = raw.strip()
+        if not raw:
+            return None
+        if raw in _VALID_STATUSES:
+            return raw
+        print(f"    must be one of: {options}")  # noqa: T201
