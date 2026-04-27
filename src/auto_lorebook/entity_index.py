@@ -32,6 +32,20 @@ class EntityIndex:
     def __init__(self, entries: list[EntityEntry]) -> None:
         self._entries = entries
 
+    def lookup(self, name: str) -> EntityEntry | None:
+        """Resolve a canonical entity name (case-insensitive) to its entry.
+
+        Aliases are not consulted — this is canonical-name only. Returns
+        ``None`` when no match is found.
+        """
+        key = name.strip().casefold()
+        if not key:
+            return None
+        for e in self._entries:
+            if e.entity.casefold() == key:
+                return e
+        return None
+
     def render_for_preamble(self) -> str:
         """Render grouped, sorted entity list for preamble inclusion."""
         by_cat: dict[str, list[EntityEntry]] = {}

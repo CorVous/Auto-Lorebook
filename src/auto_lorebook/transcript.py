@@ -2,7 +2,8 @@
 
 SRT cues are flattened to `[h:mm:ss] text` lines. Plain-text sources are
 returned verbatim. `.transcription-corrections.yaml` literal
-substitutions are applied before returning.
+substitutions are applied per-cue (or per-string for plain text) before
+returning, so `cue.text` and `text_for_llm` agree exactly.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from auto_lorebook.srt import Cue
 from auto_lorebook.srt import parse as parse_srt
 from auto_lorebook.timestamps import format_timestamp
 
@@ -26,10 +28,15 @@ class TranscriptError(ValueError):
 
 @dataclass(frozen=True)
 class LoadedTranscript:
-    """Flattened transcript + duration for a source."""
+    """Flattened transcript + duration for a source.
+
+    `cues` is populated for SRT sources and `None` for plain text. When
+    populated, every `cue.text` is a literal substring of `text_for_llm`.
+    """
 
     text_for_llm: str
     total_duration: float
+    cues: tuple[Cue, ...] | None = None
 
 
 def apply_corrections(text: str, corrections: Corrections) -> str:
@@ -38,6 +45,15 @@ def apply_corrections(text: str, corrections: Corrections) -> str:
     for c in corrections.corrections:
         out = out.replace(c.wrong, c.right)
     return out
+
+
+def _correct_cue(cue: Cue, corrections: Corrections) -> Cue:
+    return Cue(
+        index=cue.index,
+        start=cue.start,
+        end=cue.end,
+        text=apply_corrections(cue.text, corrections),
+    )
 
 
 def load(
@@ -54,16 +70,30 @@ def load(
 
     raw = path.read_text(encoding="utf-8")
     if info.source_type in {"srt", "youtube"} or fname.endswith(".srt"):
-        text, duration = _render_srt(raw)
-    else:
-        text = raw
-        duration = float(info.duration_seconds or 0)
+        cues = tuple(_correct_cue(c, corrections) for c in parse_srt(raw))
+        text = _render_cues(cues)
+        duration = cues[-1].end if cues else 0.0
+        if info.duration_seconds is not None:
+            duration = float(info.duration_seconds)
+        return LoadedTranscript(text_for_llm=text, total_duration=duration, cues=cues)
 
-    if info.duration_seconds is not None:
-        duration = float(info.duration_seconds)
+    corrected = apply_corrections(raw, corrections)
+    duration = float(info.duration_seconds or 0)
+    return LoadedTranscript(text_for_llm=corrected, total_duration=duration, cues=None)
 
-    corrected = apply_corrections(text, corrections)
-    return LoadedTranscript(text_for_llm=corrected, total_duration=duration)
+
+def transcript_window(
+    transcript: LoadedTranscript, start: float, end: float
+) -> tuple[str, list[Cue]]:
+    """Return rendered `[h:mm:ss] text` lines and cues whose start ∈ `[start, end)`.
+
+    :raises TranscriptError: when transcript has no cues (plain text)
+    """
+    if transcript.cues is None:
+        msg = "transcript has no cues; window requires SRT-derived transcript"
+        raise TranscriptError(msg)
+    kept = [c for c in transcript.cues if start <= c.start < end]
+    return _render_cues(tuple(kept)), kept
 
 
 def _default_filename(source_type: str) -> str:
@@ -74,10 +104,7 @@ def _default_filename(source_type: str) -> str:
     return "transcript.txt"
 
 
-def _render_srt(raw: str) -> tuple[str, float]:
-    cues = parse_srt(raw)
+def _render_cues(cues: tuple[Cue, ...]) -> str:
     if not cues:
-        return "", 0.0
-    lines = [f"[{format_timestamp(c.start)}] {c.text}" for c in cues]
-    duration = cues[-1].end
-    return "\n".join(lines) + "\n", duration
+        return ""
+    return "\n".join(f"[{format_timestamp(c.start)}] {c.text}" for c in cues) + "\n"

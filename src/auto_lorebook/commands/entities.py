@@ -7,11 +7,11 @@ Subcommands all dispatch through `run()`, branching on `args.entities_action`.
 from __future__ import annotations
 
 import logging
-import re
 from typing import TYPE_CHECKING
 
 from auto_lorebook import config as cfg_mod
 from auto_lorebook import entity_index, entity_yaml
+from auto_lorebook.entity_yaml import slugify
 from auto_lorebook.timestamps import format_iso_now
 
 if TYPE_CHECKING:
@@ -20,9 +20,6 @@ if TYPE_CHECKING:
     from auto_lorebook.entity_yaml import Entity
 
 _logger = logging.getLogger(__name__)
-
-_SLUG_STRIP_RE = re.compile(r"[^a-z0-9-]+")
-_SLUG_DASH_RE = re.compile(r"-+")
 
 
 def add_parser(
@@ -194,14 +191,8 @@ def _run_show(args: argparse.Namespace, wiki) -> int:  # noqa: ANN001
     return 0
 
 
-def _slugify(name: str) -> str:
-    s = name.strip().casefold().replace(" ", "-")
-    s = _SLUG_STRIP_RE.sub("-", s)
-    return _SLUG_DASH_RE.sub("-", s).strip("-")
-
-
 def _run_new(args: argparse.Namespace, wiki) -> int:  # noqa: ANN001
-    slug = args.slug or _slugify(args.name)
+    slug = args.slug or slugify(args.name)
     if not slug:
         print(f"error: could not derive a slug from {args.name!r}; pass --slug")  # noqa: T201
         return 1

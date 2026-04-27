@@ -1,4 +1,11 @@
-"""auto-lorebook approve-reading subcommand."""
+"""auto-lorebook replan subcommand.
+
+Discards unreviewed proposals from the current run and re-runs the
+planner + extractor against the wiki's current entity state. Already-
+approved facts in entity YAMLs are unaffected; stubs created by
+earlier approvals are visible to the new plan because
+`pipeline.extract` rebuilds the in-memory `EntityIndex` from disk.
+"""
 
 from __future__ import annotations
 
@@ -18,25 +25,26 @@ def add_parser(
     subparsers: argparse._SubParsersAction,
     common_parser: argparse.ArgumentParser,
 ) -> argparse.ArgumentParser:
-    """Register the approve-reading subcommand."""
+    """Register the replan subcommand."""
     parser = subparsers.add_parser(
-        "approve-reading",
+        "replan",
         parents=[common_parser],
-        help="Flip the draft reading to approved and copy it into the wiki",
+        help="Discard unreviewed proposals; re-run planner + extractor",
         description=(
-            "Sets `reading_status: approved` on the draft reading.md under "
-            "~/.auto-lorebook/pending/<source_id>/reading/ and copies it to "
-            "<wiki>/sources/<source_id>/reading.md. Downstream stages refuse "
-            "to run on a draft reading."
+            "Discards every unreviewed proposal under "
+            "pending/<source_id>/proposals/, re-invokes the planner "
+            "(which sees any entity stubs created by approvals earlier "
+            "in this ingest), and re-runs the extractor. Already-"
+            "approved facts in entity YAMLs are unaffected."
         ),
     )
-    parser.add_argument("source_id", help="Source ID (e.g. yt-abc12345678)")
+    parser.add_argument("source_id", help="Source/ingest ID (e.g. yt-abc12345678)")
     parser.set_defaults(func=run)
     return parser
 
 
 def run(args: argparse.Namespace) -> int:
-    """Execute the approve-reading command."""
+    """Execute the replan command."""
     try:
         cfg = cfg_mod.load_config()
     except cfg_mod.ConfigError as e:
@@ -44,20 +52,10 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        approved = pipeline.approve(cfg, args.source_id)
-    except pipeline.ReadingPipelineError as e:
-        _logger.error("%s", e)
-        return 1
-
-    print(f"Approved: {approved}")  # noqa: T201
-
-    try:
         plan_result = pipeline.plan(cfg, args.source_id)
     except pipeline.ReadingPipelineError as e:
         _logger.error("planner failed: %s", e)
         return 1
-
-    print(f"Plan: {plan_result.plan_path}")  # noqa: T201
 
     try:
         extract_result = pipeline.extract(cfg, args.source_id)
@@ -67,6 +65,7 @@ def run(args: argparse.Namespace) -> int:
 
     n = len(extract_result.proposals)
     flagged = extract_result.flagged_count
+    print(f"Replanned: {plan_result.plan_path}")  # noqa: T201
     print(  # noqa: T201
         f"Extracted {n} proposal(s) ({flagged} flagged) → "
         f"{extract_result.proposals_dir}"

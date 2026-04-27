@@ -25,8 +25,42 @@ implementation status.
     after `approve-reading`, writes `pending/<source_id>/plan.yaml`
     with no filesystem side effects (new entities and aliases are
     proposals only), supports multi-target routing per claim, and
-    exposes `plans list` / `plans show` for inspection. `replan` is
-    deferred to Phase 4.
+    exposes `plans list` / `plans show` for inspection.
+
+    Phase 4 extractor landed: Stage 3 runs automatically after the
+    planner, parallelised per `PlannedClaim`, with reduced preamble,
+    windowed transcript per claim driven by `locator_hint`, mechanical
+    fallback to the parent-segment window with `hint_widened` logged,
+    claim-group dedup (one LLM call per claim, span copied to every
+    sibling target), and post-extraction substring verification.
+    Proposals land at `pending/<source_id>/proposals/<proposed_id>.yaml`
+    with provisional `proposed_id`s allocated single-threaded before
+    fan-out.
+
+    Phase 4 review loop also landed: `auto-lorebook review <id>` walks
+    each pending proposal, prompts approve / edit / reject / play, and
+    on approval atomically creates the entity stub (for proposed-new
+    entities) or appends a fact to the existing entity YAML.
+    Inline alias-confirmation sub-prompts merge planner-suggested
+    aliases as `stub-creation` (first-approval batch) or
+    `alias-confirmation` (later additions). The in-memory entity
+    index refreshes after each approval so siblings created earlier in
+    the same session resolve as existing. `--auto-approve` provides
+    non-interactive bulk approval (and explicitly *declines* alias
+    suggestions) for CI. Ctrl-C leaves untouched proposal files in
+    place so the next invocation resumes.
+
+    Phase 4 closeout landed: `auto-lorebook replan <id>` discards
+    unreviewed proposals and re-runs planner + extractor against the
+    wiki's current entity state (so stubs created by earlier
+    approvals appear as existing); already-approved facts are
+    untouched. `auto-lorebook reject-ingest <id>` removes every fact
+    and alias tagged with the ingest, deletes empty stubs the ingest
+    itself created, and clears `pending/<id>/plan.yaml` and
+    `proposals/`. `<wiki>/sources/<id>/` and `pending/<id>/reading/`
+    are left untouched so a follow-up `regenerate-reading` /
+    `approve-reading` cleanly redoes the pipeline. **Phase 4 is
+    fully landed.**
 
 ## Phase 1: Reading stage
 
@@ -121,8 +155,8 @@ plan_, not files in the wiki. Aliases are proposed, not yet written.
 At least one planned claim in a representative session routes to
 multiple targets. ✓
 
-`replan` was spec'd alongside this phase but is deferred to Phase 4
-where the extractor + review loop give it something to discard.
+`replan` was spec'd alongside this phase but landed in Phase 4
+once the extractor + review loop gave it something to discard.
 
 ## Phase 4: Extractor + review
 

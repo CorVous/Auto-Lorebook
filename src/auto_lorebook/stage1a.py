@@ -6,6 +6,7 @@ Emits a `Structure` validated by `structure.validate`.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from auto_lorebook import structure as structure_mod
@@ -18,6 +19,13 @@ if TYPE_CHECKING:
     from auto_lorebook.transcript import LoadedTranscript
 
 _logger = logging.getLogger(__name__)
+
+# When the LLM ends the last segment a few seconds shy of the
+# transcript's total duration (cue-boundary rounding, trailing
+# music/credits/silence), extend the last segment to cover the gap so
+# `structure.validate`'s strict 1s tolerance still catches real
+# coverage drops.
+_TAIL_CLAMP_THRESHOLD_SECONDS = 30.0
 
 _TASK_INSTRUCTIONS = """\
 You are segmenting an actual-play or lore transcript into a structured
@@ -110,6 +118,7 @@ def run(
         source_id=source_id,
         generated_at=format_iso_now(),
     )
+    structure = _clamp_tail(structure, transcript.total_duration)
 
     try:
         structure_mod.validate(structure, transcript.total_duration)
@@ -117,6 +126,25 @@ def run(
         msg = f"Stage 1a mechanical validation failed: {e}"
         raise Stage1aError(msg) from e
 
+    return structure
+
+
+def _clamp_tail(structure: Structure, total_duration: float) -> Structure:
+    """Extend last segment to total_duration when the gap is benign.
+
+    Cue-boundary rounding and trailing music/credits routinely leave a
+    few seconds of slack; extending is mechanically correct (no claims
+    to lose). Gaps beyond the threshold mean the model dropped real
+    content and should still fail validate.
+    """
+    if not structure.segments:
+        return structure
+    last = structure.segments[-1]
+    gap = total_duration - last.end
+    if 0 < gap <= _TAIL_CLAMP_THRESHOLD_SECONDS:
+        clamped_last = replace(last, end=total_duration)
+        new_segments = [*structure.segments[:-1], clamped_last]
+        return replace(structure, segments=new_segments)
     return structure
 
 

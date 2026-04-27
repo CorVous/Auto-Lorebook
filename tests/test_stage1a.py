@@ -159,3 +159,89 @@ class TestRun:
                 client=client,
                 model="m/one",
             )
+
+
+def _payload_with_last_end(end: str) -> str:
+    """Two segments; last one ends at the given timestamp."""
+    return json.dumps({
+        "default_speaker": "DM",
+        "segments": [
+            {
+                "id": "seg-001",
+                "start": "0:00:00",
+                "end": "0:01:00",
+                "title": "Intro",
+                "speaker": "DM",
+            },
+            {
+                "id": "seg-002",
+                "start": "0:01:00",
+                "end": end,
+                "title": "Body",
+                "speaker": "DM",
+            },
+        ],
+        "uncertainty_flags": [],
+    })
+
+
+class TestTailClamp:
+    def test_small_tail_gap_is_clamped(self) -> None:
+        # Last segment ends at 116s; transcript is 120s. Gap = 4s, clamp.
+        client = _mock_client(_payload_with_last_end("0:01:56"))
+        transcript = LoadedTranscript(
+            text_for_llm="[0:00:01] hi\n", total_duration=120.0
+        )
+        result = run(
+            transcript=transcript,
+            preamble_text="",
+            source_id="yt-x",
+            client=client,
+            model="m/one",
+        )
+        assert result.segments[-1].end == pytest.approx(120.0)
+
+    def test_gap_at_threshold_boundary_is_clamped(self) -> None:
+        # Gap exactly == threshold (30s): clamp.
+        client = _mock_client(_payload_with_last_end("0:01:30"))
+        transcript = LoadedTranscript(
+            text_for_llm="[0:00:01] hi\n", total_duration=120.0
+        )
+        result = run(
+            transcript=transcript,
+            preamble_text="",
+            source_id="yt-x",
+            client=client,
+            model="m/one",
+        )
+        assert result.segments[-1].end == pytest.approx(120.0)
+
+    def test_gap_beyond_threshold_still_raises(self) -> None:
+        # Gap = 60s > 30s threshold: real coverage drop, raise as before.
+        client = _mock_client(_payload_with_last_end("0:01:00"))
+        transcript = LoadedTranscript(
+            text_for_llm="[0:00:01] hi\n", total_duration=120.0
+        )
+        with pytest.raises(Stage1aError, match="last segment ends"):
+            run(
+                transcript=transcript,
+                preamble_text="",
+                source_id="yt-x",
+                client=client,
+                model="m/one",
+            )
+
+    def test_no_tail_gap_unchanged(self) -> None:
+        # Last segment already ends at total_duration: no clamp needed.
+        client = _mock_client(_payload_with_last_end("0:02:00"))
+        transcript = LoadedTranscript(
+            text_for_llm="[0:00:01] hi\n", total_duration=120.0
+        )
+        result = run(
+            transcript=transcript,
+            preamble_text="",
+            source_id="yt-x",
+            client=client,
+            model="m/one",
+        )
+        assert result.segments[-1].end == pytest.approx(120.0)
