@@ -32,25 +32,24 @@ cleanup logic.
 auto-lorebook review <ingest_id>
 ```
 
-Walks through proposals one at a time. Each proposal must be approved,
-edited, or rejected before the next is shown — there is no skip or
-defer. If the user exits (Ctrl-C or closes the terminal), untouched
-proposal files remain in `pending/<ingest_id>/proposals/`, and the
-next invocation of `review` resumes with the first remaining file.
+Walks through claim bundles one at a time. Each bundle must be
+approved, edited, or rejected before the next is shown — there is no
+skip or defer. If the user exits (Ctrl-C or closes the terminal),
+untouched proposal files remain in `pending/<ingest_id>/proposals/`,
+and the next invocation of `review` resumes with the first remaining
+bundle.
 
-### Claim-group ordering
+### Claim-group bundling
 
-Proposals sharing a `claim_group_id` are shown in a contiguous block,
-so the human reads the claim once and then decides per-target. The
-header names the group's position and size. Review order within a
-group is arbitrary; across groups, order follows transcript position.
+Proposals sharing a `claim_group_id` are bundled into a single review
+screen with a single decision. The human reads the claim once and
+approves, edits, or rejects the whole bundle at once; all targets ride
+on that decision. The header names the bundle's position and the
+number of targets it covers. Review order across bundles follows
+transcript position.
 
 ```
-─── Proposal 1 of 12  ·  Claim group cg-001 (1 of 3 targets) ────────
-
-Target entity: Aldara (existing)
-  Matched via: alias "the Aldaran Realm"
-Section: founding
+─── Bundle 1 of 6  ·  Claim group cg-001 (3 targets) ────────────────
 
 Proposed text:
   "Theron's grandfather founded Aldara in the Second Age."
@@ -72,94 +71,97 @@ Context:
   Before: "So let's talk about the founding of Aldara."
   After:  "And that's why the Theron name matters so much now."
 
-Also routes to:
-  → Theron (lineage)              — next
-  → Second Age (events-in-era)    — then
+Routes to:
+  [x] Aldara (existing) — founding
+        Matched via: alias "the Aldaran Realm"
+  [x] Theron (existing) — lineage
+  [x] Second Age (existing) — events-in-era
 
-[a]pprove  [e]dit  [r]eject  [p]lay (open URL)
+[a]pprove  [e]dit  [t]argets  [r]eject  [p]lay (open URL)
 >
 ```
 
-After approval or rejection, the next claim-group sibling shows with
-an abbreviated header — the claim text and locator are unchanged; only
-the target and section differ:
+`[a]pprove` writes the claim to every checked target. `[r]eject` drops
+the whole bundle. `[t]argets` opens an inline checklist where the user
+can uncheck individual destinations before approving — the unchecked
+targets are dropped on approval, the same as if they had been rejected
+individually. A bundle with zero remaining targets cannot be approved;
+it must be rejected.
+
+An edit to `text` propagates across all targets in the bundle by
+default, since one approval covers the whole group. If the user wants
+the claim phrased differently per target, they reject the bundle and
+re-enter the targets as separate facts during a follow-up pass.
+
+### New-entity rows
+
+A target row in the checklist that points at a proposed new entity not
+yet on disk renders as:
 
 ```
-─── Proposal 2 of 12  ·  Claim group cg-001 (2 of 3 targets) ────────
-
-Target entity: Theron (existing)
-Section: lineage
-
-(Same claim text, locator, and context as previous proposal.)
-
-[a]pprove  [e]dit  [r]eject  [p]lay (open URL)
->
+  [x] War of the Dusk (NEW — events, will be created on approval)
+        Proposed aliases: (none)
 ```
 
-An edit to `text` inside a claim group applies only to the proposal
-being edited — sibling proposals keep the original text. This is
-deliberate: the human might want to phrase the founding claim
-differently on Theron's page than on Aldara's, and forcing edits to
-propagate across siblings would undercut that. If propagation _is_
-wanted, the user edits each sibling in turn.
-
-### New-entity proposals
-
-For proposals targeting a proposed new entity that does not yet exist
-on disk:
+A row pointing at an entity created earlier in the same review session
+renders as:
 
 ```
-Target entity: War of the Dusk (NEW — events, will be created on approval)
-  Proposed aliases: (none)
+  [x] War of the Dusk (events)
+        Created earlier in this review session
 ```
 
-For proposals targeting an entity created earlier in the same review
-session:
-
-```
-Target entity: War of the Dusk (events)
-  Created earlier in this review session
-```
-
-This note is derived at display time by comparing the entity's
-`created_by_ingest` to the current ingest ID — no extra state
-required.
+The "created earlier" note is derived at display time by comparing the
+entity's `created_by_ingest` to the current ingest ID — no extra state
+required. Unchecking a NEW row before approval is equivalent to
+rejecting just that target; if every approved bundle ends up
+unchecking a given proposed entity, no stub is ever written.
 
 ### Alias confirmation
 
-For proposals where the planner matched via a mention that isn't yet
-an alias, the display offers alias confirmation:
+When any target in the bundle was matched via a mention that isn't yet
+an alias, the row carries an alias-confirmation sub-prompt resolved
+before the bundle decision is taken:
 
 ```
-Target entity: Aldara (existing)
-  Matched via: "the Realm" (not currently an alias)
-  Add "the Realm" as alias? [y/n]
+  [x] Aldara (existing) — founding
+        Matched via: "the Realm" (not currently an alias)
+        Add "the Realm" as alias? [y/n]
 ```
 
-Alias confirmation is a sub-prompt, not a main action. It applies
-immediately on `y` and is recorded in the entity YAML as an alias
-record with `source: alias-confirmation` and `added_by_ingest` set to
-the current ingest — or merged into the stub at creation time if the
-entity is new and this is its first approval, in which case the source
-on the first-approval aliases is `stub-creation`. Aliases added via
-alias confirmation are cleanly removable by `reject-ingest`.
+Alias confirmation is a per-row sub-prompt, not a main action. It
+applies immediately on `y` and is recorded in the entity YAML as an
+alias record with `source: alias-confirmation` and `added_by_ingest`
+set to the current ingest — or merged into the stub at creation time
+if the entity is new and this is its first approval, in which case the
+source on the first-approval aliases is `stub-creation`. If the user
+later unchecks that target via `[t]argets`, or rejects the bundle
+entirely, the alias write is rolled back along with the rest. Aliases
+added via alias confirmation are cleanly removable by `reject-ingest`.
 
 ### Actions
 
-- **Approve** — proposal becomes a fact, appended to the entity's YAML
-  (creating the YAML if this is the first approval for a new entity),
-  summary regenerated. Proposal file deleted.
-- **Edit** — opens `text` (and optionally other fields) for inline
-  editing. Tracks original as `text_source` on the approved fact.
-  Then approves.
-- **Reject** — proposal discarded.
+- **Approve** — for each checked target, the claim becomes a fact
+  appended to that entity's YAML (creating the YAML if this is the
+  first approval for a new entity), summary regenerated. Sibling
+  proposal files for the bundle are deleted; unchecked targets are
+  treated as rejected and their proposal files are also deleted.
+- **Edit** — opens `text` for inline editing; the edit applies to
+  every checked target in the bundle. Original is tracked as
+  `text_source` on each approved fact. Then approves.
+- **Targets** — opens the route checklist so individual destinations
+  can be unchecked (or re-checked) before the bundle decision. Status,
+  speaker, and section overrides are taken per row from this
+  sub-prompt; defaults come from the planner.
+- **Reject** — entire bundle discarded; every sibling proposal file
+  deleted.
 - **Play** — prints the URL; user clicks through to verify against
   audio. Play is not a decision — after playing, the user still must
-  approve, edit, or reject the current proposal.
+  approve, edit, or reject the current bundle.
 
-Status, speaker, and section can all be overridden during review.
-Text edits are supported but optional — approving as-is is fine since
-the summarizer produces readable prose downstream.
+Per-target status, speaker, and section overrides live behind
+`[t]argets`. Text edits are supported but optional — approving as-is
+is fine since the summarizer produces readable prose downstream.
 
 ## No skip, no defer
 

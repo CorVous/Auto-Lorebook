@@ -89,9 +89,12 @@ unresolved:
 A single claim can route to multiple entities when it carries
 information about more than one. The example above routes one claim to
 Aldara (founding), Theron (lineage), and the Second Age
-(events-in-era). Each target gets its own proposal; approvals are
-per-target, so the human can accept the claim onto Aldara and Theron
-but reject it from the Second Age page without affecting the others.
+(events-in-era). Each target gets its own proposal file on disk, but
+[review](review.md) bundles siblings into a single decision: the
+claim is shown once with all destinations as a checklist, and approve
+writes to every checked target. The `[t]argets` action lets the human
+uncheck individual destinations — e.g. accept onto Aldara and Theron
+but drop the Second Age page — before approving the bundle.
 
 Targets sharing a `claim_group_id` share the same
 `raw_transcript_span`, `locator`, and extracted `text` — the
