@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
+from auto_lorebook import plan_yaml
 from auto_lorebook.commands import (
     approve_reading_cmd,
     generate_reading_cmd,
@@ -77,8 +78,53 @@ def _seg_bullets_payload(segment_id: str) -> str:
     return json.dumps({"bullets": per_seg.get(segment_id, [])})
 
 
+def _stub_plan_payload() -> str:
+    return json.dumps({
+        "entity_resolutions": [
+            {
+                "mention": "Aldara",
+                "mention_locations": ["[0:02:00-0:10:00] founding"],
+                "resolution": "existing",
+                "matched_entity": "Aldara",
+                "rationale": "Direct mention.",
+            },
+        ],
+        "new_entities": [
+            {"name": "Second Age", "category": "events"},
+        ],
+        "planned_claims": [
+            {
+                "claim_group_id": "cg-001",
+                "reading_section": "[0:02:00-0:10:00] Founding of Aldara",
+                "reading_bullet_index": 0,
+                "locator": "0:02:30",
+                "locator_hint": "0:02:20-0:02:45",
+                "proposed_speaker": "DM",
+                "proposed_status": "authoritative",
+                "proposed_status_reason": None,
+                "targets": [
+                    {
+                        "entity": "Aldara",
+                        "entity_state": "existing",
+                        "proposed_section": "founding",
+                        "rationale": "Founding fact.",
+                    },
+                    {
+                        "entity": "Second Age",
+                        "entity_state": "new",
+                        "proposed_section": "events-in-era",
+                        "proposed_category": "events",
+                        "rationale": "Dates the founding.",
+                    },
+                ],
+            }
+        ],
+        "unresolved": [],
+    })
+
+
 def _wire_client_responses(client_mock: MagicMock) -> None:
-    """Route client.complete by message content (structure vs per-segment)."""
+    """Route client.complete by message content (structure / 1b / planner)."""
 
     def side_effect(
         messages: list[dict[str, str]], **_kwargs: object
@@ -90,6 +136,8 @@ def _wire_client_responses(client_mock: MagicMock) -> None:
 
         if "segmenting" in system_text:
             text = _stub_structure_payload()
+        elif "routing claim bullets" in system_text:
+            text = _stub_plan_payload()
         else:
             # stage 1b: find which segment id is in user_text
             for seg_id in ("seg-001", "seg-002"):
@@ -234,6 +282,37 @@ class TestApproveReading:
         assert "reading_status: approved" in approved.read_text(encoding="utf-8")
         out = capsys.readouterr().out
         assert "Approved" in out
+
+    def test_writes_plan_yaml_with_multi_target_claim(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678"))
+
+        assert rc == 0
+        plan_path = tmp_home / "pending" / "yt-abc12345678" / "plan.yaml"
+        assert plan_path.exists()
+        first_line = next(ln for ln in plan_path.read_text().splitlines() if ln.strip())
+        assert first_line.startswith("schema_version:")
+
+        plan = plan_yaml.read(plan_path)
+        # Exit-criterion: at least one claim routes to multiple targets
+        assert any(len(c.targets) > 1 for c in plan.planned_claims)
+
+        out = capsys.readouterr().out
+        assert "Plan:" in out
 
     def test_no_draft_errors(self, tmp_home: Path, ingested_wiki: Path) -> None:
         _write_user_config(tmp_home, ingested_wiki)
