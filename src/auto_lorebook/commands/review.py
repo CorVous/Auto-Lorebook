@@ -1,10 +1,12 @@
 """auto-lorebook review subcommand.
 
-Walks each `pending/<source_id>/proposals/<proposed_id>.yaml` and
-prompts for `[a]pprove / [e]dit / [r]eject / [p]lay`. On approval (with
-optional alias confirmations) appends a fact to the target entity's
-YAML, atomically creating the stub on first approval for proposed-new
-entities. Resume on Ctrl-C: untouched proposal files remain.
+Walks each claim's worth of pending proposals as a single bundle and
+prompts for `[a]pprove / [e]dit / [r]eject / [p]lay`. A claim that
+routes to multiple entities is shown once, decided once, and edits
+propagate to every target. On approval (with optional alias
+confirmations) appends a fact to each target entity's YAML, atomically
+creating the stub on first approval for proposed-new entities. Resume
+on Ctrl-C: untouched proposal files remain.
 """
 
 from __future__ import annotations
@@ -18,9 +20,10 @@ from auto_lorebook import review as review_mod
 from auto_lorebook.interactive import _is_interactive
 from auto_lorebook.review import (
     ApproveDecision,
+    BundleTarget,
+    BundleView,
     Decision,
     EditDecision,
-    ProposalView,
     RejectDecision,
 )
 from auto_lorebook.timestamps import TimestampError, parse_locator_hint
@@ -115,7 +118,7 @@ class AutoApproveReviewer:
 
     by_label = "auto-approve"
 
-    def decide(self, view: ProposalView) -> Decision:  # noqa: ARG002
+    def decide(self, view: BundleView) -> Decision:  # noqa: ARG002
         return ApproveDecision()
 
     def confirm_alias(self, entity: str, mention: str) -> bool:  # noqa: ARG002
@@ -127,7 +130,7 @@ class InteractiveReviewer:
 
     by_label = "human-review"
 
-    def decide(self, view: ProposalView) -> Decision:
+    def decide(self, view: BundleView) -> Decision:
         _render(view)
         while True:
             try:
@@ -171,15 +174,23 @@ class InteractiveReviewer:
                 return False
             print("  please answer y or n")  # noqa: T201
 
-    def _gather_edits(self, view: ProposalView) -> EditDecision:
-        """Walk each editable field; blank input keeps the current value."""
-        p = view.proposal
-        print("  Edit (Enter to keep current value):")  # noqa: T201
+    def _gather_edits(self, view: BundleView) -> EditDecision:
+        """Prompt once per claim. Edits propagate to every target.
+
+        Section is per-target by design — only prompted for single-target
+        bundles, where there's no ambiguity.
+        """
+        # text/speaker/status/status_reason are identical across siblings;
+        # any target's proposal is fine as the "current value" source.
+        p = view.targets[0].proposal
+        print("  Edit (Enter to keep current value; applies to all targets):")  # noqa: T201
         new_text = _prompt_optional("text", p.text)
         new_speaker = _prompt_optional("speaker", p.speaker)
         new_status = _prompt_status(p.status)
         new_status_reason = _prompt_optional("status_reason", p.status_reason or "")
-        new_section = _prompt_optional("section", p.section)
+        new_section: str | None = None
+        if len(view.targets) == 1:
+            new_section = _prompt_optional("section", p.section)
         return EditDecision(
             new_text=new_text,
             new_speaker=new_speaker,
@@ -194,21 +205,20 @@ class InteractiveReviewer:
 # ---------------------------------------------------------------------------
 
 
-def _render(view: ProposalView) -> None:
-    p = view.proposal
+def _render(view: BundleView) -> None:
+    # claim payload is identical across siblings; pull it once.
+    p = view.targets[0].proposal
+    n = len(view.targets)
+    targets_word = "target" if n == 1 else "targets"
     print(  # noqa: T201
-        f"\n─── Proposal {view.proposal_index} of {view.proposal_total}  ·  "
+        f"\n─── Bundle {view.bundle_index} of {view.bundle_total}  ·  "
         f"Claim group {p.claim_group_id} "
-        f"({view.group_position} of {view.group_size} targets) {_SEP[:8]}"
+        f"({n} {targets_word}) {_SEP[:8]}"
     )
-    print(_target_line(view))  # noqa: T201
-    if view.matched_via:
-        print(f"  Matched via: {view.matched_via}")  # noqa: T201
     if p.extractor_flagged:
         print(f"  Flagged: {p.flag_reason or 'extractor flagged this proposal'}")  # noqa: T201
     if p.hint_widened:
         print("  Hint widened to parent segment")  # noqa: T201
-    print(f"Section: {p.section}")  # noqa: T201
     print()  # noqa: T201
     print(f"Proposed text:\n  {p.text!r}")  # noqa: T201
     print(f"\nRaw transcript:\n  {p.raw_transcript_span!r}")  # noqa: T201
@@ -217,7 +227,7 @@ def _render(view: ProposalView) -> None:
         for c in p.corrections_applied:
             print(f'  • "{c.from_}" → "{c.to}"  ({c.source})')  # noqa: T201
     print()  # noqa: T201
-    print(f"Source: {view.source_title or view.proposal.source_id}")  # noqa: T201
+    print(f"Source: {view.source_title or p.source_id}")  # noqa: T201
     print(f"Locator: {p.locator}  → {_play_url(view) or '(no source URL)'}")  # noqa: T201
     print(f"Speaker: {p.speaker}")  # noqa: T201
     status_line = f"Status: {p.status}"
@@ -232,40 +242,51 @@ def _render(view: ProposalView) -> None:
             print(f"  Before: {p.context_before!r}")  # noqa: T201
         if p.context_after:
             print(f"  After:  {p.context_after!r}")  # noqa: T201
-    if p.claim_group_siblings:
-        print("\nAlso routes to:")  # noqa: T201
-        for s in p.claim_group_siblings:
-            print(f"  → {s.entity}  ({s.proposed_id})")  # noqa: T201
+    print(f"\nTargets ({n}):")  # noqa: T201
+    for t in view.targets:
+        for line in _target_block(t):
+            print(line)  # noqa: T201
     print()  # noqa: T201
 
 
-def _target_line(view: ProposalView) -> str:
-    if view.is_new_entity:
-        cat = view.new_entity_category or "?"
-        if view.created_earlier_in_session:
-            return (
-                f"Target entity: {view.proposal.target_entity} ({cat})\n"
-                f"  Created earlier in this review session"
-            )
-        return (
-            f"Target entity: {view.proposal.target_entity} "
-            f"(NEW — {cat}, will be created on approval)"
-        )
-    return f"Target entity: {view.proposal.target_entity} (existing)"
+def _target_block(target: BundleTarget) -> list[str]:
+    """Multi-line per-target description for the bundle screen."""
+    p = target.proposal
+    if target.is_new_entity:
+        cat = target.new_entity_category or "?"
+        if target.created_earlier_in_session:
+            head = f"  → {p.target_entity} ({cat})"
+            note = "      Created earlier in this review session"
+        else:
+            head = f"  → {p.target_entity} (NEW — {cat}, will be created on approval)"
+            note = None
+    else:
+        head = f"  → {p.target_entity} (existing)"
+        note = None
+    lines = [head]
+    if note:
+        lines.append(note)
+    lines.append(f"      Section: {p.section}")
+    if target.matched_via:
+        lines.append(f"      Matched via: {target.matched_via}")
+    if target.suggested_aliases:
+        joined = ", ".join(f'"{a}"' for a in target.suggested_aliases)
+        lines.append(f"      Proposed aliases: {joined}")
+    return lines
 
 
-def _play_url(view: ProposalView) -> str | None:
+def _play_url(view: BundleView) -> str | None:
     """Return a URL with the start timestamp tacked on, or None."""
     if not view.source_url:
         return None
     try:
-        start_seconds, _ = parse_locator_hint(view.proposal.locator)
+        start_seconds, _ = parse_locator_hint(view.targets[0].proposal.locator)
     except TimestampError:
         return view.source_url
     return reading_mod.linkify_timestamp(view.source_url, start_seconds)
 
 
-def _print_play(view: ProposalView) -> None:
+def _print_play(view: BundleView) -> None:
     url = _play_url(view)
     if url:
         print(f"  → {url}")  # noqa: T201

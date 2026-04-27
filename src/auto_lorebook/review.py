@@ -92,19 +92,37 @@ Decision = ApproveDecision | EditDecision | RejectDecision
 
 
 @dataclass(frozen=True)
-class ProposalView:
-    """All display-relevant data for one proposal."""
+class BundleTarget:
+    """Per-destination data within a bundle.
+
+    `proposal` carries the shared claim payload (same `text`,
+    `raw_transcript_span`, `locator`, `speaker`, `status`, ... across
+    siblings) plus the target-specific bits (`target_entity`, `section`,
+    `proposed_id`).
+    """
 
     proposal: Proposal
-    proposal_index: int  # 1-of-N across this run
-    proposal_total: int
-    group_position: int  # 1-of-K within claim group
-    group_size: int
     is_new_entity: bool
     new_entity_category: str | None
     created_earlier_in_session: bool
     suggested_aliases: tuple[str, ...]
     matched_via: str | None
+
+
+@dataclass(frozen=True)
+class BundleView:
+    """One claim's worth of proposals — shown together, decided once.
+
+    All siblings share the claim_group_id and the underlying claim
+    payload; they differ only in `target_entity`, `section`, and
+    `proposed_id`. Edits in the returned `Decision` propagate to every
+    target in the bundle.
+    """
+
+    claim_group_id: str
+    targets: tuple[BundleTarget, ...]
+    bundle_index: int  # 1-of-M across this run
+    bundle_total: int
     source_url: str | None
     source_title: str | None
 
@@ -117,7 +135,7 @@ class Reviewer(Protocol):
         """Recorded as `status_history[].by` on approved facts."""
         ...
 
-    def decide(self, view: ProposalView) -> Decision: ...
+    def decide(self, view: BundleView) -> Decision: ...
 
     def confirm_alias(self, entity: str, mention: str) -> bool: ...
 
@@ -387,15 +405,7 @@ def _reject(proposal_path: Path) -> None:
 # ------------- main loop -------------------------------------------------
 
 
-def _build_view(
-    ctx: _ApprovalContext,
-    proposal: Proposal,
-    *,
-    proposal_index: int,
-    proposal_total: int,
-    group_position: int,
-    group_size: int,
-) -> ProposalView:
+def _build_target(ctx: _ApprovalContext, proposal: Proposal) -> BundleTarget:
     is_new = proposal.proposal_type == "new_entity_with_facts"
     category = _category_for_new(ctx.plan, proposal.target_entity) if is_new else None
     suggested = _suggested_aliases_for(ctx.plan, proposal)
@@ -423,20 +433,36 @@ def _build_view(
                     created_earlier = True
             except entity_yaml_mod.EntityError:
                 pass
-    return ProposalView(
+    return BundleTarget(
         proposal=proposal,
-        proposal_index=proposal_index,
-        proposal_total=proposal_total,
-        group_position=group_position,
-        group_size=group_size,
         is_new_entity=is_new,
         new_entity_category=category,
         created_earlier_in_session=created_earlier,
         suggested_aliases=suggested,
         matched_via=matched_via,
-        source_url=ctx.info.source_url,
-        source_title=ctx.info.title,
     )
+
+
+def group_into_bundles(proposals: list[Proposal]) -> list[list[Proposal]]:
+    """Group siblings sharing a `claim_group_id` into contiguous lists.
+
+    Input must already be in plan order (see `sorted_proposals`); this
+    just collapses runs of equal `claim_group_id` into one bundle each.
+    """
+    bundles: list[list[Proposal]] = []
+    current: list[Proposal] = []
+    current_cg: str | None = None
+    for p in proposals:
+        if p.claim_group_id != current_cg:
+            if current:
+                bundles.append(current)
+            current = [p]
+            current_cg = p.claim_group_id
+        else:
+            current.append(p)
+    if current:
+        bundles.append(current)
+    return bundles
 
 
 def run(
@@ -466,63 +492,67 @@ def run(
     ordered = sorted_proposals(plan, source_id)
     if not ordered:
         return ReviewResult()
-
-    # claim-group sizes for "K of M" header
-    group_sizes: dict[str, int] = {}
-    for p in ordered:
-        group_sizes[p.claim_group_id] = group_sizes.get(p.claim_group_id, 0) + 1
-    group_seen: dict[str, int] = {}
+    bundles = group_into_bundles(ordered)
 
     result = ReviewResult()
-    total = len(ordered)
-    for i, proposal in enumerate(ordered, start=1):
-        group_seen[proposal.claim_group_id] = (
-            group_seen.get(proposal.claim_group_id, 0) + 1
-        )
-        view = _build_view(
-            ctx,
-            proposal,
-            proposal_index=i,
-            proposal_total=total,
-            group_position=group_seen[proposal.claim_group_id],
-            group_size=group_sizes[proposal.claim_group_id],
+    total_proposals = len(ordered)
+    bundle_total = len(bundles)
+    proposals_decided = 0
+    for bi, bundle in enumerate(bundles, start=1):
+        # Rebuild targets just before the prompt so the in-session index
+        # refresh from prior bundles is reflected.
+        targets = tuple(_build_target(ctx, p) for p in bundle)
+        view = BundleView(
+            claim_group_id=bundle[0].claim_group_id,
+            targets=targets,
+            bundle_index=bi,
+            bundle_total=bundle_total,
+            source_url=ctx.info.source_url,
+            source_title=ctx.info.title,
         )
         try:
             decision = reviewer.decide(view)
         except KeyboardInterrupt:
-            result.remaining = total - (i - 1)
+            result.remaining = total_proposals - proposals_decided
             raise
         if isinstance(decision, RejectDecision):
+            for proposal in bundle:
+                proposal_path = reading_pipeline.pending_proposal_path(
+                    source_id, proposal.proposed_id
+                )
+                _reject(proposal_path)
+                result.rejected += 1
+            proposals_decided += len(bundle)
+            continue
+        edits = decision if isinstance(decision, EditDecision) else None
+        for proposal in bundle:
+            confirmed: list[str] = []
+            target = next(t for t in targets if t.proposal is proposal)
+            for alias in target.suggested_aliases:
+                try:
+                    if reviewer.confirm_alias(proposal.target_entity, alias):
+                        confirmed.append(alias)
+                except KeyboardInterrupt:
+                    result.remaining = total_proposals - proposals_decided
+                    raise
             proposal_path = reading_pipeline.pending_proposal_path(
                 source_id, proposal.proposed_id
             )
-            _reject(proposal_path)
-            result.rejected += 1
-            continue
-        # approve / edit: gather alias confirmations
-        confirmed: list[str] = []
-        for alias in view.suggested_aliases:
-            try:
-                if reviewer.confirm_alias(proposal.target_entity, alias):
-                    confirmed.append(alias)
-            except KeyboardInterrupt:
-                result.remaining = total - (i - 1)
-                raise
-        edits = decision if isinstance(decision, EditDecision) else None
-        proposal_path = reading_pipeline.pending_proposal_path(
-            source_id, proposal.proposed_id
-        )
-        appended = _approve(
-            ctx,
-            proposal,
-            proposal_path,
-            edits=edits,
-            confirmed_aliases=confirmed,
-            by_label=reviewer.by_label,
-        )
-        if appended:
-            if isinstance(decision, EditDecision):
-                result.edited += 1
-            else:
-                result.approved += 1
+            appended = _approve(
+                ctx,
+                proposal,
+                proposal_path,
+                edits=edits,
+                confirmed_aliases=confirmed,
+                by_label=reviewer.by_label,
+            )
+            if appended:
+                if isinstance(decision, EditDecision):
+                    result.edited += 1
+                else:
+                    result.approved += 1
+            # rebuild remaining targets so later siblings see the
+            # newly-merged alias set / refreshed entity index.
+            targets = tuple(_build_target(ctx, p) for p in bundle)
+        proposals_decided += len(bundle)
     return result

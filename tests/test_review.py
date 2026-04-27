@@ -17,9 +17,9 @@ from auto_lorebook import (
 )
 from auto_lorebook.review import (
     ApproveDecision,
+    BundleView,
     Decision,
     EditDecision,
-    ProposalView,
     RejectDecision,
     ReviewResult,
 )
@@ -152,10 +152,10 @@ class ScriptedReviewer:
     ) -> None:
         self._decisions = list(decisions)
         self._alias_responses = list(alias_responses or [])
-        self.decided: list[ProposalView] = []
+        self.decided: list[BundleView] = []
         self.alias_calls: list[tuple[str, str]] = []
 
-    def decide(self, view: ProposalView) -> Decision:
+    def decide(self, view: BundleView) -> Decision:
         self.decided.append(view)
         if not self._decisions:
             msg = "ScriptedReviewer ran out of decisions"
@@ -773,10 +773,10 @@ class TestCreatedEarlierInSession:
         )
         scripted = ScriptedReviewer([ApproveDecision(), ApproveDecision()])
         review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
-        # First view: no on-disk entity yet
-        assert scripted.decided[0].created_earlier_in_session is False
-        # Second view: stub was created in this same run
-        assert scripted.decided[1].created_earlier_in_session is True
+        # First bundle: no on-disk entity yet
+        assert scripted.decided[0].targets[0].created_earlier_in_session is False
+        # Second bundle: stub was created in this same run
+        assert scripted.decided[1].targets[0].created_earlier_in_session is True
 
 
 # ---------------------------------------------------------------------------
@@ -929,7 +929,7 @@ class _RaisingReviewer:
         self.raise_on = raise_on
         self.calls = 0
 
-    def decide(self, view: ProposalView) -> Decision:  # noqa: ARG002
+    def decide(self, view: BundleView) -> Decision:  # noqa: ARG002
         self.calls += 1
         if self.calls == self.raise_on:
             raise KeyboardInterrupt
@@ -1047,3 +1047,248 @@ class TestEditPath:
         assert e.facts[0]["text"] == "Edited by hand."
         assert e.facts[0]["text_source"] == "Original LLM text."
         assert e.facts[0]["edited_by_human"] is True
+
+
+# ---------------------------------------------------------------------------
+# Bundling: multi-destination claims share one screen + one decision
+# ---------------------------------------------------------------------------
+
+
+def _seed_three_target_bundle(cfg: cfg_mod.Config, source_id: str = "yt-x") -> None:
+    """Plan + proposals for one cg-001 routing to Aldara, Theron, Second Age."""
+    _write_info(cfg.wiki_repo_path, source_id)
+    siblings_for = {
+        "Aldara": [
+            proposal_yaml.Sibling(entity="Theron", proposed_id="theron-f001"),
+            proposal_yaml.Sibling(entity="Second Age", proposed_id="second-age-f001"),
+        ],
+        "Theron": [
+            proposal_yaml.Sibling(entity="Aldara", proposed_id="aldara-f001"),
+            proposal_yaml.Sibling(entity="Second Age", proposed_id="second-age-f001"),
+        ],
+        "Second Age": [
+            proposal_yaml.Sibling(entity="Aldara", proposed_id="aldara-f001"),
+            proposal_yaml.Sibling(entity="Theron", proposed_id="theron-f001"),
+        ],
+    }
+    _write_proposal(
+        source_id,
+        _make_proposal(
+            target="Aldara",
+            proposed_id="aldara-f001",
+            section="founding",
+            siblings=siblings_for["Aldara"],
+        ),
+    )
+    _write_proposal(
+        source_id,
+        _make_proposal(
+            target="Theron",
+            proposed_id="theron-f001",
+            section="lineage",
+            siblings=siblings_for["Theron"],
+        ),
+    )
+    _write_proposal(
+        source_id,
+        _make_proposal(
+            target="Second Age",
+            proposed_id="second-age-f001",
+            section="events-in-era",
+            siblings=siblings_for["Second Age"],
+        ),
+    )
+    _write_plan(
+        cfg.wiki_repo_path,
+        source_id,
+        new_entities=[
+            plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
+            plan_yaml.NewEntityProposal(name="Theron", category="characters"),
+            plan_yaml.NewEntityProposal(name="Second Age", category="events"),
+        ],
+        planned_claims=[
+            _make_claim(
+                cg="cg-001",
+                targets=[
+                    plan_yaml.ClaimTarget(
+                        entity="Aldara",
+                        entity_state="new",
+                        proposed_section="founding",
+                        proposed_category="locations",
+                    ),
+                    plan_yaml.ClaimTarget(
+                        entity="Theron",
+                        entity_state="new",
+                        proposed_section="lineage",
+                        proposed_category="characters",
+                    ),
+                    plan_yaml.ClaimTarget(
+                        entity="Second Age",
+                        entity_state="new",
+                        proposed_section="events-in-era",
+                        proposed_category="events",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+
+class TestBundling:
+    def test_siblings_grouped_into_one_bundle_one_decision(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        """Three targets sharing cg-001 → one decide() call, three appended facts."""
+        _seed_three_target_bundle(cfg)
+        scripted = ScriptedReviewer([ApproveDecision()])
+        result = review.run(cfg=cfg, source_id="yt-x", reviewer=scripted)
+        assert len(scripted.decided) == 1
+        assert result.approved == 3
+        view = scripted.decided[0]
+        assert view.claim_group_id == "cg-001"
+        assert len(view.targets) == 3
+        assert [t.proposal.target_entity for t in view.targets] == [
+            "Aldara",
+            "Theron",
+            "Second Age",
+        ]
+        # Each target landed in its own entity yaml under its own section.
+        a = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        t = entity_yaml.read(cfg.wiki_repo_path / "characters" / "theron.yaml")
+        s = entity_yaml.read(cfg.wiki_repo_path / "events" / "second-age.yaml")
+        assert a.facts[0]["section"] == "founding"
+        assert t.facts[0]["section"] == "lineage"
+        assert s.facts[0]["section"] == "events-in-era"
+
+    def test_bundle_reject_deletes_all_sibling_proposals(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        _seed_three_target_bundle(cfg)
+        scripted = ScriptedReviewer([RejectDecision()])
+        result = review.run(cfg=cfg, source_id="yt-x", reviewer=scripted)
+        assert result.rejected == 3
+        assert result.approved == 0
+        for proposed_id in ("aldara-f001", "theron-f001", "second-age-f001"):
+            assert not reading_pipeline.pending_proposal_path(
+                "yt-x", proposed_id
+            ).exists()
+        # No entity yamls created since every fact was rejected.
+        assert not (cfg.wiki_repo_path / "locations" / "aldara.yaml").exists()
+        assert not (cfg.wiki_repo_path / "characters" / "theron.yaml").exists()
+        assert not (cfg.wiki_repo_path / "events" / "second-age.yaml").exists()
+
+    def test_bundle_edit_propagates_text_to_every_target(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        _seed_three_target_bundle(cfg)
+        scripted = ScriptedReviewer([
+            EditDecision(new_text="Theron's grandfather founded Aldara."),
+        ])
+        result = review.run(cfg=cfg, source_id="yt-x", reviewer=scripted)
+        assert result.edited == 3
+        a = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        t = entity_yaml.read(cfg.wiki_repo_path / "characters" / "theron.yaml")
+        s = entity_yaml.read(cfg.wiki_repo_path / "events" / "second-age.yaml")
+        for e in (a, t, s):
+            assert e.facts[0]["text"] == "Theron's grandfather founded Aldara."
+            assert e.facts[0]["edited_by_human"] is True
+            assert e.facts[0]["text_source"] == "Aldara was founded in the Second Age."
+
+    def test_bundle_edit_propagates_speaker_status_status_reason(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        _seed_three_target_bundle(cfg)
+        scripted = ScriptedReviewer([
+            EditDecision(
+                new_speaker="Player-Thorin",
+                new_status="hearsay",
+                new_status_reason="Tavern rumor.",
+            ),
+        ])
+        review.run(cfg=cfg, source_id="yt-x", reviewer=scripted)
+        for path in (
+            cfg.wiki_repo_path / "locations" / "aldara.yaml",
+            cfg.wiki_repo_path / "characters" / "theron.yaml",
+            cfg.wiki_repo_path / "events" / "second-age.yaml",
+        ):
+            e = entity_yaml.read(path)
+            assert e.facts[0]["speaker"] == "Player-Thorin"
+            assert e.facts[0]["status"] == "hearsay"
+            assert e.facts[0]["status_reason"] == "Tavern rumor."
+            # Per-target sections preserved (edit didn't touch section).
+        assert (
+            entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml").facts[0][
+                "section"
+            ]
+            == "founding"
+        )
+        assert (
+            entity_yaml.read(cfg.wiki_repo_path / "characters" / "theron.yaml").facts[
+                0
+            ]["section"]
+            == "lineage"
+        )
+
+    def test_separate_claim_groups_get_separate_bundles(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        """Two distinct cgs → two decide() calls."""
+        source_id = "yt-x"
+        _write_info(cfg.wiki_repo_path, source_id)
+        _write_proposal(
+            source_id,
+            _make_proposal(target="Aldara", proposed_id="aldara-f001", cg="cg-001"),
+        )
+        _write_proposal(
+            source_id,
+            _make_proposal(target="Theron", proposed_id="theron-f001", cg="cg-002"),
+        )
+        _write_plan(
+            cfg.wiki_repo_path,
+            source_id,
+            new_entities=[
+                plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
+                plan_yaml.NewEntityProposal(name="Theron", category="characters"),
+            ],
+            planned_claims=[
+                _make_claim(
+                    cg="cg-001",
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="new",
+                            proposed_section="founding",
+                            proposed_category="locations",
+                        ),
+                    ],
+                ),
+                _make_claim(
+                    cg="cg-002",
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Theron",
+                            entity_state="new",
+                            proposed_section="lineage",
+                            proposed_category="characters",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        scripted = ScriptedReviewer([ApproveDecision(), ApproveDecision()])
+        review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        assert len(scripted.decided) == 2
+        assert [v.claim_group_id for v in scripted.decided] == ["cg-001", "cg-002"]
+        assert all(len(v.targets) == 1 for v in scripted.decided)
+        assert scripted.decided[0].bundle_index == 1
+        assert scripted.decided[0].bundle_total == 2
+
+    def test_group_into_bundles_collapses_contiguous_runs(self) -> None:
+        p1 = _make_proposal(target="Aldara", proposed_id="aldara-f001", cg="cg-001")
+        p2 = _make_proposal(target="Theron", proposed_id="theron-f001", cg="cg-001")
+        p3 = _make_proposal(target="Aldara", proposed_id="aldara-f002", cg="cg-002")
+        bundles = review.group_into_bundles([p1, p2, p3])
+        assert [[p.proposed_id for p in b] for b in bundles] == [
+            ["aldara-f001", "theron-f001"],
+            ["aldara-f002"],
+        ]

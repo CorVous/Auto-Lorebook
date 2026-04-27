@@ -38,19 +38,16 @@ defer. If the user exits (Ctrl-C or closes the terminal), untouched
 proposal files remain in `pending/<ingest_id>/proposals/`, and the
 next invocation of `review` resumes with the first remaining file.
 
-### Claim-group ordering
+### Bundled multi-destination claims
 
-Proposals sharing a `claim_group_id` are shown in a contiguous block,
-so the human reads the claim once and then decides per-target. The
-header names the group's position and size. Review order within a
-group is arbitrary; across groups, order follows transcript position.
+Proposals sharing a `claim_group_id` are shown together as one bundle:
+one screen, one decision. The reviewer reads the claim once and chooses
+to approve, edit, or reject the whole bundle; on approval, a fact is
+appended to each target entity's YAML (each preserving its own
+`section`). Bundles are listed in transcript order across the run.
 
 ```
-─── Proposal 1 of 12  ·  Claim group cg-001 (1 of 3 targets) ────────
-
-Target entity: Aldara (existing)
-  Matched via: alias "the Aldaran Realm"
-Section: founding
+─── Bundle 1 of 8  ·  Claim group cg-001 (3 targets) ────────
 
 Proposed text:
   "Theron's grandfather founded Aldara in the Second Age."
@@ -72,36 +69,33 @@ Context:
   Before: "So let's talk about the founding of Aldara."
   After:  "And that's why the Theron name matters so much now."
 
-Also routes to:
-  → Theron (lineage)              — next
-  → Second Age (events-in-era)    — then
+Targets (3):
+  → Aldara (existing)
+      Section: founding
+      Matched via: alias "the Aldaran Realm"
+  → Theron (existing)
+      Section: lineage
+  → Second Age (NEW — events, will be created on approval)
+      Section: events-in-era
 
 [a]pprove  [e]dit  [r]eject  [p]lay (open URL)
 >
 ```
 
-After approval or rejection, the next claim-group sibling shows with
-an abbreviated header — the claim text and locator are unchanged; only
-the target and section differ:
+#### Edit propagation
 
-```
-─── Proposal 2 of 12  ·  Claim group cg-001 (2 of 3 targets) ────────
+Choosing `edit` opens prompts for `text`, `speaker`, `status`, and
+`status_reason`; whatever the reviewer types replaces the value on
+**every** target in the bundle. Blank input keeps the original. The
+per-target `section` is intentionally not editable in multi-target
+bundles — each entity owns its own section heading; if the reviewer
+needs to change one, they can edit the entity YAML afterwards. For
+single-target bundles, `section` is editable as before.
 
-Target entity: Theron (existing)
-Section: lineage
-
-(Same claim text, locator, and context as previous proposal.)
-
-[a]pprove  [e]dit  [r]eject  [p]lay (open URL)
->
-```
-
-An edit to `text` inside a claim group applies only to the proposal
-being edited — sibling proposals keep the original text. This is
-deliberate: the human might want to phrase the founding claim
-differently on Theron's page than on Aldara's, and forcing edits to
-propagate across siblings would undercut that. If propagation _is_
-wanted, the user edits each sibling in turn.
+Alias suggestions remain per-target: after approval, the prompt walks
+each target's suggested aliases in turn, and a `y` confirmation merges
+the alias into that specific entity (with the per-session dedup of
+`docs/architecture/entity-model.md` still in effect).
 
 ### New-entity proposals
 
