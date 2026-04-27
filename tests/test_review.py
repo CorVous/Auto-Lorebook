@@ -17,9 +17,10 @@ from auto_lorebook import (
 )
 from auto_lorebook.review import (
     ApproveDecision,
+    BundleDecision,
+    BundleView,
     Decision,
     EditDecision,
-    ProposalView,
     RejectDecision,
     ReviewResult,
 )
@@ -141,26 +142,43 @@ def _make_claim(
 
 
 class ScriptedReviewer:
-    """Reviewer that yields scripted decisions and alias confirmations."""
+    """Bundle reviewer with scripted bundle decisions and alias responses.
+
+    Existing tests pass a list of `Decision`s — we wrap each as a
+    bundle-wide decision selecting every route. New bundling tests can
+    construct `BundleDecision` directly via `bundle_decisions=`.
+    """
 
     by_label = "human-review"
 
     def __init__(
         self,
-        decisions: list[Decision],
+        decisions: list[Decision] | None = None,
         alias_responses: list[bool] | None = None,
+        *,
+        bundle_decisions: list[BundleDecision] | None = None,
     ) -> None:
-        self._decisions = list(decisions)
+        if decisions is not None and bundle_decisions is not None:
+            msg = "pass decisions OR bundle_decisions, not both"
+            raise AssertionError(msg)
+        self._decisions: list[Decision] = list(decisions or [])
+        self._bundle_decisions: list[BundleDecision] = list(bundle_decisions or [])
         self._alias_responses = list(alias_responses or [])
-        self.decided: list[ProposalView] = []
+        self.decided: list[BundleView] = []
         self.alias_calls: list[tuple[str, str]] = []
 
-    def decide(self, view: ProposalView) -> Decision:
+    def decide_bundle(self, view: BundleView) -> BundleDecision:
         self.decided.append(view)
+        if self._bundle_decisions:
+            return self._bundle_decisions.pop(0)
         if not self._decisions:
             msg = "ScriptedReviewer ran out of decisions"
             raise AssertionError(msg)
-        return self._decisions.pop(0)
+        decision = self._decisions.pop(0)
+        return BundleDecision(
+            decision=decision,
+            selected_indices=tuple(range(len(view.targets))),
+        )
 
     def confirm_alias(self, entity: str, mention: str) -> bool:
         self.alias_calls.append((entity, mention))
@@ -773,10 +791,10 @@ class TestCreatedEarlierInSession:
         )
         scripted = ScriptedReviewer([ApproveDecision(), ApproveDecision()])
         review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
-        # First view: no on-disk entity yet
-        assert scripted.decided[0].created_earlier_in_session is False
-        # Second view: stub was created in this same run
-        assert scripted.decided[1].created_earlier_in_session is True
+        # Each cg has one target → one TargetView per bundle.
+        assert scripted.decided[0].targets[0].created_earlier_in_session is False
+        # Second bundle: stub was created in this same run
+        assert scripted.decided[1].targets[0].created_earlier_in_session is True
 
 
 # ---------------------------------------------------------------------------
@@ -929,11 +947,14 @@ class _RaisingReviewer:
         self.raise_on = raise_on
         self.calls = 0
 
-    def decide(self, view: ProposalView) -> Decision:  # noqa: ARG002
+    def decide_bundle(self, view: BundleView) -> BundleDecision:
         self.calls += 1
         if self.calls == self.raise_on:
             raise KeyboardInterrupt
-        return ApproveDecision()
+        return BundleDecision(
+            decision=ApproveDecision(),
+            selected_indices=tuple(range(len(view.targets))),
+        )
 
     def confirm_alias(self, entity: str, mention: str) -> bool:  # noqa: ARG002
         return False
@@ -1005,6 +1026,421 @@ class TestResumeAndEmpty:
 # ---------------------------------------------------------------------------
 # Edit path end-to-end
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Bundle behavior (multi-target review screen)
+# ---------------------------------------------------------------------------
+
+
+def _multi_target_setup(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    *,
+    sections: tuple[str, str, str] = ("founding", "lineage", "events-in-era"),
+    aliases_per_entity: dict[str, list[str]] | None = None,
+) -> None:
+    """Plan with one cg routing to (Aldara, Theron, Second Age), all NEW."""
+    aliases_per_entity = aliases_per_entity or {}
+    _write_info(cfg.wiki_repo_path, source_id)
+    cg = "cg-multi"
+    targets = [
+        ("Aldara", "locations", sections[0], "aldara-f001"),
+        ("Theron", "characters", sections[1], "theron-f001"),
+        ("Second Age", "events", sections[2], "second-age-f001"),
+    ]
+    siblings_for = {
+        name: [
+            proposal_yaml.Sibling(entity=other, proposed_id=oid)
+            for other, _, _, oid in targets
+            if other != name
+        ]
+        for name, _, _, _ in targets
+    }
+    for name, _cat, section, pid in targets:
+        _write_proposal(
+            source_id,
+            _make_proposal(
+                target=name,
+                proposed_id=pid,
+                cg=cg,
+                section=section,
+                siblings=siblings_for[name],
+            ),
+        )
+    _write_plan(
+        cfg.wiki_repo_path,
+        source_id,
+        new_entities=[
+            plan_yaml.NewEntityProposal(
+                name=name,
+                category=cat,
+                aliases_suggested=aliases_per_entity.get(name, []),
+            )
+            for name, cat, _, _ in targets
+        ],
+        planned_claims=[
+            _make_claim(
+                cg=cg,
+                targets=[
+                    plan_yaml.ClaimTarget(
+                        entity=name,
+                        entity_state="new",
+                        proposed_section=section,
+                        proposed_category=cat,
+                    )
+                    for name, cat, section, _ in targets
+                ],
+            )
+        ],
+    )
+
+
+class TestBundle:
+    def test_bundle_groups_siblings_into_one_decision(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        source_id = "yt-x"
+        _multi_target_setup(cfg, source_id)
+        scripted = ScriptedReviewer([ApproveDecision()])
+        result = review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        # ONE decide_bundle call, THREE facts approved.
+        assert len(scripted.decided) == 1
+        assert result.approved == 3
+        assert result.rejected == 0
+        for slug, cat in (
+            ("aldara", "locations"),
+            ("theron", "characters"),
+            ("second-age", "events"),
+        ):
+            assert (cfg.wiki_repo_path / cat / f"{slug}.yaml").exists()
+
+    def test_targets_drop_unchecks_a_route(self, cfg: cfg_mod.Config) -> None:
+        source_id = "yt-x"
+        _multi_target_setup(cfg, source_id)
+        # Drop target index 1 (Theron); keep Aldara and Second Age.
+        scripted = ScriptedReviewer(
+            bundle_decisions=[
+                BundleDecision(
+                    decision=ApproveDecision(),
+                    selected_indices=(0, 2),
+                )
+            ]
+        )
+        result = review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        assert result.approved == 2
+        assert result.rejected == 1
+        assert (cfg.wiki_repo_path / "locations" / "aldara.yaml").exists()
+        assert (cfg.wiki_repo_path / "events" / "second-age.yaml").exists()
+        # Theron stub never created.
+        assert not (cfg.wiki_repo_path / "characters" / "theron.yaml").exists()
+        # Theron proposal file gone.
+        assert not reading_pipeline.pending_proposal_path(
+            source_id, "theron-f001"
+        ).exists()
+
+    def test_edit_text_propagates_across_selected_siblings(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        source_id = "yt-x"
+        _multi_target_setup(cfg, source_id)
+        scripted = ScriptedReviewer(
+            bundle_decisions=[
+                BundleDecision(
+                    decision=EditDecision(new_text="Edited claim text."),
+                    selected_indices=(0, 1, 2),
+                )
+            ]
+        )
+        result = review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        assert result.edited == 3
+        for slug, cat in (
+            ("aldara", "locations"),
+            ("theron", "characters"),
+            ("second-age", "events"),
+        ):
+            e = entity_yaml.read(cfg.wiki_repo_path / cat / f"{slug}.yaml")
+            assert e.facts[0]["text"] == "Edited claim text."
+            assert e.facts[0]["text_source"] is not None
+            assert e.facts[0]["edited_by_human"] is True
+
+    def test_per_target_override_only_applies_to_that_target(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        source_id = "yt-x"
+        _multi_target_setup(cfg, source_id)
+        scripted = ScriptedReviewer(
+            bundle_decisions=[
+                BundleDecision(
+                    decision=ApproveDecision(),
+                    selected_indices=(0, 1, 2),
+                    per_target_overrides={
+                        1: EditDecision(new_section="bloodlines"),
+                    },
+                )
+            ]
+        )
+        review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        aldara = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        theron = entity_yaml.read(cfg.wiki_repo_path / "characters" / "theron.yaml")
+        second = entity_yaml.read(cfg.wiki_repo_path / "events" / "second-age.yaml")
+        assert aldara.facts[0]["section"] == "founding"
+        assert theron.facts[0]["section"] == "bloodlines"
+        assert second.facts[0]["section"] == "events-in-era"
+
+    def test_singleton_claim_group_renders_as_single_target(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        source_id = "yt-x"
+        _write_info(cfg.wiki_repo_path, source_id)
+        _write_proposal(
+            source_id,
+            _make_proposal(target="Aldara", proposed_id="aldara-f001", cg="cg-001"),
+        )
+        _write_plan(
+            cfg.wiki_repo_path,
+            source_id,
+            new_entities=[
+                plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
+            ],
+            planned_claims=[
+                _make_claim(
+                    cg="cg-001",
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="new",
+                            proposed_section="founding",
+                            proposed_category="locations",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        scripted = ScriptedReviewer([ApproveDecision()])
+        review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        assert len(scripted.decided) == 1
+        assert len(scripted.decided[0].targets) == 1
+
+    def test_reject_discards_whole_bundle(self, cfg: cfg_mod.Config) -> None:
+        source_id = "yt-x"
+        _multi_target_setup(cfg, source_id)
+        scripted = ScriptedReviewer([RejectDecision()])
+        result = review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        assert result.rejected == 3
+        assert result.approved == 0
+        # No entity stubs created.
+        for slug, cat in (
+            ("aldara", "locations"),
+            ("theron", "characters"),
+            ("second-age", "events"),
+        ):
+            assert not (cfg.wiki_repo_path / cat / f"{slug}.yaml").exists()
+        # All proposal files gone.
+        for pid in ("aldara-f001", "theron-f001", "second-age-f001"):
+            assert not reading_pipeline.pending_proposal_path(source_id, pid).exists()
+
+    def test_alias_confirmation_only_fires_for_selected_targets(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        source_id = "yt-x"
+        # Each entity has one alias suggestion. Drop Theron — its alias
+        # prompt must NOT fire.
+        _multi_target_setup(
+            cfg,
+            source_id,
+            aliases_per_entity={
+                "Aldara": ["the Realm"],
+                "Theron": ["the King"],
+                "Second Age": ["the Age"],
+            },
+        )
+        scripted = ScriptedReviewer(
+            bundle_decisions=[
+                BundleDecision(
+                    decision=ApproveDecision(),
+                    selected_indices=(0, 2),
+                )
+            ],
+            alias_responses=[True, True, True],
+        )
+        review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        prompted_entities = {entity for entity, _ in scripted.alias_calls}
+        assert "Theron" not in prompted_entities
+        assert prompted_entities == {"Aldara", "Second Age"}
+
+    def test_approve_iterates_targets_in_plan_order(self, cfg: cfg_mod.Config) -> None:
+        """Engine processes targets in plan order regardless of selection order.
+
+        Observe via alias-prompt order: each entity has one alias
+        suggestion; prompts must fire in plan order (Aldara, Theron,
+        Second Age) even when the reviewer returns
+        ``selected_indices`` reversed.
+        """
+        source_id = "yt-x"
+        _multi_target_setup(
+            cfg,
+            source_id,
+            aliases_per_entity={
+                "Aldara": ["the Realm"],
+                "Theron": ["the King"],
+                "Second Age": ["the Age"],
+            },
+        )
+        scripted = ScriptedReviewer(
+            bundle_decisions=[
+                BundleDecision(
+                    decision=ApproveDecision(),
+                    selected_indices=(2, 0, 1),
+                )
+            ],
+            alias_responses=[True, True, True],
+        )
+        review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        prompt_order = [entity for entity, _ in scripted.alias_calls]
+        assert prompt_order == ["Aldara", "Theron", "Second Age"]
+
+    def test_resume_seeds_merged_aliases_from_disk(self, cfg: cfg_mod.Config) -> None:
+        """Alias added by this ingest in a prior run() must not re-prompt."""
+        source_id = "yt-x"
+        _write_info(cfg.wiki_repo_path, source_id)
+        # Pre-existing entity with an alias added by THIS ingest.
+        prior = entity_yaml.Entity(
+            entity="Aldara",
+            category="locations",
+            slug="aldara",
+            aliases=[
+                entity_yaml.Alias(
+                    name="the Realm",
+                    added_by_ingest=source_id,
+                    added_at="2026-04-20T00:00:00Z",
+                    source="alias-confirmation",
+                ),
+            ],
+            created_at="2026-04-20T00:00:00Z",
+            created_by_ingest=source_id,
+            updated_at="2026-04-20T00:00:00Z",
+            facts=[],
+        )
+        entity_yaml.write(prior, cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        proposal = _make_proposal(
+            target="Aldara",
+            proposed_id="aldara-f002",
+            cg="cg-002",
+            proposal_type="new_fact",
+        )
+        _write_proposal(source_id, proposal)
+        _write_plan(
+            cfg.wiki_repo_path,
+            source_id,
+            entity_resolutions=[
+                plan_yaml.EntityResolution(
+                    mention="the Realm",
+                    resolution="existing",
+                    matched_entity="Aldara",
+                    suggested_aliases_to_add=["the Realm"],
+                ),
+            ],
+            planned_claims=[
+                _make_claim(
+                    cg="cg-002",
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="existing",
+                            proposed_section="founding",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        scripted = ScriptedReviewer([ApproveDecision()])
+        review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        # No alias prompt fired — already seeded from disk.
+        assert scripted.alias_calls == []
+        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        # Still exactly one alias (no double-add).
+        assert len(e.aliases) == 1
+
+    def test_interrupt_mid_bundle_leaves_unwritten_siblings_on_disk(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        """KI mid-bundle leaves unwritten siblings' proposal files on disk."""
+        source_id = "yt-x"
+        _multi_target_setup(cfg, source_id)
+
+        class _AliasInterrupter:
+            by_label = "human-review"
+
+            def __init__(self) -> None:
+                self.alias_calls = 0
+
+            def decide_bundle(self, view: BundleView) -> BundleDecision:
+                return BundleDecision(
+                    decision=ApproveDecision(),
+                    selected_indices=tuple(range(len(view.targets))),
+                )
+
+            def confirm_alias(self, entity: str, mention: str) -> bool:  # noqa: ARG002
+                self.alias_calls += 1
+                # Raise after Aldara approved (no aliases for it in
+                # this setup → no prompt). First alias prompt is for
+                # Theron — raise then to leave Theron + Second Age
+                # files on disk.
+                raise KeyboardInterrupt
+
+        # Re-seed plan with one alias on Theron (proposals already on
+        # disk are unaffected). Aldara has no suggestion → its
+        # confirm_alias is never called → KI fires on Theron's prompt.
+        _write_plan(
+            cfg.wiki_repo_path,
+            source_id,
+            new_entities=[
+                plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
+                plan_yaml.NewEntityProposal(
+                    name="Theron",
+                    category="characters",
+                    aliases_suggested=["the King"],
+                ),
+                plan_yaml.NewEntityProposal(name="Second Age", category="events"),
+            ],
+            planned_claims=[
+                _make_claim(
+                    cg="cg-multi",
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="new",
+                            proposed_section="founding",
+                            proposed_category="locations",
+                        ),
+                        plan_yaml.ClaimTarget(
+                            entity="Theron",
+                            entity_state="new",
+                            proposed_section="lineage",
+                            proposed_category="characters",
+                        ),
+                        plan_yaml.ClaimTarget(
+                            entity="Second Age",
+                            entity_state="new",
+                            proposed_section="events-in-era",
+                            proposed_category="events",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        with pytest.raises(KeyboardInterrupt):
+            review.run(cfg=cfg, source_id=source_id, reviewer=_AliasInterrupter())
+        # Aldara approved before the raise.
+        assert not reading_pipeline.pending_proposal_path(
+            source_id, "aldara-f001"
+        ).exists()
+        # Theron + Second Age still pending.
+        assert reading_pipeline.pending_proposal_path(source_id, "theron-f001").exists()
+        assert reading_pipeline.pending_proposal_path(
+            source_id, "second-age-f001"
+        ).exists()
 
 
 class TestEditPath:

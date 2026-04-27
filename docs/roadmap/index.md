@@ -38,17 +38,23 @@ implementation status.
     fan-out.
 
     Phase 4 review loop also landed: `auto-lorebook review <id>` walks
-    each pending proposal, prompts approve / edit / reject / play, and
-    on approval atomically creates the entity stub (for proposed-new
-    entities) or appends a fact to the existing entity YAML.
-    Inline alias-confirmation sub-prompts merge planner-suggested
-    aliases as `stub-creation` (first-approval batch) or
-    `alias-confirmation` (later additions). The in-memory entity
-    index refreshes after each approval so siblings created earlier in
-    the same session resolve as existing. `--auto-approve` provides
-    non-interactive bulk approval (and explicitly *declines* alias
-    suggestions) for CI. Ctrl-C leaves untouched proposal files in
-    place so the next invocation resumes.
+    each pending claim group as **one bundle** with a route checklist,
+    prompts approve / edit / reject / play / targets, and on approval
+    atomically creates the entity stub (for proposed-new entities) or
+    appends a fact to the existing entity YAML for every checked
+    route. Bundle-level text edits propagate to all checked siblings;
+    per-target `section` / `speaker` overrides live in the `[t]argets`
+    sub-prompt. Inline alias-confirmation sub-prompts merge
+    planner-suggested aliases as `stub-creation` (first-approval
+    batch) or `alias-confirmation` (later additions). The in-memory
+    entity index refreshes after each approval so siblings created
+    earlier in the same session resolve as existing. On resume, the
+    engine seeds its alias-dedup set from on-disk aliases tagged with
+    the current ingest, so already-confirmed aliases are not
+    re-prompted after Ctrl-C. `--auto-approve` provides non-interactive
+    bulk approval (and explicitly *declines* alias suggestions) for
+    CI. Ctrl-C leaves untouched proposal files in place so the next
+    invocation resumes.
 
     Phase 4 closeout landed: `auto-lorebook replan <id>` discards
     unreviewed proposals and re-runs planner + extractor against the
@@ -174,20 +180,23 @@ once the extractor + review loop gave it something to discard.
   proposals.
 - Post-extraction mechanical verification that `raw_transcript_span`
   is a real substring.
-- Terminal review loop with approve / edit / reject actions, with
-  claim-group siblings shown contiguously.
+- Terminal review loop with approve / edit / reject / targets actions
+  driven per **bundle**: targets sharing a `claim_group_id` render
+  as one screen with a route checklist.
 - **Atomic entity stub creation on first approval for a proposed
   new entity**, with `created_by_ingest` set to the current ingest.
-- Routing metadata surfaced per-proposal (matched_via,
+- Routing metadata surfaced per-route inside the bundle (matched_via,
   new-vs-existing, proposed aliases, "created earlier this session"
-  for in-review creations, sibling targets for multi-target claims).
-- Inline alias-confirmation sub-prompt; aliases merged into stub at
-  creation or appended on update.
+  for in-review creations).
+- Inline alias-confirmation sub-prompt for each checked route;
+  aliases merged into stub at creation or appended on update; the
+  engine seeds its alias-dedup set from on-disk records on resume so
+  Ctrl-C resumes don't re-prompt.
 - In-memory entity index refresh after each approval.
-- Per-fact approval → fact appended to entity YAML, carrying
-  `claim_group_id` when applicable.
-- Handling for edited text (edits scoped to the proposal being
-  edited, not propagated to claim-group siblings).
+- Per-route approval → fact appended to entity YAML, carrying
+  `claim_group_id`. Bundle-level text edits propagate across all
+  checked siblings; per-target section / speaker overrides apply
+  only to their route.
 - `replan` command (discard unreviewed proposals, re-run planner +
   extractor; already-approved entities visible to the new plan as
   existing).
