@@ -55,8 +55,7 @@ class BundleViewWidget(Static):
                 label += f"  via: {target.matched_via}"
             yield Checkbox(label, value=self._selected[i], id=f"route-{i}")
             yield Label(
-                f"  Section: {p.section or '—'}  "
-                f"Status: {p.status or '—'}",
+                f"  Section: {p.section or '—'}  Status: {p.status or '—'}",
             )
 
     def get_selected(self) -> list[bool]:

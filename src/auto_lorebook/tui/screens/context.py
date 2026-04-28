@@ -148,4 +148,4 @@ class ContextScreen(Screen):
         self.dismiss(updated)
 
     def action_quit(self) -> None:
-        self.app.exit()
+        self.dismiss(None)

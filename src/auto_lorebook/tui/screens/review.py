@@ -146,4 +146,5 @@ class ReviewScreen(Screen):
 
     def action_quit_review(self) -> None:
         self._cancel.set()
+        self._pending.put(None)  # unblock any waiting reviewer thread
         self.app.exit()
