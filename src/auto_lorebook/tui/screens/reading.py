@@ -1,9 +1,10 @@
-"""Gate-1 reading screen: reading.md viewer + a/e/r/u/q controls."""
+"""Gate-1 reading screen: reading.md viewer + a/e/r/u/q/n/p controls."""
 
 from __future__ import annotations
 
 import contextlib
 import os
+import re
 import subprocess  # noqa: S404
 from typing import TYPE_CHECKING, ClassVar
 
@@ -20,10 +21,17 @@ if TYPE_CHECKING:
     from auto_lorebook.config import Config
 
 
+def _split_segments(text: str) -> list[str]:
+    """Split reading.md into per-segment blocks (each starting with ##)."""
+    parts = re.split(r"(?m)^(?=## )", text)
+    return [p.strip("\n") for p in parts[1:] if p.strip()]
+
+
 class ReadingScreen(Screen):
     """Viewer for the pending draft reading with gate-1 controls.
 
     Mirrors commands/approve_reading.py::_interactive_session.
+    Segments are navigated one at a time with [n]/[p].
     """
 
     BINDINGS: ClassVar[list] = [
@@ -31,6 +39,8 @@ class ReadingScreen(Screen):
         Binding("e", "edit", "Edit"),
         Binding("r", "reject", "Reject"),
         Binding("u", "undo", "Undo"),
+        Binding("n", "next_seg", "Next"),
+        Binding("p", "prev_seg", "Prev"),
         Binding("q", "quit_screen", "Quit"),
     ]
 
@@ -43,6 +53,8 @@ class ReadingScreen(Screen):
             self._pending_path.read_bytes() if self._pending_path.exists() else b""
         )
         self._pending_action = "none"
+        self._segments: list[str] = []
+        self._seg_idx: int = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -56,7 +68,13 @@ class ReadingScreen(Screen):
 
     def _load_text(self) -> str:
         if self._pending_path.exists():
-            return self._pending_path.read_text(encoding="utf-8")
+            full = self._pending_path.read_text(encoding="utf-8")
+            segs = _split_segments(full)
+            if segs:
+                self._segments = segs
+                self._seg_idx = min(self._seg_idx, len(segs) - 1)
+                return segs[self._seg_idx]
+            return full
         return "_No draft reading found._"
 
     def _header_line(self) -> str:
@@ -66,7 +84,10 @@ class ReadingScreen(Screen):
             and self._pending_path.read_bytes() != self._original_bytes
         ):
             dirty = " [edited]"
-        return f"[bold]{self._pending_path}{dirty}[/bold]"
+        base = f"[bold]{self._pending_path}{dirty}[/bold]"
+        if self._segments:
+            return f"{base}  [dim]{self._seg_idx + 1}/{len(self._segments)}[/dim]"
+        return base
 
     def _refresh_view(self) -> None:
         with contextlib.suppress(Exception):
@@ -94,6 +115,16 @@ class ReadingScreen(Screen):
         with self.app.suspend():
             subprocess.run([editor, str(self._pending_path)], check=False)  # noqa: S603
         self._refresh_view()
+
+    def action_next_seg(self) -> None:
+        if self._seg_idx < len(self._segments) - 1:
+            self._seg_idx += 1
+            self._refresh_view()
+
+    def action_prev_seg(self) -> None:
+        if self._seg_idx > 0:
+            self._seg_idx -= 1
+            self._refresh_view()
 
     def action_quit_screen(self) -> None:
         self.dismiss(("quit", self._pending_action))
