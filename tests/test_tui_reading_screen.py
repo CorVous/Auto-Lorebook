@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from auto_lorebook.tui.screens.reading import _split_segments
+from auto_lorebook.tui.screens.reading import _reconstruct, _split_segments
 
 # ---------------------------------------------------------------------------
 # _split_segments unit tests
@@ -60,3 +60,29 @@ def test_split_segments_empty_text() -> None:
 def test_split_segments_no_sections() -> None:
     """Preamble-only text (no ## headings) returns empty list."""
     assert _split_segments("# Reading: Foo\n\nsome text\n") == []
+
+
+# ---------------------------------------------------------------------------
+# _reconstruct round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_reconstruct_round_trips() -> None:
+    segs = _split_segments(_READING)
+    parts = _READING.split("\n## ", 1)
+    preamble = parts[0] + "\n" if len(parts) > 1 else _READING
+    result = _reconstruct(preamble, segs)
+    # all segments should appear in reconstructed text
+    for seg in segs:
+        assert seg.split("\n")[0] in result
+
+
+def test_reconstruct_preserves_edit() -> None:
+    segs = _split_segments(_READING)
+    parts = _READING.split("\n## ", 1)
+    preamble = parts[0] + "\n" if len(parts) > 1 else _READING
+    edited = list(segs)
+    edited[0] = segs[0] + "\n- injected fact"
+    result = _reconstruct(preamble, edited)
+    assert "injected fact" in result
+    assert "fact one" in result  # original also preserved

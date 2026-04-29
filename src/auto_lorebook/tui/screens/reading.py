@@ -6,6 +6,8 @@ import contextlib
 import os
 import re
 import subprocess  # noqa: S404
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from textual.binding import Binding
@@ -25,6 +27,13 @@ def _split_segments(text: str) -> list[str]:
     """Split reading.md into per-segment blocks (each starting with ##)."""
     parts = re.split(r"(?m)^(?=## )", text)
     return [p.strip("\n") for p in parts[1:] if p.strip()]
+
+
+def _reconstruct(preamble: str, segments: list[str]) -> str:
+    """Reassemble reading.md from preamble and segment blocks."""
+    if not segments:
+        return preamble
+    return preamble.rstrip("\n") + "\n\n" + "\n\n".join(segments) + "\n"
 
 
 class ReadingScreen(Screen):
@@ -53,6 +62,7 @@ class ReadingScreen(Screen):
             self._pending_path.read_bytes() if self._pending_path.exists() else b""
         )
         self._pending_action = "none"
+        self._preamble: str = ""
         self._segments: list[str] = []
         self._seg_idx: int = 0
 
@@ -69,8 +79,10 @@ class ReadingScreen(Screen):
     def _load_text(self) -> str:
         if self._pending_path.exists():
             full = self._pending_path.read_text(encoding="utf-8")
-            segs = _split_segments(full)
+            parts = re.split(r"(?m)^(?=## )", full)
+            segs = [p.strip("\n") for p in parts[1:] if p.strip()]
             if segs:
+                self._preamble = parts[0]
                 self._segments = segs
                 self._seg_idx = min(self._seg_idx, len(segs) - 1)
                 return segs[self._seg_idx]
@@ -111,9 +123,28 @@ class ReadingScreen(Screen):
         self._refresh_view()
 
     def action_edit(self) -> None:
+        if not self._segments:
+            return
+        seg_text = self._segments[self._seg_idx]
         editor = os.environ.get("EDITOR", "vi")
-        with self.app.suspend():
-            subprocess.run([editor, str(self._pending_path)], check=False)  # noqa: S603
+        tmp: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".md", delete=False, encoding="utf-8"
+            ) as f:
+                f.write(seg_text)
+                tmp = Path(f.name)
+            with self.app.suspend():
+                subprocess.run([editor, str(tmp)], check=False)  # noqa: S603
+            edited = tmp.read_text(encoding="utf-8").strip("\n")
+            if edited != seg_text:
+                self._segments[self._seg_idx] = edited
+                self._pending_path.write_text(
+                    _reconstruct(self._preamble, self._segments), encoding="utf-8"
+                )
+        finally:
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
         self._refresh_view()
 
     def action_next_seg(self) -> None:
