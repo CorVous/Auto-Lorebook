@@ -52,7 +52,13 @@ ENV_VAR_ALLOWLIST: frozenset[str] = frozenset({
 
 #: Markdown files under ``docs/`` intentionally outside the published
 #: ``mkdocs.yml`` nav (e.g. shared includes).
-DOC_ORPHAN_ALLOWLIST: frozenset[str] = frozenset()
+DOC_ORPHAN_ALLOWLIST: frozenset[str] = frozenset({
+    # Agent-skill contracts consumed by Claude Code skills, not the
+    # public mkdocs site. Referenced from AGENTS.md.
+    "agents/domain.md",
+    "agents/issue-tracker.md",
+    "agents/triage-labels.md",
+})
 
 #: Registered CLI subcommands intentionally absent from the user-facing
 #: CLI reference (e.g. debugging-only). Prefer documenting over
