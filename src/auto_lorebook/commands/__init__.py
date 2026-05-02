@@ -8,8 +8,10 @@ Each subcommand is defined in its own module and exports:
 from auto_lorebook.commands import approve_reading as approve_reading_cmd
 from auto_lorebook.commands import configure_context as configure_context_cmd
 from auto_lorebook.commands import entities as entities_cmd
+from auto_lorebook.commands import extract as extract_cmd
 from auto_lorebook.commands import generate_reading as generate_reading_cmd
 from auto_lorebook.commands import ingest as ingest_cmd
+from auto_lorebook.commands import plan as plan_cmd
 from auto_lorebook.commands import plans as plans_cmd
 from auto_lorebook.commands import regenerate_reading as regenerate_reading_cmd
 from auto_lorebook.commands import reject_ingest as reject_ingest_cmd
@@ -22,8 +24,10 @@ __all__ = [
     "approve_reading_cmd",
     "configure_context_cmd",
     "entities_cmd",
+    "extract_cmd",
     "generate_reading_cmd",
     "ingest_cmd",
+    "plan_cmd",
     "plans_cmd",
     "regenerate_reading_cmd",
     "reject_ingest_cmd",

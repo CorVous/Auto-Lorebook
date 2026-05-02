@@ -31,10 +31,10 @@ YouTube URL / SRT / text file
         ▼
   [Human review gate]   approve / edit / reject reading
         │
-        ▼
+        ▼  (invoke `auto-lorebook plan <id>`)
   Stage 2: Planner (LLM)       route claims → entities
         │                      (new entities exist only on the plan)
-        ▼
+        ▼  (invoke `auto-lorebook extract <id>`)
   Stage 3: Extractor (LLM)     locate verbatim spans
         │                      (no gate between planner and extractor)
         ▼

@@ -13,7 +13,9 @@ import yaml
 from auto_lorebook import entity_yaml, reading_pipeline
 from auto_lorebook.commands import (
     approve_reading_cmd,
+    extract_cmd,
     generate_reading_cmd,
+    plan_cmd,
     reject_ingest_cmd,
     review_cmd,
 )
@@ -215,6 +217,8 @@ def _approve_one(
     with patch("auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client):
         generate_reading_cmd.run(_args(source_id=SOURCE_ID))
         approve_reading_cmd.run(_args(source_id=SOURCE_ID, yes=True))
+        plan_cmd.run(_args(source_id=SOURCE_ID))
+        extract_cmd.run(_args(source_id=SOURCE_ID))
         review_cmd.run(_args(source_id=SOURCE_ID, auto_approve=True))
 
 

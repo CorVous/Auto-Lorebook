@@ -238,7 +238,7 @@ def extract(cfg: cfg_mod.Config, source_id: str) -> ExtractResult:
     wiki_repo = cfg.wiki_repo_path
     plan_path = pending_plan_path(source_id)
     if not plan_path.exists():
-        msg = f"No plan at {plan_path}. Run `approve-reading {source_id}` first."
+        msg = f"No plan at {plan_path}. Run `plan {source_id}` first."
         raise ReadingPipelineError(msg)
     try:
         plan_obj = plan_yaml_mod.read(plan_path)
