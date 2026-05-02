@@ -1,0 +1,14 @@
+schema_version: 1
+source_id: __QA_SOURCE_ID__
+generated_at: '2026-01-01T00:00:00Z'
+segments:
+  seg-001:
+    - text: Intro bullet
+      anchor: '0:00:15'
+      locator_hint_start: '0:00:08'
+      locator_hint_end: '0:00:23'
+  seg-002:
+    - text: King Theron founded Aldara
+      anchor: '0:02:30'
+      locator_hint_start: '0:02:23'
+      locator_hint_end: '0:02:38'

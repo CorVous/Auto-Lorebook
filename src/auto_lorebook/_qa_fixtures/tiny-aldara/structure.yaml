@@ -1,0 +1,16 @@
+schema_version: 1
+source_id: __QA_SOURCE_ID__
+generated_at: '2026-01-01T00:00:00Z'
+default_speaker: DM
+segments:
+  - id: seg-001
+    start: '0:00:00'
+    end: '0:02:00'
+    title: Intro
+    speaker: DM
+  - id: seg-002
+    start: '0:02:00'
+    end: '0:10:00'
+    title: Founding of Aldara
+    speaker: DM
+uncertainty_flags: []

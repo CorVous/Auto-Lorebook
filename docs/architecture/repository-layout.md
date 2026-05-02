@@ -75,6 +75,13 @@ paused mid-review, and resumed.
   `created_by_ingest` and `approved_at` fields on the resulting
   facts.
 
+## QA fixtures
+
+Synthetic stage-input artifacts ship with the package under
+`src/auto_lorebook/_qa_fixtures/<name>/` and are loaded via
+`importlib.resources` by the `seed-ingest` command. See
+[QA seeding](../contributing.md#qa-seeding).
+
 ## Why the split
 
 Keeping pending state outside the wiki repo means:

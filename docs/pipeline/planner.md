@@ -5,6 +5,10 @@ resolving entity identity (existing vs. new) and flagging ambiguity.
 It is an intermediate stage with no approval gate and no filesystem
 side effects.
 
+> Test this stage in isolation with
+> `auto-lorebook seed-ingest --at=plan`, then `replan <sid>`. See
+> [QA seeding](../contributing.md#qa-seeding).
+
 ## Purpose
 
 - Route each claim bullet to one or more entities.

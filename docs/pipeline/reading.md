@@ -5,6 +5,11 @@ segments the transcript and attributes speakers in a single pass. 1b
 (summarize) produces claim bullets per segment. The human reviews the
 combined output as a single reading — one review gate.
 
+> Test this stage in isolation with
+> `auto-lorebook seed-ingest --at=structure` (Stage 1a + 1b) or
+> `--at=summarize` (Stage 1b only). See
+> [QA seeding](../contributing.md#qa-seeding).
+
 ## Design drivers
 
 Two properties of the intended use dominate the design of this stage:

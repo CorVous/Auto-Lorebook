@@ -1,0 +1,16 @@
+schema_version: 1
+source_id: __QA_SOURCE_ID__
+source_type: srt
+source_url: null
+title: Tiny Aldara QA Fixture
+duration_seconds: 600
+caption_type: null
+fetched_at: '2026-01-01T00:00:00Z'
+session_date: null
+transcript_filename: transcript.en.srt
+context:
+  perspective: null
+  source_nature: null
+  setting: null
+  speakers: []
+  notes: null
