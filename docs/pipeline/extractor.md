@@ -4,6 +4,11 @@ For each planned claim, the extractor locates the verbatim span in the
 raw transcript and produces a proposal with full metadata. No
 paraphrasing — extraction only.
 
+> Test this stage in isolation with
+> `auto-lorebook seed-ingest --at=plan`, then `replan <sid>` (which
+> runs the planner then this extractor). See
+> [QA seeding](../contributing.md#qa-seeding).
+
 ## Purpose
 
 Narrow by design: locate and snip. Cleanup happens upstream (reading-

@@ -1,0 +1,29 @@
+schema_version: 1
+source_id: __QA_SOURCE_ID__
+planned_at: '2026-01-01T00:00:00Z'
+entity_resolutions:
+  - mention: Aldara
+    mention_locations:
+      - '[0:02:00-0:10:00] founding'
+    resolution: new
+    proposed_entity_name: Aldara
+    proposed_category: locations
+    rationale: Mentioned as a founded place.
+new_entities:
+  - name: Aldara
+    category: locations
+planned_claims:
+  - claim_group_id: cg-001
+    reading_section: '[0:02:00-0:10:00] Founding of Aldara'
+    reading_bullet_index: 0
+    locator: '0:02:30'
+    locator_hint: '0:02:23-0:02:38'
+    proposed_speaker: DM
+    proposed_status: authoritative
+    targets:
+      - entity: Aldara
+        entity_state: new
+        proposed_section: founding
+        proposed_category: locations
+        rationale: Founding fact.
+unresolved: []

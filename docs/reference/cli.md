@@ -125,6 +125,21 @@ auto-lorebook sources list          # flags sources with missing session_date
 auto-lorebook sources show <source_id>
 ```
 
+## QA
+
+```bash
+auto-lorebook seed-ingest --at={structure|summarize|approve|plan} \
+  [--fixture <name>] \
+  [--source-id <id>]
+```
+
+Mints a fresh `qa-<hex>` source_id and lays down a synthetic ingest up
+through the chosen stage, so the next pipeline stage can be exercised
+in isolation without re-running prior stages or hitting the LLM. The
+default fixture is `tiny-aldara`; additional fixtures live under
+`src/auto_lorebook/_qa_fixtures/`. Pair with `reject-ingest <id>` to
+clean up. See [QA seeding](../contributing.md#qa-seeding).
+
 ## Web UI
 
 ```bash

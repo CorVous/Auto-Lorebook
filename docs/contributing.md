@@ -47,6 +47,38 @@ against a cheaper model than the project default.
 When you add or change a real-world integration boundary, add or
 update the matching live test in the same commit.
 
+## QA seeding
+
+`auto-lorebook seed-ingest --at=<stage>` mints a fresh disposable
+`qa-<hex>` source_id and lays down synthetic stage-input artifacts, so
+a single pipeline stage can be exercised in isolation without running
+the prior stages or hitting the LLM.
+
+```bash
+uv run auto-lorebook seed-ingest --at=plan
+# Seeded source qa-1a2b3c4d at stage 'plan' from fixture 'tiny-aldara'.
+# Next: auto-lorebook replan qa-1a2b3c4d
+```
+
+Stage ladder (each `--at` value seeds everything from prior levels too):
+
+| `--at`      | Next command                                              |
+|-------------|-----------------------------------------------------------|
+| `structure` | `generate-reading <sid>` — runs Stage 1a + 1b             |
+| `summarize` | `regenerate-reading <sid> --from=summarize` — runs 1b     |
+| `approve`   | `approve-reading <sid> --yes` — runs approve + plan + extract |
+| `plan`      | `replan <sid>` — runs Stage 2 + 3                         |
+
+Fixtures live in the package at `src/auto_lorebook/_qa_fixtures/`; the
+default is `tiny-aldara` (a 4-cue SRT with two segments). Add new
+fixtures by dropping a sibling directory containing the same set of
+artifacts.
+
+Clean up with `reject-ingest <sid>` (which knows how to remove pending
+artifacts and any contributions written into the wiki). The interactive
+review and reading-approval gates are out of scope for QA seeding —
+exercise them manually if you need to test those paths.
+
 ## After every code assignment
 
 Run these in order:

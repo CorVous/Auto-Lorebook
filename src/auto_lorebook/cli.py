@@ -21,6 +21,7 @@ from auto_lorebook.commands import (
     reject_ingest_cmd,
     replan_cmd,
     review_cmd,
+    seed_ingest_cmd,
     version_cmd,
 )
 
@@ -110,6 +111,7 @@ def create_parser() -> argparse.ArgumentParser:
     review_cmd.add_parser(subparsers, common_parser)
     replan_cmd.add_parser(subparsers, common_parser)
     reject_ingest_cmd.add_parser(subparsers, common_parser)
+    seed_ingest_cmd.add_parser(subparsers, common_parser)
 
     return parser
 
