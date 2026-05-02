@@ -664,12 +664,16 @@ class TestExtract:
         tmp_home: Path,
         ingested_wiki: Path,
         monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Extract fails if pending/<id>/plan.yaml doesn't exist."""
         _write_user_config(tmp_home, ingested_wiki)
         monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
-        rc = extract_cmd.run(_args(source_id="yt-abc12345678"))
+        with caplog.at_level("ERROR"):
+            rc = extract_cmd.run(_args(source_id="yt-abc12345678"))
         assert rc == 1
+        assert "Run `plan" in caplog.text
+        assert "approve-reading" not in caplog.text
 
     def test_success_writes_proposals(
         self,
