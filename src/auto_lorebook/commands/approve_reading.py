@@ -34,7 +34,7 @@ def add_parser(
         description=(
             "Opens an interactive session over the draft reading.md under "
             "~/.auto-lorebook/pending/<source_id>/reading/. Keys: "
-            "[a]pprove (flip to approved + copy to wiki + run plan/extract), "
+            "[a]pprove (flip to approved + copy to wiki), "
             "[e]dit (open in $EDITOR), [r]eject (queue pending dir for delete), "
             "[u]ndo (restore to session start, clear reject), "
             "[q]uit (commit a queued reject after confirmation, else no-op). "
@@ -64,13 +64,13 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     if args.yes:
-        return _approve_and_extract(cfg, args.source_id)
+        return _approve_only(cfg, args.source_id)
 
     return _interactive_session(cfg, args.source_id)
 
 
-def _approve_and_extract(cfg: cfg_mod.Config, source_id: str) -> int:
-    """Original one-shot flow: approve → plan → extract."""
+def _approve_only(cfg: cfg_mod.Config, source_id: str) -> int:
+    """Approve reading: flip status + copy to wiki."""
     try:
         approved = pipeline.approve(cfg, source_id)
     except pipeline.ReadingPipelineError as e:
@@ -78,27 +78,7 @@ def _approve_and_extract(cfg: cfg_mod.Config, source_id: str) -> int:
         return 1
 
     print(f"Approved: {approved}")  # noqa: T201
-
-    try:
-        plan_result = pipeline.plan(cfg, source_id)
-    except pipeline.ReadingPipelineError as e:
-        _logger.error("planner failed: %s", e)
-        return 1
-
-    print(f"Plan: {plan_result.plan_path}")  # noqa: T201
-
-    try:
-        extract_result = pipeline.extract(cfg, source_id)
-    except pipeline.ReadingPipelineError as e:
-        _logger.error("extractor failed: %s", e)
-        return 1
-
-    n = len(extract_result.proposals)
-    flagged = extract_result.flagged_count
-    print(  # noqa: T201
-        f"Extracted {n} proposal(s) ({flagged} flagged) → "
-        f"{extract_result.proposals_dir}"
-    )
+    print(f"Run `auto-lorebook plan {source_id}` next.")  # noqa: T201
     return 0
 
 
@@ -125,7 +105,7 @@ def _interactive_session(cfg: cfg_mod.Config, source_id: str) -> int:
             return 130
 
         if choice == "a":
-            return _approve_and_extract(cfg, source_id)
+            return _approve_only(cfg, source_id)
         if choice == "q":
             return _commit_quit(source_id, pending_action)
         if choice == "r":

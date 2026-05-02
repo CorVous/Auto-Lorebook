@@ -3,13 +3,12 @@ revision = 3
 requires-python = "==3.13.*"
 
 [options]
-exclude-newer = "2026-04-17T22:40:19.500112535Z"
-exclude-newer-span = "P7D"
+exclude-newer = "2026-05-02T00:00:00Z"
 
 [options.exclude-newer-package]
-defusedxml = { timestamp = "2026-04-23T22:40:19.5001276Z", span = "P1D" }
-ruff = { timestamp = "2026-04-22T22:40:19.500137184Z", span = "P2D" }
-ty = { timestamp = "2026-04-23T22:40:19.500137631Z", span = "P1D" }
+defusedxml = "2026-05-01T00:00:00Z"
+ruff = "2026-04-30T00:00:00Z"
+ty = "2026-05-01T00:00:00Z"
 
 [[package]]
 name = "attrs"

@@ -283,7 +283,7 @@ auto-lorebook approve-reading <source_id>
 
 | Key | Action |
 |-----|--------|
-| `a` | Approve: flip status to `approved`, copy to wiki, run plan + extract. |
+| `a` | Approve: flip status to `approved`, copy to wiki. |
 | `e` | Edit: open the draft in `$EDITOR` (defaults to `vi`); on save, return to the prompt. |
 | `r` | Reject: queue the pending reading dir for deletion. Deferred — nothing happens until you `q`. |
 | `u` | Undo: restore the draft to its session-start contents and clear any queued reject. |
@@ -297,6 +297,10 @@ raw transcript. The intermediate `structure.yaml` is retained in the
 pending directory as an audit artifact for the lifetime of the ingest,
 then discarded when the ingest is fully completed or rejected. Future
 re-runs of extraction operate on the approved reading.
+
+Running Stage 2 and Stage 3 is done via separate commands after
+approval — `auto-lorebook plan <id>` and `auto-lorebook extract <id>`.
+See the [CLI reference](../reference/cli.md) for details.
 
 ## Regenerating substages
 

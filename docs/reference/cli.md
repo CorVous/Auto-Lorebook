@@ -50,6 +50,21 @@ auto-lorebook readings list
 auto-lorebook readings show <source_id>
 ```
 
+```bash
+auto-lorebook plan <source_id>
+auto-lorebook extract <source_id>
+```
+
+`plan` runs Stage 2 (planner): routes claim bullets to entities and
+writes `pending/<id>/plan.yaml`. Refuses to run unless the wiki-side
+`reading.md` exists (run `approve-reading` first). See
+[Stage 2](../pipeline/planner.md).
+
+`extract` runs Stage 3 (extractor): locates verbatim transcript spans
+and writes proposal YAMLs under `pending/<id>/proposals/`. Refuses to
+run unless `pending/<id>/plan.yaml` exists (run `plan` first). See
+[Stage 3](../pipeline/extractor.md).
+
 ## Plans
 
 ```bash

@@ -20,7 +20,9 @@ from auto_lorebook import entity_yaml, proposal_yaml
 from auto_lorebook import review as review_mod
 from auto_lorebook.commands import (
     approve_reading_cmd,
+    extract_cmd,
     generate_reading_cmd,
+    plan_cmd,
     review_cmd,
 )
 from auto_lorebook.commands.review import InteractiveReviewer
@@ -345,6 +347,8 @@ class TestAutoApprove:
                 approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
                 == 0
             )
+            plan_cmd.run(_args(source_id="yt-abc12345678"))
+            extract_cmd.run(_args(source_id="yt-abc12345678"))
             rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=True))
         assert rc == 0
         # Stub created
@@ -392,6 +396,8 @@ class TestEmptyDir:
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
             approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+            plan_cmd.run(_args(source_id="yt-abc12345678"))
+            extract_cmd.run(_args(source_id="yt-abc12345678"))
             # Drain via auto-approve, then run again — should be empty.
             review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=True))
             capsys.readouterr()
@@ -456,6 +462,8 @@ class TestMultiTargetBundle:
                 approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
                 == 0
             )
+            plan_cmd.run(_args(source_id="yt-abc12345678"))
+            extract_cmd.run(_args(source_id="yt-abc12345678"))
             rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=True))
         assert rc == 0
 
@@ -502,6 +510,8 @@ class TestMultiTargetBundle:
                 approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
                 == 0
             )
+            plan_cmd.run(_args(source_id="yt-abc12345678"))
+            extract_cmd.run(_args(source_id="yt-abc12345678"))
 
         result = review_mod.run(
             cfg=cfg_mod.load_config(),
@@ -546,6 +556,8 @@ class TestMultiTargetBundle:
                 approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
                 == 0
             )
+            plan_cmd.run(_args(source_id="yt-abc12345678"))
+            extract_cmd.run(_args(source_id="yt-abc12345678"))
 
         result = review_mod.run(
             cfg=cfg_mod.load_config(),
@@ -765,6 +777,8 @@ class TestInteractiveReviewerUndoIntegration:
                 approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
                 == 0
             )
+            plan_cmd.run(_args(source_id="yt-abc12345678"))
+            extract_cmd.run(_args(source_id="yt-abc12345678"))
             rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=False))
         assert rc == 0
 
@@ -822,6 +836,8 @@ class TestInteractiveReviewerUndoIntegration:
                 approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
                 == 0
             )
+            plan_cmd.run(_args(source_id="yt-abc12345678"))
+            extract_cmd.run(_args(source_id="yt-abc12345678"))
             rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=False))
         assert rc == 0
 

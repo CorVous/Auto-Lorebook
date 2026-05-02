@@ -14,8 +14,10 @@ from auto_lorebook.commands import (
     approve_reading_cmd,
     configure_context_cmd,
     entities_cmd,
+    extract_cmd,
     generate_reading_cmd,
     ingest_cmd,
+    plan_cmd,
     plans_cmd,
     regenerate_reading_cmd,
     reject_ingest_cmd,
@@ -105,6 +107,8 @@ def create_parser() -> argparse.ArgumentParser:
     configure_context_cmd.add_parser(subparsers, common_parser)
     generate_reading_cmd.add_parser(subparsers, common_parser)
     approve_reading_cmd.add_parser(subparsers, common_parser)
+    plan_cmd.add_parser(subparsers, common_parser)
+    extract_cmd.add_parser(subparsers, common_parser)
     regenerate_reading_cmd.add_parser(subparsers, common_parser)
     entities_cmd.add_parser(subparsers, common_parser)
     plans_cmd.add_parser(subparsers, common_parser)

@@ -16,7 +16,9 @@ import yaml
 from auto_lorebook import plan_yaml
 from auto_lorebook.commands import (
     approve_reading_cmd,
+    extract_cmd,
     generate_reading_cmd,
+    plan_cmd,
     regenerate_reading_cmd,
 )
 from auto_lorebook.openrouter import OpenRouterResponse
@@ -291,75 +293,16 @@ class TestApproveReading:
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert approved.exists()
         assert "reading_status: approved" in approved.read_text(encoding="utf-8")
+        # approve-reading must NOT cascade into plan/extract
+        assert not (tmp_home / "pending" / "yt-abc12345678" / "plan.yaml").exists()
+        assert not (tmp_home / "pending" / "yt-abc12345678" / "proposals").exists()
         out = capsys.readouterr().out
         assert "Approved" in out
-
-    def test_writes_plan_yaml_with_multi_target_claim(
-        self,
-        tmp_home: Path,
-        ingested_wiki: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        _write_user_config(tmp_home, ingested_wiki)
-        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
-
-        client = MagicMock()
-        _wire_client_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
-        ):
-            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
-
-        assert rc == 0
-        plan_path = tmp_home / "pending" / "yt-abc12345678" / "plan.yaml"
-        assert plan_path.exists()
-        first_line = next(ln for ln in plan_path.read_text().splitlines() if ln.strip())
-        assert first_line.startswith("schema_version:")
-
-        plan = plan_yaml.read(plan_path)
-        # Exit-criterion: at least one claim routes to multiple targets
-        assert any(len(c.targets) > 1 for c in plan.planned_claims)
-
-        out = capsys.readouterr().out
-        assert "Plan:" in out
 
     def test_no_draft_errors(self, tmp_home: Path, ingested_wiki: Path) -> None:
         _write_user_config(tmp_home, ingested_wiki)
         rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
         assert rc == 1
-
-    def test_writes_proposals_via_stage3(
-        self,
-        tmp_home: Path,
-        ingested_wiki: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        _write_user_config(tmp_home, ingested_wiki)
-        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
-
-        client = MagicMock()
-        _wire_client_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
-        ):
-            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
-
-        assert rc == 0
-        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
-        assert proposals_dir.is_dir()
-        # multi-target plan claim → two proposal files (Aldara, Second Age)
-        files = sorted(proposals_dir.glob("*.yaml"))
-        assert len(files) == 2
-        names = {f.name for f in files}
-        assert "aldara-f001.yaml" in names
-        assert "second-age-f001.yaml" in names
-        out = capsys.readouterr().out
-        assert "Extracted 2 proposal" in out
-        assert "(0 flagged)" in out
 
 
 class TestApproveReadingInteractive:
@@ -413,8 +356,8 @@ class TestApproveReadingInteractive:
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert approved.exists()
         assert "reading_status: approved" in approved.read_text(encoding="utf-8")
-        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
-        assert proposals_dir.is_dir()
+        # approve-reading no longer cascades into plan/extract
+        assert not (tmp_home / "pending" / "yt-abc12345678" / "plan.yaml").exists()
 
     def test_non_tty_without_yes_errors(
         self,
@@ -667,3 +610,97 @@ class TestRegenerateReading:
         added = client.complete.call_count - first_complete_count
         # one call for seg-002
         assert added == 1
+
+
+class TestPlan:
+    def test_refuses_without_wiki_reading(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Plan fails if wiki-side reading.md doesn't exist."""
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        rc = plan_cmd.run(_args(source_id="yt-abc12345678"))
+        assert rc == 1
+
+    def test_success_writes_plan_yaml(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Full chain: generate → approve → plan writes plan.yaml."""
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+            rc = plan_cmd.run(_args(source_id="yt-abc12345678"))
+
+        assert rc == 0
+        plan_path = tmp_home / "pending" / "yt-abc12345678" / "plan.yaml"
+        assert plan_path.exists()
+        first_line = next(ln for ln in plan_path.read_text().splitlines() if ln.strip())
+        assert first_line.startswith("schema_version:")
+
+        loaded = plan_yaml.read(plan_path)
+        assert any(len(c.targets) > 1 for c in loaded.planned_claims)
+
+        out = capsys.readouterr().out
+        assert "Plan:" in out
+
+
+class TestExtract:
+    def test_refuses_without_plan_yaml(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Extract fails if pending/<id>/plan.yaml doesn't exist."""
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+        rc = extract_cmd.run(_args(source_id="yt-abc12345678"))
+        assert rc == 1
+
+    def test_success_writes_proposals(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Full chain: generate → approve → plan → extract writes proposals."""
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+            plan_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = extract_cmd.run(_args(source_id="yt-abc12345678"))
+
+        assert rc == 0
+        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        assert proposals_dir.is_dir()
+        files = sorted(proposals_dir.glob("*.yaml"))
+        assert len(files) == 2
+        names = {f.name for f in files}
+        assert "aldara-f001.yaml" in names
+        assert "second-age-f001.yaml" in names
+
+        out = capsys.readouterr().out
+        assert "Extracted 2 proposal" in out
+        assert "(0 flagged)" in out

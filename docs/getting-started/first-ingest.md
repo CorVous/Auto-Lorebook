@@ -58,7 +58,7 @@ auto-lorebook approve-reading yt-abc123
 
 The session prints the draft and prompts:
 
-- `a` — approve (flips status, copies to wiki, kicks off plan + extract).
+- `a` — approve (flips status, copies to wiki).
 - `e` — edit in `$EDITOR`. Fix:
     - Segment boundaries or titles.
     - Speaker attributions.
@@ -75,10 +75,25 @@ Pass `--yes` to skip the loop and auto-approve (required for
 scripted/CI runs). See [reading stage](../pipeline/reading.md) for
 deeper treatment.
 
-## 4. Review facts
+## 4. Plan and extract
 
-The planner and extractor run automatically after reading approval. To
-walk through proposed facts:
+After approving the reading, run Stage 2 (planner) and Stage 3
+(extractor) explicitly:
+
+```bash
+auto-lorebook plan yt-abc123
+auto-lorebook extract yt-abc123
+```
+
+`plan` routes claim bullets to entities and writes
+`pending/yt-abc123/plan.yaml`; it refuses if the wiki-side `reading.md`
+is missing. `extract` locates verbatim transcript spans for each
+planned claim and writes proposal YAMLs under
+`pending/yt-abc123/proposals/`; it refuses if `plan.yaml` is missing.
+
+## 5. Review facts
+
+To walk through proposed facts:
 
 ```bash
 auto-lorebook review ingest-2026-04-20-a
@@ -95,7 +110,7 @@ stub atomically. If review reveals systematic routing errors, bail out
 with `auto-lorebook replan <ingest_id>` instead of fighting proposal by
 proposal. See [fact review](../pipeline/review.md).
 
-## 5. View the wiki
+## 6. View the wiki
 
 Approved facts land in `<category>/<slug>.yaml`; the summarizer
 regenerates `<category>/<slug>.md` with citation-backed prose. Browse
