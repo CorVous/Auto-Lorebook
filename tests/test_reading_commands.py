@@ -319,7 +319,7 @@ class TestApproveReading:
 
 
 class TestApproveReadingInteractive:
-    """Interactive approve-reading loop ([a]/[e]/[r]/[u]/[q] + --yes)."""
+    """Hierarchical interactive approve-reading loop."""
 
     def _patch_inputs(
         self, monkeypatch: pytest.MonkeyPatch, answers: list[str]
@@ -344,34 +344,16 @@ class TestApproveReadingInteractive:
             lambda: True,
         )
 
-    def test_approve_keystroke_runs_full_pipeline(
-        self,
-        tmp_home: Path,
-        ingested_wiki: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        _write_user_config(tmp_home, ingested_wiki)
+    def _generate(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        """Run generate-reading; return mock client."""
         monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
-        self._force_tty(monkeypatch)
-        prompts = self._patch_inputs(monkeypatch, ["a"])
-
         client = MagicMock()
         _wire_client_responses(client)
         with patch(
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
-
-        assert rc == 0
-        # Loop must have prompted before approving.
-        assert len(prompts) >= 1
-        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
-        assert approved.exists()
-        assert "# Reading: Session 3" in approved.read_text(encoding="utf-8")
-        assert "reading_status" not in approved.read_text(encoding="utf-8")
-        # approve-reading no longer cascades into plan/extract
-        assert not (tmp_home / "pending" / "yt-abc12345678" / "plan.yaml").exists()
+        return client
 
     def test_non_tty_without_yes_errors(
         self,
@@ -380,225 +362,355 @@ class TestApproveReadingInteractive:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _write_user_config(tmp_home, ingested_wiki)
-        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
         monkeypatch.setattr(
             "auto_lorebook.commands.approve_reading._is_interactive",
             lambda: False,
         )
+        self._generate(monkeypatch)
 
-        client = MagicMock()
-        _wire_client_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
-        ):
-            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
 
         assert rc == 1
-        # Pipeline must not have copied to wiki.
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert not approved.exists()
 
-    def test_quit_without_action_is_noop(
+    def test_outer_quit_without_marks_writes_nothing(
         self,
         tmp_home: Path,
         ingested_wiki: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _write_user_config(tmp_home, ingested_wiki)
-        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
         self._force_tty(monkeypatch)
         self._patch_inputs(monkeypatch, ["q"])
+        self._generate(monkeypatch)
 
-        client = MagicMock()
-        _wire_client_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
-        ):
-            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
 
         assert rc == 0
-        # No wiki copy, no plan, pending dir intact.
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert not approved.exists()
-        assert not (tmp_home / "pending" / "yt-abc12345678" / "plan.yaml").exists()
-        # sidecar and segments exist; no old reading.md
         pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
         assert (pending / "reading.yaml").exists()
         assert not (pending / "reading.md").exists()
+        # segments still draft
+        import yaml as _yaml  # noqa: PLC0415
 
-    def test_reject_then_quit_with_confirm_deletes_pending(
-        self,
-        tmp_home: Path,
-        ingested_wiki: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        _write_user_config(tmp_home, ingested_wiki)
-        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
-        self._force_tty(monkeypatch)
-        self._patch_inputs(monkeypatch, ["r", "q", "y"])
-
-        client = MagicMock()
-        _wire_client_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
-        ):
-            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
-
-        assert rc == 0
-        assert not (tmp_home / "pending" / "yt-abc12345678" / "reading").exists()
-        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
-        assert not approved.exists()
-
-    def test_reject_then_quit_decline_confirm_keeps_pending(
-        self,
-        tmp_home: Path,
-        ingested_wiki: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        _write_user_config(tmp_home, ingested_wiki)
-        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
-        self._force_tty(monkeypatch)
-        self._patch_inputs(monkeypatch, ["r", "q", "n"])
-
-        client = MagicMock()
-        _wire_client_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
-        ):
-            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
-
-        assert rc == 0
-        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
-        assert (pending / "reading.yaml").exists()
-        assert not (pending / "reading.md").exists()
-
-    def test_reject_then_undo_then_approve(
-        self,
-        tmp_home: Path,
-        ingested_wiki: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        _write_user_config(tmp_home, ingested_wiki)
-        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
-        self._force_tty(monkeypatch)
-        self._patch_inputs(monkeypatch, ["r", "u", "a"])
-
-        client = MagicMock()
-        _wire_client_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
-        ):
-            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
-
-        assert rc == 0
-        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
-        assert approved.exists()
-        assert "# Reading: Session 3" in approved.read_text(encoding="utf-8")
-        assert "reading_status" not in approved.read_text(encoding="utf-8")
-
-    def test_undo_restores_segment_files(
-        self,
-        tmp_home: Path,
-        ingested_wiki: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """[u] rolls back in-session mutations to segment files."""
-        _write_user_config(tmp_home, ingested_wiki)
-        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
-        self._force_tty(monkeypatch)
-
-        seg001_path = (
-            tmp_home
-            / "pending"
-            / "yt-abc12345678"
-            / "reading"
-            / "segments"
-            / "seg-001.md"
+        fm = _yaml.safe_load(
+            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
         )
+        assert fm["segment_status"] == "draft"
 
-        corrupted = (
-            b"---\nschema_version: 1\nsegment_id: seg-001\n"
-            b"segment_status: accepted\nstart: '0:00:00'\nend: '0:02:00'\n"
-            b"title: CORRUPTED\nspeaker: DM\nnotes: null\noverrides: []\n"
-            b"---\nCORRUPTED BODY\n"
-        )
-        call_count = {"n": 0}
-
-        def fake_input(_prompt: str = "") -> str:
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                # first prompt: corrupt seg-001 then say 'u'
-                seg001_path.write_bytes(corrupted)
-                return "u"
-            # after undo, approve
-            return "a"
-
-        monkeypatch.setattr("builtins.input", fake_input)
-
-        client = MagicMock()
-        _wire_client_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
-        ):
-            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
-
-        assert rc == 0
-        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
-        assert approved.exists()
-        # After [u][a]: wiki copy reflects restored content, not corrupted title
-        assert "CORRUPTED" not in approved.read_text(encoding="utf-8")
-        assert "Intro" in approved.read_text(encoding="utf-8")
-
-    def test_edit_invokes_editor_preview_only(
+    def test_open_segment_then_accept_then_quit_one_segment_only(
         self,
         tmp_home: Path,
         ingested_wiki: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        """Accept only seg-001; gate doesn't fire; output mentions undecided."""
         _write_user_config(tmp_home, ingested_wiki)
-        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
-        monkeypatch.setenv("EDITOR", "my-fake-editor")
         self._force_tty(monkeypatch)
-        self._patch_inputs(monkeypatch, ["e", "a"])
+        # open seg 1, accept it, then quit
+        self._patch_inputs(monkeypatch, ["1", "a", "q"])
+        self._generate(monkeypatch)
+
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert not approved.exists()
+        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        import yaml as _yaml  # noqa: PLC0415
+
+        fm1 = _yaml.safe_load(
+            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
+        )
+        assert fm1["segment_status"] == "accepted"
+        out = capsys.readouterr().out
+        assert "Still" in out
+        assert "undecided" in out
+
+    def test_full_walkthrough_accept_all_fires_gate(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Accept both segments; gate fires; wiki reading.md written."""
+        _write_user_config(tmp_home, ingested_wiki)
+        self._force_tty(monkeypatch)
+        self._patch_inputs(monkeypatch, ["1", "a", "2", "a", "q"])
+        self._generate(monkeypatch)
+
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert approved.exists()
+        assert "# Reading: Session 3" in approved.read_text(encoding="utf-8")
+        assert "reading_status" not in approved.read_text(encoding="utf-8")
+        out = capsys.readouterr().out
+        assert "Approved" in out
+
+    def test_n_jumps_to_next_draft(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """[n] jumps to next draft; accepting both fires gate."""
+        _write_user_config(tmp_home, ingested_wiki)
+        self._force_tty(monkeypatch)
+        self._patch_inputs(monkeypatch, ["n", "a", "n", "a", "q"])
+        self._generate(monkeypatch)
+
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert approved.exists()
+        out = capsys.readouterr().out
+        assert "Approved" in out
+
+    def test_skip_bullets_in_per_segment(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """[s] skips bullets; gate fires when both segments decided."""
+        _write_user_config(tmp_home, ingested_wiki)
+        self._force_tty(monkeypatch)
+        self._patch_inputs(monkeypatch, ["1", "s", "2", "a", "q"])
+        self._generate(monkeypatch)
+
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert approved.exists()
+        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        import yaml as _yaml  # noqa: PLC0415
+
+        fm1 = _yaml.safe_load(
+            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
+        )
+        assert fm1["segment_status"] == "skipped"
+
+    def test_undo_clears_pending_mark(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """[u] in seg prompt clears mark; [b] returns to outer; seg stays draft."""
+        _write_user_config(tmp_home, ingested_wiki)
+        self._force_tty(monkeypatch)
+        # open 1, accept (returns to outer), re-open 1, undo (stays), back, quit
+        self._patch_inputs(monkeypatch, ["1", "a", "1", "u", "b", "q"])
+        self._generate(monkeypatch)
+
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert not approved.exists()
+        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        import yaml as _yaml  # noqa: PLC0415
+
+        fm1 = _yaml.safe_load(
+            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
+        )
+        assert fm1["segment_status"] == "draft"
+
+    def test_back_returns_to_outer_without_committing(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """[b] from seg prompt returns to outer; nothing committed."""
+        _write_user_config(tmp_home, ingested_wiki)
+        self._force_tty(monkeypatch)
+        self._patch_inputs(monkeypatch, ["1", "b", "q"])
+        self._generate(monkeypatch)
+
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert not approved.exists()
+
+    def test_meta_opens_sidecar_in_editor(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """[m] opens reading.yaml in $EDITOR."""
+        _write_user_config(tmp_home, ingested_wiki)
+        self._force_tty(monkeypatch)
+        monkeypatch.setenv("EDITOR", "my-fake-editor")
+        self._patch_inputs(monkeypatch, ["m", "q"])
+        self._generate(monkeypatch)
 
         calls: list[list[str]] = []
 
         def fake_run(cmd: list[str], **_kwargs: object) -> object:
-            calls.append(cmd)
+            calls.append(list(cmd))
             return MagicMock(returncode=0)
 
         monkeypatch.setattr(
             "auto_lorebook.commands.approve_reading.subprocess.run", fake_run
         )
 
-        client = MagicMock()
-        _wire_client_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
-        ):
-            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
 
         assert rc == 0
         assert len(calls) == 1
         assert calls[0][0] == "my-fake-editor"
-        assert calls[0][1].endswith(".draft-edit.md")
+        assert calls[0][1].endswith("reading.yaml")
 
-        out = capsys.readouterr().out
-        assert "preview-only" in out
-        assert "edits were not saved" in out
+    def test_edit_opens_segment_md_in_editor(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """[e] opens seg-001.md in $EDITOR; status stays draft."""
+        _write_user_config(tmp_home, ingested_wiki)
+        self._force_tty(monkeypatch)
+        monkeypatch.setenv("EDITOR", "my-fake-editor")
+        # open seg 1, edit, back, quit
+        self._patch_inputs(monkeypatch, ["1", "e", "b", "q"])
+        self._generate(monkeypatch)
 
-        # segment files must be unchanged (edits discarded)
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_kwargs: object) -> object:
+            calls.append(list(cmd))
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr(
+            "auto_lorebook.commands.approve_reading.subprocess.run", fake_run
+        )
+
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        assert len(calls) == 1
+        assert calls[0][0] == "my-fake-editor"
+        assert calls[0][1].endswith("seg-001.md")
+
         pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
-        assert (pending / "segments" / "seg-001.md").exists()
-        assert (pending / "segments" / "seg-002.md").exists()
+        import yaml as _yaml  # noqa: PLC0415
+
+        fm1 = _yaml.safe_load(
+            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
+        )
+        assert fm1["segment_status"] == "draft"
+
+    def test_edit_then_accept_persists_body_changes_through_engine(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Editor mutation of seg-001 body reflected in wiki reading.md."""
+        _write_user_config(tmp_home, ingested_wiki)
+        self._force_tty(monkeypatch)
+        monkeypatch.setenv("EDITOR", "my-fake-editor")
+        # open 1, edit, accept; open 2, accept; quit
+        self._patch_inputs(monkeypatch, ["1", "e", "a", "2", "a", "q"])
+        self._generate(monkeypatch)
+
+        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        seg001_path = pending / "segments" / "seg-001.md"
+
+        def fake_run(cmd: list[str], **_kwargs: object) -> object:
+            # editor side effect: append custom text to seg-001 body
+            if cmd[1].endswith("seg-001.md"):
+                current = seg001_path.read_text(encoding="utf-8")
+                seg001_path.write_text(
+                    current + "\n- CUSTOM EDITED BULLET\n", encoding="utf-8"
+                )
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr(
+            "auto_lorebook.commands.approve_reading.subprocess.run", fake_run
+        )
+
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert approved.exists()
+        content = approved.read_text(encoding="utf-8")
+        assert "CUSTOM EDITED BULLET" in content
+        import yaml as _yaml  # noqa: PLC0415
+
+        fm1 = _yaml.safe_load(
+            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
+        )
+        assert fm1["segment_status"] == "accepted"
+        out = capsys.readouterr().out
+        assert "Approved" in out
+
+    def test_ctrl_c_in_outer_writes_nothing(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ctrl-C at outer prompt returns 130; no commits."""
+        _write_user_config(tmp_home, ingested_wiki)
+        self._force_tty(monkeypatch)
+        self._generate(monkeypatch)
+
+        call_count = {"n": 0}
+
+        def fake_input(_prompt: str = "") -> str:
+            call_count["n"] += 1
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("builtins.input", fake_input)
+
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 130
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert not approved.exists()
+
+    def test_ctrl_c_in_segment_writes_nothing(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ctrl-C inside per-segment prompt returns 130; no commits."""
+        _write_user_config(tmp_home, ingested_wiki)
+        self._force_tty(monkeypatch)
+        self._generate(monkeypatch)
+
+        call_count = {"n": 0}
+
+        def fake_input(_prompt: str = "") -> str:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return "1"  # outer: open segment 1
+            raise KeyboardInterrupt  # inside seg prompt
+
+        monkeypatch.setattr("builtins.input", fake_input)
+
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 130
+        approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
+        assert not approved.exists()
 
 
 class TestRegenerateReading:
