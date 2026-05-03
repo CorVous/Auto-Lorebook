@@ -106,7 +106,7 @@ def _segment_files() -> list[SegmentFile]:
             title="Introduction",
             speaker="DM",
         ),
-        body="_No claims extracted from this segment.\n",
+        body="_No claims extracted from this segment._\n",
     )
     seg002 = SegmentFile(
         frontmatter=SegmentFrontmatter(
@@ -118,7 +118,7 @@ def _segment_files() -> list[SegmentFile]:
             speaker="mixed",
             notes="off-topic",
         ),
-        body="_No claims extracted from this segment.\n",
+        body="_No claims extracted from this segment._\n",
     )
     seg003 = SegmentFile(
         frontmatter=SegmentFrontmatter(

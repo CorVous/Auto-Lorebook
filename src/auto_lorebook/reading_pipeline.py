@@ -446,7 +446,7 @@ def _run_full(cfg: cfg_mod.Config, source_id: str) -> GenerateResult:
     segs_dir.mkdir(parents=True, exist_ok=True)
     flags_by_seg = _flags_by_segment(structure)
     for seg in structure.segments:
-        body = _build_segment_body(
+        body = build_segment_body(
             seg,
             bullets.segments.get(seg.id, []),
             flags_by_seg.get(seg.id, []),
@@ -538,7 +538,7 @@ def _run_summarize_only(
     for seg in structure.segments:
         if seg.id not in target_ids:
             continue
-        body = _build_segment_body(
+        body = build_segment_body(
             seg,
             new_bullets.segments.get(seg.id, []),
             flags_by_seg.get(seg.id, []),
@@ -666,7 +666,7 @@ def _flags_by_segment(
     return out
 
 
-def _build_segment_body(
+def build_segment_body(
     _seg: structure_mod.Segment,
     bullets: list[stage1b_mod.Bullet],
     flags: list[structure_mod.UncertaintyFlag],
