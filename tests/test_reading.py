@@ -1,4 +1,4 @@
-"""Tests for reading.py — frontmatter helpers (linkify, apply, read, set_status, write).
+"""Tests for reading.py — frontmatter helpers (linkify, apply, read, write).
 
 Assembly tests live in test_reading_assembly.py.
 """
@@ -14,7 +14,6 @@ from auto_lorebook.reading import (
     apply_name_corrections,
     linkify_timestamp,
     read_frontmatter,
-    set_status,
     write,
 )
 
@@ -26,7 +25,6 @@ _SAMPLE_READING_MD = """\
 ---
 schema_version: 1
 source_id: yt-abc12345678
-reading_status: draft
 ---
 # Reading: Session 3
 
@@ -74,7 +72,6 @@ class TestWriteReadFrontmatter:
         write(path, _SAMPLE_READING_MD)
         fm = read_frontmatter(path)
         assert fm["source_id"] == "yt-abc12345678"
-        assert fm["reading_status"] == "draft"
 
     def test_read_frontmatter_missing_raises(self, tmp_path: Path) -> None:
         with pytest.raises(ReadingError):
@@ -85,16 +82,3 @@ class TestWriteReadFrontmatter:
         path.write_text("no frontmatter here", encoding="utf-8")
         with pytest.raises(ReadingError):
             read_frontmatter(path)
-
-    def test_set_status_flip_to_approved(self, tmp_path: Path) -> None:
-        path = tmp_path / "reading.md"
-        write(path, _SAMPLE_READING_MD)
-        set_status(path, "approved")
-        fm = read_frontmatter(path)
-        assert fm["reading_status"] == "approved"
-
-    def test_set_status_rejects_bad_value(self, tmp_path: Path) -> None:
-        path = tmp_path / "reading.md"
-        write(path, _SAMPLE_READING_MD)
-        with pytest.raises(ReadingError):
-            set_status(path, "published")

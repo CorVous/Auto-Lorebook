@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 _MAX_SCHEMA = 1
 _FRONTMATTER_RE = re.compile(r"^---\n(?P<fm>.*?)\n---\n(?P<rest>.*)$", re.DOTALL)
 
-VALID_STATUSES = frozenset({"draft", "approved"})
+VALID_STATUSES = frozenset({"draft", "accepted", "skipped", "regenerating"})
 
 
 class SegmentFileError(ValueError):

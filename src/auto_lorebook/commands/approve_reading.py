@@ -11,13 +11,45 @@ from typing import TYPE_CHECKING
 from auto_lorebook import config as cfg_mod
 from auto_lorebook import reading_pipeline as pipeline
 from auto_lorebook.interactive import _is_interactive
+from auto_lorebook.reading_review import (
+    AcceptDecision,
+    CommitDecision,
+    SegmentView,
+    UndoDecision,
+)
 
 if TYPE_CHECKING:
     import argparse
 
+    from auto_lorebook.reading_review import SegmentDecision
+
 _logger = logging.getLogger(__name__)
 
 _PROMPT = "[a]pprove / [e]dit / [r]eject / [u]ndo / [q]uit > "
+
+
+class AutoAcceptReviewer:
+    """Marks every still-draft segment accepted, then commits unconditionally.
+
+    Used by `--yes` (non-interactive) path and `reading_pipeline.approve`.
+    Interactive hierarchical UX lands in slice #4.
+    """
+
+    by_label = "auto-accept"
+
+    def decide_segment(self, view: SegmentView) -> SegmentDecision:
+        # Already terminal on disk — don't overwrite with a pending mark.
+        if view.current_status in {"accepted", "skipped", "regenerating"}:
+            return UndoDecision()
+        return AcceptDecision()
+
+    def decide_quit(
+        self,
+        pending: tuple[SegmentView, ...],  # noqa: ARG002
+    ) -> CommitDecision:
+        return CommitDecision()
+
+
 _RENDER_LINES = 40
 
 

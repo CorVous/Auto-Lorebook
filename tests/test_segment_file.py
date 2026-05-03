@@ -111,12 +111,12 @@ class TestDefaultStatusDraft:
 
 
 class TestSetStatus:
-    def test_set_status_flips_to_approved(self, tmp_path: Path) -> None:
+    def test_set_status_flips_to_accepted(self, tmp_path: Path) -> None:
         p = tmp_path / "seg-001.md"
         write(_sf(), p)
-        set_status(p, "approved")
+        set_status(p, "accepted")
         loaded = read(p)
-        assert loaded.frontmatter.segment_status == "approved"
+        assert loaded.frontmatter.segment_status == "accepted"
 
     def test_set_status_rejects_unknown(self, tmp_path: Path) -> None:
         p = tmp_path / "seg-001.md"
@@ -127,8 +127,8 @@ class TestSetStatus:
     def test_with_status_returns_new_text(self, tmp_path: Path) -> None:
         p = tmp_path / "seg-001.md"
         write(_sf(), p)
-        new_text = with_status(p, "approved")
-        assert "segment_status: approved" in new_text
+        new_text = with_status(p, "accepted")
+        assert "segment_status: accepted" in new_text
         # Original file unchanged
         loaded = read(p)
         assert loaded.frontmatter.segment_status == "draft"

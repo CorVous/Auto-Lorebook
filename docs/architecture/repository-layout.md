@@ -64,10 +64,11 @@ paused mid-review, and resumed.
   `reading.md` land under `<wiki-repo>/sources/<source_id>/`.
   Intermediate reading artifacts (`structure.yaml`, draft
   `reading.md`) live under `pending/`.
-- **Reading approval.** `reading_status` in the draft frontmatter
-  flips to `approved` and the approved `reading.md` is committed to
-  the wiki alongside the raw transcript. `structure.yaml` is retained
-  as an audit artifact for the lifetime of the ingest.
+- **Reading approval.** The wiki-side `reading.md` is written by the
+  reading-review engine when every segment is decided (`accepted` or
+  `skipped`). The presence of the file is the gate — there is no
+  top-level frontmatter flag. `structure.yaml` is retained as an audit
+  artifact for the lifetime of the ingest.
 - **Planning + extraction.** Produces `pending/<ingest_id>/plan.yaml`
   and one YAML per proposed fact under
   `pending/<ingest_id>/proposals/`.

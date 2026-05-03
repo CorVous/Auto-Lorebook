@@ -41,11 +41,12 @@ Every YAML file carries `schema_version` as its first key — see
 
 ### `sources/<source_id>/reading.md`
 
-- **Owner** — tool (draft in pending, approved copy committed to wiki).
-- **Purpose** — segmented, attributed, bulleted reading of the
-  transcript. Frontmatter carries `reading_status`,
-  `name_corrections`, and input hashes.
-- **Details** — [Stage 1: reading](../pipeline/reading.md#reading-assembly).
+- **Owner** — tool (written to wiki when the reading-review engine commits
+  with every segment decided).
+- **Purpose** — segmented, attributed, bulleted reading of the transcript.
+  Frontmatter carries `name_corrections`, `default_speaker`,
+  `session_date`, `source_*`. File presence is the approval gate.
+- **Details** — [Stage 1: reading](../pipeline/reading.md#reading-review).
 
 ### `<category>/<slug>.yaml`
 

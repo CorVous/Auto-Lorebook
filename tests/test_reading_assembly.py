@@ -14,8 +14,7 @@ from tests._reading_fixtures import (
 )
 
 # Golden bytes: assembled output that the new assemble() must produce.
-# Derived from the legacy reading.assemble() output, with reading_status: approved
-# (legacy produced draft; wiki-side always approved).
+# No reading_status key — file presence is the approval gate.
 _GOLDEN = (
     "---\n"
     "schema_version: 1\n"
@@ -25,7 +24,6 @@ _GOLDEN = (
     "source_type: youtube\n"
     "session_date: null\n"
     "ingested_at: '2026-04-20T14:35:12Z'\n"
-    "reading_status: approved\n"
     "default_speaker: DM\n"
     "name_corrections: {}\n"
     "---\n"
@@ -67,10 +65,9 @@ class TestGoldenByteMatch:
         result = assemble(segments=_segment_files(), sidecar=_sidecar(), info=_info())
         assert result == _GOLDEN
 
-    def test_always_approved_status(self) -> None:
+    def test_no_reading_status_key(self) -> None:
         result = assemble(segments=_segment_files(), sidecar=_sidecar(), info=_info())
-        assert "reading_status: approved" in result
-        assert "reading_status: draft" not in result
+        assert "reading_status" not in result
 
 
 class TestNoSourceUrl:
@@ -130,14 +127,14 @@ class TestEmptySegmentMarker:
 
 
 class TestSegmentStatusIgnored:
-    def test_approved_segment_still_assembled(self) -> None:
+    def test_accepted_segment_still_assembled(self) -> None:
         segs = _segment_files()
-        # flip one to approved — should not affect output
+        # flip one to accepted — should not affect output
         sf = segs[0]
-        approved_sf = SegmentFile(
+        accepted_sf = SegmentFile(
             frontmatter=SegmentFrontmatter(
                 segment_id=sf.frontmatter.segment_id,
-                segment_status="approved",
+                segment_status="accepted",
                 start=sf.frontmatter.start,
                 end=sf.frontmatter.end,
                 title=sf.frontmatter.title,
@@ -146,12 +143,12 @@ class TestSegmentStatusIgnored:
             body=sf.body,
         )
         result = assemble(
-            segments=[approved_sf, segs[1], segs[2]],
+            segments=[accepted_sf, segs[1], segs[2]],
             sidecar=_sidecar(),
             info=_info(),
         )
         assert "Introduction" in result
-        assert "reading_status: approved" in result
+        assert "reading_status" not in result
 
 
 class TestPureNoFilesystem:

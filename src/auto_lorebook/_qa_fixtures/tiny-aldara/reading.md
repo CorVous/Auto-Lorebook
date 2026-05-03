@@ -6,7 +6,6 @@ source_url: null
 source_type: srt
 session_date: null
 ingested_at: '2026-01-01T00:00:00Z'
-reading_status: approved
 default_speaker: DM
 name_corrections: {}
 ---
