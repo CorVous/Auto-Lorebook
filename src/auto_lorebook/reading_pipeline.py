@@ -1,8 +1,8 @@
 """High-level orchestration of the Stage 1 reading pipeline.
 
-Exposes `generate`, `approve`, and `regenerate` entry points used by
-the three reading subcommands. The command modules handle argparse;
-this module handles the wiring between stages.
+Exposes `generate`, `approve`, `regenerate`, and `assemble_draft` entry
+points used by the three reading subcommands. The command modules handle
+argparse; this module handles the wiring between stages.
 """
 
 from __future__ import annotations
@@ -26,6 +26,9 @@ from auto_lorebook import plan_yaml as plan_yaml_mod
 from auto_lorebook import preamble as preamble_mod
 from auto_lorebook import proposal_yaml as proposal_yaml_mod
 from auto_lorebook import reading as reading_mod
+from auto_lorebook import reading_assembly as reading_assembly_mod
+from auto_lorebook import reading_sidecar as sidecar_mod
+from auto_lorebook import segment_file as segment_file_mod
 from auto_lorebook import stage1a as stage1a_mod
 from auto_lorebook import stage1b as stage1b_mod
 from auto_lorebook import stage2 as stage2_mod
@@ -42,6 +45,8 @@ if TYPE_CHECKING:
     from auto_lorebook.info_yaml import Info
     from auto_lorebook.plan_yaml import Plan
     from auto_lorebook.proposal_yaml import Proposal
+    from auto_lorebook.reading_sidecar import Sidecar
+    from auto_lorebook.segment_file import SegmentFile
 
 _logger = logging.getLogger(__name__)
 
@@ -54,7 +59,8 @@ class ReadingPipelineError(RuntimeError):
 class GenerateResult:
     """Paths and warnings produced by a generate/regenerate run."""
 
-    pending_reading_path: Path
+    sidecar_path: Path
+    segments_dir: Path
     structure_path: Path
     bullets_path: Path
     gap_warnings: list[GapWarning]
@@ -78,7 +84,7 @@ class ExtractResult:
 
 
 def generate(cfg: cfg_mod.Config, source_id: str) -> GenerateResult:
-    """Run Stage 1a + 1b from scratch and write the draft reading.md."""
+    """Run Stage 1a + 1b from scratch and write draft segment files."""
     return _run_full(cfg, source_id)
 
 
@@ -102,18 +108,54 @@ def regenerate(
 
 
 def approve(cfg: cfg_mod.Config, source_id: str) -> Path:
-    """Flip the draft to approved and copy it into the wiki."""
-    pending_path = pending_reading_path(source_id)
-    try:
-        approved_text = reading_mod.with_status(pending_path, "approved")
-    except FileNotFoundError as e:
+    """Assemble approved reading from segment files and copy to wiki."""
+    sidecar_path = pending_sidecar_path(source_id)
+    if not sidecar_path.exists():
         msg = f"No draft reading for {source_id!r}. Run `generate-reading` first."
-        raise ReadingPipelineError(msg) from e
-    reading_mod.write(pending_path, approved_text)
-    dest = cfg.wiki_repo_path / "sources" / source_id / "reading.md"
+        raise ReadingPipelineError(msg)
+
+    wiki_repo = cfg.wiki_repo_path
+    info_path = wiki_repo / "sources" / source_id / "info.yaml"
+    try:
+        info = info_yaml_mod.read(info_path)
+    except info_yaml_mod.InfoError as e:
+        raise ReadingPipelineError(str(e)) from e
+
+    try:
+        sc = sidecar_mod.read(sidecar_path)
+    except sidecar_mod.ReadingSidecarError as e:
+        raise ReadingPipelineError(str(e)) from e
+
+    segments = _load_segments(source_id)
+    text = reading_assembly_mod.assemble(segments=segments, sidecar=sc, info=info)
+
+    dest = wiki_repo / "sources" / source_id / "reading.md"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    reading_mod.write(dest, approved_text)
+    reading_mod.write(dest, text)
     return dest
+
+
+def assemble_draft(cfg: cfg_mod.Config, source_id: str) -> str:
+    """Assemble the current segment files into a draft preview string."""
+    sidecar_path = pending_sidecar_path(source_id)
+    if not sidecar_path.exists():
+        msg = f"No draft reading for {source_id!r}. Run `generate-reading` first."
+        raise ReadingPipelineError(msg)
+
+    wiki_repo = cfg.wiki_repo_path
+    info_path = wiki_repo / "sources" / source_id / "info.yaml"
+    try:
+        info = info_yaml_mod.read(info_path)
+    except info_yaml_mod.InfoError as e:
+        raise ReadingPipelineError(str(e)) from e
+
+    try:
+        sc = sidecar_mod.read(sidecar_path)
+    except sidecar_mod.ReadingSidecarError as e:
+        raise ReadingPipelineError(str(e)) from e
+
+    segments = _load_segments(source_id)
+    return reading_assembly_mod.assemble(segments=segments, sidecar=sc, info=info)
 
 
 def pending_dir(source_id: str) -> Path:
@@ -121,8 +163,16 @@ def pending_dir(source_id: str) -> Path:
     return cfg_mod.config_dir() / "pending" / source_id / "reading"
 
 
-def pending_reading_path(source_id: str) -> Path:
-    return pending_dir(source_id) / "reading.md"
+def pending_sidecar_path(source_id: str) -> Path:
+    return pending_dir(source_id) / "reading.yaml"
+
+
+def pending_segments_dir(source_id: str) -> Path:
+    return pending_dir(source_id) / "segments"
+
+
+def pending_segment_path(source_id: str, segment_id: str) -> Path:
+    return pending_segments_dir(source_id) / f"{segment_id}.md"
 
 
 def pending_structure_path(source_id: str) -> Path:
@@ -379,17 +429,48 @@ def _run_full(cfg: cfg_mod.Config, source_id: str) -> GenerateResult:
         bullets.segments.setdefault(seg.id, [])
     stage1b_mod.write_bullets(bullets, pending_bullets_path(source_id))
 
-    name_corrections = _load_existing_name_corrections(source_id)
-    text = reading_mod.assemble(
-        info=info,
-        structure=structure,
-        bullets=bullets,
+    # build sidecar from structure defaults
+    existing_sc = _load_existing_sidecar(source_id)
+    name_corrections = existing_sc.name_corrections if existing_sc else {}
+    session_date = existing_sc.session_date if existing_sc else None
+    sc = sidecar_mod.Sidecar(
+        default_speaker=structure.default_speaker,
         name_corrections=name_corrections,
+        session_date=session_date,
     )
-    reading_mod.write(pending_reading_path(source_id), text)
+    sidecar_path = pending_sidecar_path(source_id)
+    sidecar_mod.write(sc, sidecar_path)
+
+    # write per-segment files
+    segs_dir = pending_segments_dir(source_id)
+    segs_dir.mkdir(parents=True, exist_ok=True)
+    flags_by_seg = _flags_by_segment(structure)
+    for seg in structure.segments:
+        body = build_segment_body(
+            seg,
+            bullets.segments.get(seg.id, []),
+            flags_by_seg.get(seg.id, []),
+            info.source_url,
+            name_corrections,
+        )
+        sf = segment_file_mod.SegmentFile(
+            frontmatter=segment_file_mod.SegmentFrontmatter(
+                segment_id=seg.id,
+                segment_status="draft",
+                start=seg.start,
+                end=seg.end,
+                title=seg.title,
+                speaker=seg.speaker,
+                notes=seg.notes,
+                overrides=list(seg.overrides),
+            ),
+            body=body,
+        )
+        segment_file_mod.write(sf, pending_segment_path(source_id, seg.id))
 
     return GenerateResult(
-        pending_reading_path=pending_reading_path(source_id),
+        sidecar_path=sidecar_path,
+        segments_dir=segs_dir,
         structure_path=pending_structure_path(source_id),
         bullets_path=pending_bullets_path(source_id),
         gap_warnings=warnings,
@@ -433,17 +514,55 @@ def _run_summarize_only(
     new_bullets.segments = merged
     stage1b_mod.write_bullets(new_bullets, pending_bullets_path(source_id))
 
-    name_corrections = _load_existing_name_corrections(source_id)
-    text = reading_mod.assemble(
-        info=info,
-        structure=structure,
-        bullets=new_bullets,
+    # always rewrite sidecar (preserving corrections + session_date)
+    existing_sc = _load_existing_sidecar(source_id)
+    name_corrections = existing_sc.name_corrections if existing_sc else {}
+    session_date = existing_sc.session_date if existing_sc else None
+    sc = sidecar_mod.Sidecar(
+        default_speaker=structure.default_speaker,
         name_corrections=name_corrections,
+        session_date=session_date,
     )
-    reading_mod.write(pending_reading_path(source_id), text)
+    sidecar_path = pending_sidecar_path(source_id)
+    sidecar_mod.write(sc, sidecar_path)
+
+    # rewrite only targeted segment files (or all when segment_ids is None)
+    segs_dir = pending_segments_dir(source_id)
+    segs_dir.mkdir(parents=True, exist_ok=True)
+    flags_by_seg = _flags_by_segment(structure)
+    target_ids = (
+        set(segment_ids)
+        if segment_ids is not None
+        else {seg.id for seg in structure.segments}
+    )
+    for seg in structure.segments:
+        if seg.id not in target_ids:
+            continue
+        body = build_segment_body(
+            seg,
+            new_bullets.segments.get(seg.id, []),
+            flags_by_seg.get(seg.id, []),
+            info.source_url,
+            name_corrections,
+        )
+        sf = segment_file_mod.SegmentFile(
+            frontmatter=segment_file_mod.SegmentFrontmatter(
+                segment_id=seg.id,
+                segment_status="draft",
+                start=seg.start,
+                end=seg.end,
+                title=seg.title,
+                speaker=seg.speaker,
+                notes=seg.notes,
+                overrides=list(seg.overrides),
+            ),
+            body=body,
+        )
+        segment_file_mod.write(sf, pending_segment_path(source_id, seg.id))
 
     return GenerateResult(
-        pending_reading_path=pending_reading_path(source_id),
+        sidecar_path=sidecar_path,
+        segments_dir=segs_dir,
         structure_path=pending_structure_path(source_id),
         bullets_path=pending_bullets_path(source_id),
         gap_warnings=gap_check_mod.check(structure),
@@ -516,15 +635,61 @@ def _load_existing_bullets(source_id: str) -> stage1b_mod.ReadingBullets:
     return stage1b_mod.read_bullets(path)
 
 
-def _load_existing_name_corrections(source_id: str) -> dict[str, str]:
-    path = pending_reading_path(source_id)
+def _load_existing_sidecar(source_id: str) -> Sidecar | None:
+    path = pending_sidecar_path(source_id)
     if not path.exists():
-        return {}
+        return None
     try:
-        fm = reading_mod.read_frontmatter(path)
-    except reading_mod.ReadingError:
-        return {}
-    raw = fm.get("name_corrections") or {}
-    if not isinstance(raw, dict):
-        return {}
-    return {str(k): str(v) for k, v in raw.items()}
+        return sidecar_mod.read(path)
+    except sidecar_mod.ReadingSidecarError:
+        return None
+
+
+def _load_segments(source_id: str) -> list[SegmentFile]:
+    """Load all seg-NNN.md files sorted by filename."""
+    segs_dir = pending_segments_dir(source_id)
+    if not segs_dir.exists():
+        return []
+    paths = sorted(segs_dir.glob("*.md"))
+    return [segment_file_mod.read(p) for p in paths]
+
+
+def _flags_by_segment(
+    structure: structure_mod.Structure,
+) -> dict[str, list[structure_mod.UncertaintyFlag]]:
+    out: dict[str, list[structure_mod.UncertaintyFlag]] = {}
+    for flag in structure.uncertainty_flags:
+        for seg in structure.segments:
+            if seg.start <= flag.locator <= seg.end:
+                out.setdefault(seg.id, []).append(flag)
+                break
+    return out
+
+
+def build_segment_body(
+    _seg: structure_mod.Segment,
+    bullets: list[stage1b_mod.Bullet],
+    flags: list[structure_mod.UncertaintyFlag],
+    source_url: str | None,
+    name_corrections: dict[str, str],
+) -> str:
+    """Render segment body: uncertainty flags + bullets (or empty marker)."""
+    from auto_lorebook.timestamps import format_timestamp  # noqa: PLC0415
+
+    parts: list[str] = []
+    for flag in flags:
+        ts = format_timestamp(flag.locator)
+        note = f"; {flag.note}" if flag.note else ""
+        parts.append(f"- [{ts}] uncertain {flag.kind}: {flag.span}{note}")
+    if not bullets:
+        parts.append("_No claims extracted from this segment._")
+    else:
+        for b in bullets:
+            text = reading_mod.apply_name_corrections(b.text, name_corrections)
+            anchor_ts = format_timestamp(b.anchor)
+            link = reading_mod.linkify_timestamp(source_url, b.anchor)
+            if link:
+                parts.append(f"- {text} [[{anchor_ts}]]({link})")
+            else:
+                parts.append(f"- {text} [{anchor_ts}]")
+    return "\n\n".join(parts) + "\n"

@@ -36,13 +36,14 @@ _MINT_RETRY = 16
 _STAGES: dict[str, tuple[str, ...]] = {
     "structure": ("info", "transcript"),
     "summarize": ("info", "transcript", "structure"),
-    "approve": ("info", "transcript", "structure", "bullets", "draft_reading"),
+    "approve": ("info", "transcript", "structure", "bullets", "sidecar", "segments"),
     "plan": (
         "info",
         "transcript",
         "structure",
         "bullets",
-        "draft_reading",
+        "sidecar",
+        "segments",
         "approved_reading",
     ),
 }
@@ -150,8 +151,11 @@ def _seed(cfg: cfg_mod.Config, sid: str, at: str, fixture_name: str) -> None:
     # wiki side first so a half-failed seed leaves only sources/<sid>
     # behind, which `reject-ingest` will tolerate.
     for key in _STAGES[at]:
-        src_name, dest, status = _emit_target(key, wiki_src, pending_reading)
-        _emit_file(fixture_root, src_name, dest, sid, status=status)
+        if key == "segments":
+            _emit_segments_dir(fixture_root, pending_reading / "segments", sid)
+        else:
+            src_name, dest, status = _emit_target(key, wiki_src, pending_reading)
+            _emit_file(fixture_root, src_name, dest, sid, status=status)
 
 
 def _emit_target(
@@ -167,8 +171,8 @@ def _emit_target(
         return "structure.yaml", pending_reading / "structure.yaml", None
     if key == "bullets":
         return "bullets.yaml", pending_reading / "bullets.yaml", None
-    if key == "draft_reading":
-        return "reading.md", pending_reading / "reading.md", "draft"
+    if key == "sidecar":
+        return "reading.yaml", pending_reading / "reading.yaml", None
     if key == "approved_reading":
         return "reading.md", wiki_src / "reading.md", "approved"
     msg = f"internal: unknown seed key {key!r}"
@@ -196,6 +200,25 @@ def _emit_file(
             f"reading_status: {status}",
         )
     atomic_write_text(dest, text)
+
+
+def _emit_segments_dir(
+    fixture_root: Traversable,
+    dest_dir: Path,
+    sid: str,
+) -> None:
+    """Copy all *.md files from fixture segments/ to dest_dir."""
+    src_dir = fixture_root / "segments"
+    if not src_dir.is_dir():
+        msg = f"fixture segments/ directory missing in {fixture_root}"
+        raise SeedIngestError(msg)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for child in src_dir.iterdir():
+        if not child.name.endswith(".md"):
+            continue
+        text = child.read_text(encoding="utf-8")
+        text = text.replace(_SOURCE_ID_PLACEHOLDER, sid)
+        atomic_write_text(dest_dir / child.name, text)
 
 
 def _resolve_fixture(fixture_name: str) -> Traversable:

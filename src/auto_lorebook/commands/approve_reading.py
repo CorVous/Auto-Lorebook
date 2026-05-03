@@ -14,7 +14,6 @@ from auto_lorebook.interactive import _is_interactive
 
 if TYPE_CHECKING:
     import argparse
-    from pathlib import Path
 
 _logger = logging.getLogger(__name__)
 
@@ -32,10 +31,11 @@ def add_parser(
         parents=[common_parser],
         help="Interactively approve, edit, or reject the draft reading",
         description=(
-            "Opens an interactive session over the draft reading.md under "
+            "Opens an interactive session over the draft reading under "
             "~/.auto-lorebook/pending/<source_id>/reading/. Keys: "
-            "[a]pprove (flip to approved + copy to wiki), "
-            "[e]dit (open in $EDITOR), [r]eject (queue pending dir for delete), "
+            "[a]pprove (assemble + copy to wiki), "
+            "[e]dit (preview assembled draft in $EDITOR — preview only), "
+            "[r]eject (queue pending dir for delete), "
             "[u]ndo (restore to session start, clear reject), "
             "[q]uit (commit a queued reject after confirmation, else no-op). "
             "Pass --yes to skip the loop and auto-approve."
@@ -70,7 +70,7 @@ def run(args: argparse.Namespace) -> int:
 
 
 def _approve_only(cfg: cfg_mod.Config, source_id: str) -> int:
-    """Approve reading: flip status + copy to wiki."""
+    """Approve reading: assemble + copy to wiki."""
     try:
         approved = pipeline.approve(cfg, source_id)
     except pipeline.ReadingPipelineError as e:
@@ -83,18 +83,19 @@ def _approve_only(cfg: cfg_mod.Config, source_id: str) -> int:
 
 
 def _interactive_session(cfg: cfg_mod.Config, source_id: str) -> int:
-    pending_path = pipeline.pending_reading_path(source_id)
-    if not pending_path.exists():
+    sidecar_path = pipeline.pending_sidecar_path(source_id)
+    if not sidecar_path.exists():
         _logger.error(
             "No draft reading for %r. Run `generate-reading` first.", source_id
         )
         return 1
 
-    original_bytes = pending_path.read_bytes()
+    # snapshot all segment files + sidecar at session start for [u]ndo
+    snapshot = _take_snapshot(source_id)
     pending_action = "none"
 
     while True:
-        _render(pending_path, pending_action, original_bytes)
+        _render(cfg, source_id, pending_action)
         try:
             choice = input(_PROMPT).strip().lower()
         except EOFError:
@@ -112,18 +113,21 @@ def _interactive_session(cfg: cfg_mod.Config, source_id: str) -> int:
             pending_action = "reject"
             continue
         if choice == "u":
-            pending_path.write_bytes(original_bytes)
+            _restore_snapshot(snapshot)
             pending_action = "none"
             continue
         if choice == "e":
-            editor = os.environ.get("EDITOR", "vi")
-            subprocess.run([editor, str(pending_path)], check=False)  # noqa: S603
+            _preview_edit(cfg, source_id)
             continue
         # unrecognized → re-prompt
 
 
-def _render(pending_path: Path, pending_action: str, original_bytes: bytes) -> None:
-    text = pending_path.read_text(encoding="utf-8")
+def _render(cfg: cfg_mod.Config, source_id: str, pending_action: str) -> None:
+    try:
+        text = pipeline.assemble_draft(cfg, source_id)
+    except pipeline.ReadingPipelineError as e:
+        print(f"\n[error assembling draft: {e}]")  # noqa: T201
+        text = ""
     lines = text.splitlines()
     head = "\n".join(lines[:_RENDER_LINES])
     suffix = (
@@ -131,10 +135,53 @@ def _render(pending_path: Path, pending_action: str, original_bytes: bytes) -> N
         if len(lines) > _RENDER_LINES
         else ""
     )
-    dirty = " [edited]" if pending_path.read_bytes() != original_bytes else ""
-    print(f"\n--- {pending_path}{dirty} ---")  # noqa: T201
+    pdir = pipeline.pending_dir(source_id)
+    print(f"\n--- {pdir} ---")  # noqa: T201
     print(head + suffix)  # noqa: T201
     print(f"--- pending action: {pending_action} ---")  # noqa: T201
+
+
+def _preview_edit(cfg: cfg_mod.Config, source_id: str) -> None:
+    """Open assembled draft in $EDITOR for preview; discard edits on exit."""
+    try:
+        text = pipeline.assemble_draft(cfg, source_id)
+    except pipeline.ReadingPipelineError as e:
+        _logger.error("Could not assemble draft: %s", e)
+        return
+    draft_path = pipeline.pending_dir(source_id) / ".draft-edit.md"
+    draft_path.write_text(text, encoding="utf-8")
+    editor = os.environ.get("EDITOR", "vi")
+    subprocess.run([editor, str(draft_path)], check=False)  # noqa: S603
+    import contextlib  # noqa: PLC0415
+
+    with contextlib.suppress(OSError):
+        draft_path.unlink(missing_ok=True)
+    print(  # noqa: T201
+        "Per-segment editing lands in slice #31. "
+        "This view is preview-only — your edits were not saved."
+    )
+
+
+def _take_snapshot(source_id: str) -> dict[str, bytes]:
+    """Snapshot all segment files + sidecar; keyed by file path string."""
+    snapshot: dict[str, bytes] = {}
+    sidecar = pipeline.pending_sidecar_path(source_id)
+    if sidecar.exists():
+        snapshot[str(sidecar)] = sidecar.read_bytes()
+    segs_dir = pipeline.pending_segments_dir(source_id)
+    if segs_dir.exists():
+        for p in segs_dir.glob("*.md"):
+            snapshot[str(p)] = p.read_bytes()
+    return snapshot
+
+
+def _restore_snapshot(snapshot: dict[str, bytes]) -> None:
+    from pathlib import Path  # noqa: PLC0415
+
+    for path_str, data in snapshot.items():
+        p = Path(path_str)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
 
 
 def _commit_quit(source_id: str, pending_action: str) -> int:

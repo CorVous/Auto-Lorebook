@@ -15,6 +15,8 @@ All YAML artifacts the tool writes:
 
 - `sources/<source_id>/info.yaml`
 - `pending/<ingest_id>/reading/structure.yaml`
+- `pending/<ingest_id>/reading/reading.yaml`
+- `pending/<ingest_id>/reading/segments/<segment_id>.md` (frontmatter)
 - `pending/<ingest_id>/plan.yaml`
 - `pending/<ingest_id>/proposals/<proposal_id>.yaml`
 - `<category>/<slug>.yaml` (entity YAMLs)

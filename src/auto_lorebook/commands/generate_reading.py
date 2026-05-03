@@ -51,7 +51,8 @@ def run(args: argparse.Namespace) -> int:
         _logger.error("%s", e)
         return 1
 
-    print(f"Draft reading: {result.pending_reading_path}")  # noqa: T201
+    print(f"Draft reading sidecar: {result.sidecar_path}")  # noqa: T201
+    print(f"  segments:    {result.segments_dir}")  # noqa: T201
     print(f"  structure:   {result.structure_path}")  # noqa: T201
     print(f"  bullets:     {result.bullets_path}")  # noqa: T201
     if result.gap_warnings:

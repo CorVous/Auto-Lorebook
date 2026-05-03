@@ -44,7 +44,12 @@ Entity identity lives entirely in entity YAMLs. An entity exists iff
     <ingest_id>/
       reading/                      # intermediate reading artifacts
         structure.yaml              # Stage 1a output (segments + attribution)
-        reading.md                  # Stage 1b output (draft)
+        bullets.yaml                # Stage 1b output (raw bullets)
+        reading.yaml                # sidecar (default_speaker, name_corrections, session_date)
+        segments/
+          seg-001.md                # per-segment frontmatter + rendered body
+          seg-002.md
+          …
       plan.yaml                     # planner output
       proposals/
         <proposal_id>.yaml          # one per proposed fact

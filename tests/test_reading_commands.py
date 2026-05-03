@@ -249,10 +249,22 @@ class TestGenerateReading:
         pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
         assert (pending / "structure.yaml").exists()
         assert (pending / "bullets.yaml").exists()
-        assert (pending / "reading.md").exists()
-        md = (pending / "reading.md").read_text(encoding="utf-8")
-        assert "reading_status: draft" in md
-        assert "King Theron founded Aldara" in md
+        assert (pending / "reading.yaml").exists()
+        assert (pending / "segments" / "seg-001.md").exists()
+        assert (pending / "segments" / "seg-002.md").exists()
+        # no old-style reading.md under pending
+        assert not (pending / "reading.md").exists()
+
+        # reading.yaml has correct schema
+        import yaml as _yaml  # noqa: PLC0415
+
+        sidecar_data = _yaml.safe_load((pending / "reading.yaml").read_text())
+        assert sidecar_data["schema_version"] == 1
+        assert sidecar_data["default_speaker"] == "DM"
+
+        # seg-002.md contains the Theron claim
+        seg002 = (pending / "segments" / "seg-002.md").read_text(encoding="utf-8")
+        assert "King Theron founded Aldara" in seg002
 
     def test_missing_api_key_errors(
         self,
@@ -409,9 +421,10 @@ class TestApproveReadingInteractive:
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert not approved.exists()
         assert not (tmp_home / "pending" / "yt-abc12345678" / "plan.yaml").exists()
-        assert (
-            tmp_home / "pending" / "yt-abc12345678" / "reading" / "reading.md"
-        ).exists()
+        # sidecar and segments exist; no old reading.md
+        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        assert (pending / "reading.yaml").exists()
+        assert not (pending / "reading.md").exists()
 
     def test_reject_then_quit_with_confirm_deletes_pending(
         self,
@@ -457,9 +470,9 @@ class TestApproveReadingInteractive:
             rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
 
         assert rc == 0
-        assert (
-            tmp_home / "pending" / "yt-abc12345678" / "reading" / "reading.md"
-        ).exists()
+        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        assert (pending / "reading.yaml").exists()
+        assert not (pending / "reading.md").exists()
 
     def test_reject_then_undo_then_approve(
         self,
@@ -485,30 +498,44 @@ class TestApproveReadingInteractive:
         assert approved.exists()
         assert "reading_status: approved" in approved.read_text(encoding="utf-8")
 
-    def test_undo_restores_edited_file(
+    def test_undo_restores_segment_files(
         self,
         tmp_home: Path,
         ingested_wiki: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """[u] rolls back any in-session edits to the pending reading."""
+        """[u] rolls back in-session mutations to segment files."""
         _write_user_config(tmp_home, ingested_wiki)
         monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
         self._force_tty(monkeypatch)
-        self._patch_inputs(monkeypatch, ["e", "u", "a"])
 
-        pending_path = (
-            tmp_home / "pending" / "yt-abc12345678" / "reading" / "reading.md"
+        seg001_path = (
+            tmp_home
+            / "pending"
+            / "yt-abc12345678"
+            / "reading"
+            / "segments"
+            / "seg-001.md"
         )
 
-        def fake_editor(_cmd: list[str], **_kwargs: object) -> object:
-            # Simulate the user destructively rewriting the file.
-            pending_path.write_text("REWRITTEN", encoding="utf-8")
-            return MagicMock(returncode=0)
-
-        monkeypatch.setattr(
-            "auto_lorebook.commands.approve_reading.subprocess.run", fake_editor
+        corrupted = (
+            b"---\nschema_version: 1\nsegment_id: seg-001\n"
+            b"segment_status: approved\nstart: '0:00:00'\nend: '0:02:00'\n"
+            b"title: CORRUPTED\nspeaker: DM\nnotes: null\noverrides: []\n"
+            b"---\nCORRUPTED BODY\n"
         )
+        call_count = {"n": 0}
+
+        def fake_input(_prompt: str = "") -> str:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # first prompt: corrupt seg-001 then say 'u'
+                seg001_path.write_bytes(corrupted)
+                return "u"
+            # after undo, approve
+            return "a"
+
+        monkeypatch.setattr("builtins.input", fake_input)
 
         client = MagicMock()
         _wire_client_responses(client)
@@ -516,24 +543,21 @@ class TestApproveReadingInteractive:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            original = pending_path.read_bytes()
             rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
 
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
-        # After [e][u][a]: wiki copy must reflect ORIGINAL content, not "REWRITTEN".
         assert approved.exists()
-        assert "REWRITTEN" not in approved.read_text(encoding="utf-8")
-        assert "King Theron" in approved.read_text(encoding="utf-8")
-        # Sanity: the original we snapshotted before the run matches what
-        # generate-reading produced.
-        assert b"King Theron" in original
+        # After [u][a]: wiki copy reflects restored content, not corrupted title
+        assert "CORRUPTED" not in approved.read_text(encoding="utf-8")
+        assert "Intro" in approved.read_text(encoding="utf-8")
 
-    def test_edit_invokes_editor_then_reprompts(
+    def test_edit_invokes_editor_preview_only(
         self,
         tmp_home: Path,
         ingested_wiki: Path,
         monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         _write_user_config(tmp_home, ingested_wiki)
         monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
@@ -562,7 +586,16 @@ class TestApproveReadingInteractive:
         assert rc == 0
         assert len(calls) == 1
         assert calls[0][0] == "my-fake-editor"
-        assert calls[0][1].endswith("reading.md")
+        assert calls[0][1].endswith(".draft-edit.md")
+
+        out = capsys.readouterr().out
+        assert "preview-only" in out
+        assert "edits were not saved" in out
+
+        # segment files must be unchanged (edits discarded)
+        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        assert (pending / "segments" / "seg-001.md").exists()
+        assert (pending / "segments" / "seg-002.md").exists()
 
 
 class TestRegenerateReading:
@@ -610,6 +643,41 @@ class TestRegenerateReading:
         added = client.complete.call_count - first_complete_count
         # one call for seg-002
         assert added == 1
+
+    def test_summarize_only_preserves_reading_yaml(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """--from=summarize preserves reading.yaml (sidecar)."""
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+            sidecar_before = (pending / "reading.yaml").read_bytes()
+
+            regenerate_reading_cmd.run(
+                _args(
+                    source_id="yt-abc12345678",
+                    from_stage="summarize",
+                    segments="seg-002",
+                )
+            )
+
+        # sidecar always rewritten but should be structurally identical
+        import yaml as _yaml  # noqa: PLC0415
+
+        sidecar_after = _yaml.safe_load((pending / "reading.yaml").read_text())
+        sidecar_orig = _yaml.safe_load(sidecar_before)
+        assert sidecar_after["default_speaker"] == sidecar_orig["default_speaker"]
+        assert sidecar_after["name_corrections"] == sidecar_orig["name_corrections"]
 
 
 class TestPlan:
