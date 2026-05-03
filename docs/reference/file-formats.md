@@ -85,11 +85,19 @@ Every YAML file carries `schema_version` as its first key — see
   ingest lifetime.
 - **Details** — [Stage 1a](../pipeline/reading.md#stage-1a-structure).
 
-### `~/.auto-lorebook/pending/<ingest_id>/reading/reading.md`
+### `~/.auto-lorebook/pending/<ingest_id>/reading/reading.yaml`
 
-- **Stage** — Stage 1b output (draft).
-- **Purpose** — draft reading before human approval. Moves to the
-  wiki on `approve-reading`.
+- **Stage** — Stage 1b output; sidecar.
+- **Purpose** — session metadata: `default_speaker`, `name_corrections`,
+  `session_date`. Preserved across regenerations.
+- **Details** — [Stage 1b](../pipeline/reading.md#stage-1b-summarize).
+
+### `~/.auto-lorebook/pending/<ingest_id>/reading/segments/<segment_id>.md`
+
+- **Stage** — Stage 1b output; per-segment.
+- **Purpose** — YAML frontmatter (segment metadata, `segment_status`)
+  plus pre-rendered bullet body. Assembled into the wiki-side
+  `reading.md` at approval time.
 - **Details** — [reading assembly](../pipeline/reading.md#reading-assembly).
 
 ### `~/.auto-lorebook/pending/<ingest_id>/plan.yaml`
@@ -114,10 +122,14 @@ SHA-256 hashes of the inputs that produced it. See
 
 ## Hand-edit surfaces
 
-Only two files are intended as hand-edit surfaces:
+Only these files are intended as hand-edit surfaces:
 
-- `reading.md` — before approval. Edit segment headers, bullets,
-  speaker attributions, `name_corrections`, `session_date`.
+- `pending/<id>/reading/reading.yaml` — before approval. Edit
+  `name_corrections` and `session_date`.
+- `pending/<id>/reading/segments/seg-NNN.md` — before approval. Edit
+  bullet body text and timestamps. (Per-segment interactive editing
+  lands in a future slice; currently the assembled preview is
+  read-only.)
 - `<category>/<slug>.yaml` — after approval. Edit facts, aliases,
   sections, `superseded_by`.
 

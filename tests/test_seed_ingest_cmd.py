@@ -16,6 +16,8 @@ from auto_lorebook import (
     stage1b,
 )
 from auto_lorebook import reading_pipeline as pipeline
+from auto_lorebook import reading_sidecar as reading_sidecar_mod
+from auto_lorebook import segment_file as segment_file_mod
 from auto_lorebook import (
     structure as structure_mod,
 )
@@ -76,12 +78,12 @@ class TestSeedIngestPerStage:
             (
                 "approve",
                 {"transcript.en.srt", "info.yaml"},
-                {"structure.yaml", "bullets.yaml", "reading.md"},
+                {"structure.yaml", "bullets.yaml", "reading.yaml", "segments"},
             ),
             (
                 "plan",
                 {"transcript.en.srt", "info.yaml", "reading.md"},
-                {"structure.yaml", "bullets.yaml", "reading.md"},
+                {"structure.yaml", "bullets.yaml", "reading.yaml", "segments"},
             ),
         ],
     )
@@ -108,6 +110,10 @@ class TestSeedIngestPerStage:
             assert {p.name for p in pending_reading.iterdir()} == expected_pending
         else:
             assert not pending_reading.exists()
+
+        # no old-style pending reading.md
+        if pending_reading.exists():
+            assert not (pending_reading / "reading.md").exists()
 
     def test_substitutes_source_id_in_artifacts(
         self,
@@ -140,12 +146,19 @@ class TestSeedIngestPerStage:
         assert fm["source_id"] == sid
         assert fm["reading_status"] == "approved"
 
+        sidecar = reading_sidecar_mod.read(
+            tmp_home / "pending" / sid / "reading" / "reading.yaml"
+        )
+        assert sidecar.default_speaker == "DM"
+
         # placeholder must not survive anywhere on disk
         for path in (
             tmp_wiki / "sources" / sid / "info.yaml",
             tmp_home / "pending" / sid / "reading" / "structure.yaml",
             tmp_home / "pending" / sid / "reading" / "bullets.yaml",
-            tmp_home / "pending" / sid / "reading" / "reading.md",
+            tmp_home / "pending" / sid / "reading" / "reading.yaml",
+            tmp_home / "pending" / sid / "reading" / "segments" / "seg-001.md",
+            tmp_home / "pending" / sid / "reading" / "segments" / "seg-002.md",
             approved_path,
         ):
             assert "__QA_SOURCE_ID__" not in path.read_text(encoding="utf-8")
@@ -163,9 +176,14 @@ class TestSeedIngestPerStage:
         assert rc == 0
         sid = _seeded_sid_from(capsys.readouterr().out)
 
-        draft = tmp_home / "pending" / sid / "reading" / "reading.md"
-        fm = reading.read_frontmatter(draft)
-        assert fm["reading_status"] == "draft"
+        seg001 = segment_file_mod.read(
+            tmp_home / "pending" / sid / "reading" / "segments" / "seg-001.md"
+        )
+        assert seg001.frontmatter.segment_status == "draft"
+        seg002 = segment_file_mod.read(
+            tmp_home / "pending" / sid / "reading" / "segments" / "seg-002.md"
+        )
+        assert seg002.frontmatter.segment_status == "draft"
 
     def test_explicit_source_id_used_verbatim(
         self,

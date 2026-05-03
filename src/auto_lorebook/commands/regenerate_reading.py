@@ -72,7 +72,8 @@ def run(args: argparse.Namespace) -> int:
         _logger.error("%s", e)
         return 1
 
-    print(f"Draft reading: {result.pending_reading_path}")  # noqa: T201
+    print(f"Draft reading sidecar: {result.sidecar_path}")  # noqa: T201
+    print(f"  segments:    {result.segments_dir}")  # noqa: T201
     if result.gap_warnings:
         print()  # noqa: T201
         print(f"{len(result.gap_warnings)} possible coverage gap(s):")  # noqa: T201

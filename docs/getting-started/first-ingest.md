@@ -48,9 +48,8 @@ LLM quality but don't block the pipeline. See
 ## 3. Review the reading
 
 After Stage 1a (structure) and Stage 1b (summarize) run, you get a
-draft at `pending/yt-abc123/reading/reading.md` — a segmented,
-attributed, claim-bulleted version of the transcript. Open the
-interactive review:
+draft: sidecar at `pending/yt-abc123/reading/reading.yaml` and one
+`segments/seg-NNN.md` per segment. Open the interactive review:
 
 ```bash
 auto-lorebook approve-reading yt-abc123
@@ -59,12 +58,8 @@ auto-lorebook approve-reading yt-abc123
 The session prints the draft and prompts:
 
 - `a` — approve (flips status, copies to wiki).
-- `e` — edit in `$EDITOR`. Fix:
-    - Segment boundaries or titles.
-    - Speaker attributions.
-    - Claim bullets that don't match what was said, are invented, or
-      are missing.
-    - `name_corrections` frontmatter map.
+- `e` — preview assembled draft in `$EDITOR` (read-only; edits are
+  discarded). Edit segment files directly for now.
 - `r` — queue the draft for deletion.
 - `u` — restore the draft to its session-start contents and clear any
   queued reject.

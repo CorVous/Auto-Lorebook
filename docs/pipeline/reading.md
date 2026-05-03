@@ -129,9 +129,12 @@ explicitly none. This is the only substage that can invent content.
 **Input.** Segmented, speaker-attributed transcript from 1a and the
 full preamble (including `interpretation_defaults`).
 
-**Output.** `pending/<ingest_id>/reading/reading.md` — assembled from
-1a's segments plus 1b's per-segment bullets. This is the artifact the
-human reviews.
+**Output.** Per-segment files under
+`pending/<ingest_id>/reading/segments/seg-NNN.md` (one per segment,
+frontmatter + rendered bullets), plus a sidecar
+`pending/<ingest_id>/reading/reading.yaml` (default_speaker,
+name_corrections, session_date). The wiki-side `reading.md` is
+assembled from these at approval time, not written during generation.
 
 **Per-segment extraction.** 1b processes each segment independently
 (trivially parallelizable). Empty bullet lists are allowed and
@@ -178,8 +181,9 @@ still raise `Stage1bError`. The `anchor_tolerance_seconds` kwarg on
 
 ## Reading assembly
 
-The final `reading.md` interleaves segment headers (from 1a) with
-their bullet lists (from 1b):
+At approval, the wiki-side `reading.md` is assembled from all segment
+files plus the sidecar. The assembled document interleaves segment
+headers (from 1a) with their bullet lists (from 1b):
 
 ```markdown
 ---
@@ -233,10 +237,10 @@ render as clickable links.
 ## Name corrections
 
 When the human notices a mishearing (e.g., "Fair-on" should be
-"Theron"), they add it to the `name_corrections` map in frontmatter
-rather than find-replacing throughout the reading. The tool applies
-the substitutions during rendering and passes the map to downstream
-stages.
+"Theron"), they add it to the `name_corrections` map in
+`reading.yaml` rather than find-replacing throughout the reading. The
+tool applies the substitutions during rendering and passes the map to
+downstream stages. Corrections are preserved across regenerations.
 
 Corrections from approved readings can be promoted to the global
 `.transcription-corrections.yaml` so future sources benefit
@@ -292,10 +296,10 @@ auto-lorebook approve-reading <source_id>
 
 | Key | Action |
 |-----|--------|
-| `a` | Approve: flip status to `approved`, copy to wiki. |
-| `e` | Edit: open the draft in `$EDITOR` (defaults to `vi`); on save, return to the prompt. |
+| `a` | Approve: assemble segment files + sidecar into `reading.md`, copy to wiki. |
+| `e` | Preview: assemble draft into a temp file and open in `$EDITOR`. Edits are discarded on exit (preview-only; per-segment editing lands in a future slice). |
 | `r` | Reject: queue the pending reading dir for deletion. Deferred — nothing happens until you `q`. |
-| `u` | Undo: restore the draft to its session-start contents and clear any queued reject. |
+| `u` | Undo: restore all segment files and sidecar to session-start contents and clear any queued reject. |
 | `q` | Quit: if a reject is queued, confirm and delete `pending/<id>/reading/`; otherwise no-op. |
 
 `--yes` skips the loop and auto-approves; required for non-TTY runs
