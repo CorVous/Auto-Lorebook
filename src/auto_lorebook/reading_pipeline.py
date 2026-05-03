@@ -108,31 +108,33 @@ def regenerate(
 
 
 def approve(cfg: cfg_mod.Config, source_id: str) -> Path:
-    """Assemble approved reading from segment files and copy to wiki."""
-    sidecar_path = pending_sidecar_path(source_id)
-    if not sidecar_path.exists():
-        msg = f"No draft reading for {source_id!r}. Run `generate-reading` first."
+    """Auto-accept all draft segments via the reading-review engine.
+
+    :raises ReadingPipelineError: sidecar missing, engine error, or gate did
+        not fire (all segments must be decidable).
+    """
+    from auto_lorebook import reading_review as reading_review_mod  # noqa: PLC0415
+    from auto_lorebook.commands.approve_reading import (  # noqa: PLC0415
+        AutoAcceptReviewer,
+    )
+
+    try:
+        result = reading_review_mod.run(
+            cfg=cfg,
+            source_id=source_id,
+            reviewer=AutoAcceptReviewer(),
+        )
+    except reading_review_mod.ReadingReviewError as e:
+        raise ReadingPipelineError(str(e)) from e
+
+    if not result.gate_fired or result.wiki_reading_path is None:
+        msg = (
+            f"Reading review for {source_id!r} did not fire the gate; "
+            "not all segments could be decided."
+        )
         raise ReadingPipelineError(msg)
 
-    wiki_repo = cfg.wiki_repo_path
-    info_path = wiki_repo / "sources" / source_id / "info.yaml"
-    try:
-        info = info_yaml_mod.read(info_path)
-    except info_yaml_mod.InfoError as e:
-        raise ReadingPipelineError(str(e)) from e
-
-    try:
-        sc = sidecar_mod.read(sidecar_path)
-    except sidecar_mod.ReadingSidecarError as e:
-        raise ReadingPipelineError(str(e)) from e
-
-    segments = _load_segments(source_id)
-    text = reading_assembly_mod.assemble(segments=segments, sidecar=sc, info=info)
-
-    dest = wiki_repo / "sources" / source_id / "reading.md"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    reading_mod.write(dest, text)
-    return dest
+    return result.wiki_reading_path
 
 
 def assemble_draft(cfg: cfg_mod.Config, source_id: str) -> str:
@@ -211,16 +213,8 @@ def plan(cfg: cfg_mod.Config, source_id: str) -> PlanResult:
             f"Run `approve-reading {source_id}` first."
         )
         raise ReadingPipelineError(msg)
-    try:
-        fm = reading_mod.read_frontmatter(approved_path)
-    except reading_mod.ReadingError as e:
-        raise ReadingPipelineError(str(e)) from e
-    if fm.get("reading_status") != "approved":
-        msg = (
-            f"Reading at {approved_path} is not approved "
-            f"(reading_status={fm.get('reading_status')!r})."
-        )
-        raise ReadingPipelineError(msg)
+    # File presence is the approval gate — written only when the reading-review
+    # engine commits with every segment decided (accepted or skipped).
 
     structure_path = pending_structure_path(source_id)
     bullets_path = pending_bullets_path(source_id)

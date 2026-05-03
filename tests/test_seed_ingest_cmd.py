@@ -144,7 +144,7 @@ class TestSeedIngestPerStage:
         approved_path = tmp_wiki / "sources" / sid / "reading.md"
         fm = reading.read_frontmatter(approved_path)
         assert fm["source_id"] == sid
-        assert fm["reading_status"] == "approved"
+        assert "reading_status" not in fm
 
         sidecar = reading_sidecar_mod.read(
             tmp_home / "pending" / sid / "reading" / "reading.yaml"

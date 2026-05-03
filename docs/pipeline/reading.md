@@ -194,7 +194,6 @@ source_url: https://youtube.com/watch?v=abc123
 source_type: youtube
 session_date: null              # human fills in during review
 ingested_at: 2026-04-20T14:35:12Z
-reading_status: draft           # draft | approved
 default_speaker: DM
 name_corrections:
   # empty initially; human adds transcription fixes here
@@ -261,36 +260,46 @@ context), then replaces with the correct content.
 
 ## Reading review
 
-The review is over the combined, assembled reading — the human sees
-the full `reading.md` and corrects whatever's wrong in it. Two scans:
+The reading-review engine operates over per-segment files under
+`pending/<ingest_id>/reading/segments/`. Each segment carries one of
+four statuses:
 
-**Scan 1: segment titles as a table of contents.** Skim titles
-top-to-bottom, looking for gaps, mislabeled segments, or the
-mechanical gap-check warning. A two-hour session produces maybe 40–80
-segment titles; skimming takes a minute or two.
+| Status | Meaning |
+|--------|---------|
+| `draft` | Fresh — not yet decided. |
+| `accepted` | Reviewer approved; included in the assembled reading. |
+| `skipped` | Reviewer skipped; body replaced with the "no claims" marker in the assembled reading. |
+| `regenerating` | Flagged for re-summarisation (slice #5); blocks the gate. |
 
-**Scan 2: bullets within segments.** For claim-bearing segments, read
-the bullets and confirm they correspond to reality. Empty bullet lists
-get a quick sanity check — a "Founding of Aldara" segment with no
-bullets is a red flag.
+**Deferred-commit semantics.** The engine accumulates pending marks
+during the walk — nothing is written to disk until the reviewer
+commits. On commit, changed segment files are written atomically, then
+the gate predicate is evaluated.
 
-Corrections fall into buckets aligned with the substages:
+**Gate predicate.** Every segment is `accepted` or `skipped`. When the
+gate fires, `reading_assembly.assemble` renders the wiki-side
+`reading.md` and writes it to
+`<wiki-repo>/sources/<source_id>/reading.md`. The presence of this
+file is the approval artefact — there is no `reading_status`
+frontmatter flag.
 
-- Segment boundaries, titles, or coverage gaps → edit section headers
-  or regenerate 1a (1a-class fix).
-- Wrong speaker attribution → edit `Speaker:` lines (1a-class fix,
-  attribution subset).
-- Claim doesn't match what was said, or is invented, or is missing →
-  edit, delete, add the bullet, or regenerate 1b for that segment
-  (1b-class fix).
-
-Transitioning `reading_status: draft` → `reading_status: approved` is
-the gate. The tool refuses to run downstream stages on a draft
-reading.
+**Decision verbs (current slice):** `accept`, `skip-bullets`,
+`regenerate-again` (no-op; marks as `regenerating`, gate blocks),
+`undo` (clears the pending mark for one segment), `commit` (the quit
+path that writes and evaluates the gate).
 
 ```bash
-auto-lorebook approve-reading <source_id>
+auto-lorebook approve-reading <source_id> --yes
 ```
+
+`--yes` drives an `AutoAcceptReviewer` that marks every still-`draft`
+segment `accepted` and commits unconditionally. The gate always fires
+for fixtures where every segment is decidable.
+
+The interactive per-segment hierarchical UX (keys `[a]/[s]/[r]/[u]/[q]`
+per segment) is deferred to slice #4. In the current slice, the
+interactive `[a]` key at the session level still assembles and copies
+to the wiki in one step (unchanged from slice #29).
 
 `approve-reading` opens an interactive session over the draft:
 

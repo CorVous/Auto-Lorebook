@@ -1,8 +1,7 @@
 """reading.md frontmatter helpers and wiki-side write path.
 
 Provides `linkify_timestamp`, `apply_name_corrections`, `read_frontmatter`,
-`with_status`, `set_status`, and `write` — used by commands/review.py and
-the wiki-side write path. Assembly is now in reading_assembly.py.
+and `write`. Assembly lives in reading_assembly.py.
 """
 
 from __future__ import annotations
@@ -17,13 +16,11 @@ from auto_lorebook._io import atomic_write_text
 if TYPE_CHECKING:
     from pathlib import Path
 
-VALID_STATUSES = frozenset({"draft", "approved"})
-
 _FRONTMATTER_RE = re.compile(r"^---\n(?P<body>.*?)\n---\n(?P<rest>.*)$", re.DOTALL)
 
 
 class ReadingError(ValueError):
-    """Raised for missing files, missing frontmatter, or invalid status."""
+    """Raised for missing files, missing frontmatter, or invalid YAML."""
 
 
 def linkify_timestamp(source_url: str | None, seconds: float) -> str | None:
@@ -70,36 +67,3 @@ def read_frontmatter(path: Path) -> dict[str, Any]:
         msg = f"{path}: frontmatter is not a mapping"
         raise ReadingError(msg)
     return parsed
-
-
-def with_status(path: Path, status: str) -> str:
-    """Return the reading.md text with `reading_status` set to `status`.
-
-    :raises FileNotFoundError: path doesn't exist
-    :raises ReadingError: invalid status, missing/malformed frontmatter
-    """
-    if status not in VALID_STATUSES:
-        msg = (
-            f"invalid reading_status {status!r}; "
-            f"expected one of {sorted(VALID_STATUSES)}"
-        )
-        raise ReadingError(msg)
-    text = path.read_text(encoding="utf-8")
-    m = _FRONTMATTER_RE.match(text)
-    if not m:
-        msg = f"{path}: no frontmatter block"
-        raise ReadingError(msg)
-    parsed = yaml.safe_load(m.group("body")) or {}
-    if not isinstance(parsed, dict):
-        msg = f"{path}: frontmatter is not a mapping"
-        raise ReadingError(msg)
-    parsed["reading_status"] = status
-    new_fm = yaml.safe_dump(
-        parsed, allow_unicode=True, sort_keys=False, default_flow_style=False
-    ).rstrip("\n")
-    return f"---\n{new_fm}\n---\n{m.group('rest')}"
-
-
-def set_status(path: Path, status: str) -> None:
-    """Rewrite the `reading_status` field in place."""
-    atomic_write_text(path, with_status(path, status))

@@ -25,7 +25,7 @@ def assemble(
     sidecar: Sidecar,
     info: Info,
 ) -> str:
-    """Render wiki-side reading.md; always emits reading_status: approved."""
+    """Render wiki-side reading.md; derived approval — file presence is the gate."""
     corrections = dict(sidecar.name_corrections)
     parts: list[str] = [_render_frontmatter(info, sidecar)]
     parts.append(f"# Reading: {info.title or info.source_id}")
@@ -60,7 +60,6 @@ def _render_frontmatter(info: Info, sidecar: Sidecar) -> str:
             else info.session_date
         ),
         "ingested_at": info.fetched_at,
-        "reading_status": "approved",
         "default_speaker": sidecar.default_speaker,
         "name_corrections": dict(sidecar.name_corrections),
     }

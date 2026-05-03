@@ -304,7 +304,8 @@ class TestApproveReading:
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert approved.exists()
-        assert "reading_status: approved" in approved.read_text(encoding="utf-8")
+        assert "# Reading: Session 3" in approved.read_text(encoding="utf-8")
+        assert "reading_status" not in approved.read_text(encoding="utf-8")
         # approve-reading must NOT cascade into plan/extract
         assert not (tmp_home / "pending" / "yt-abc12345678" / "plan.yaml").exists()
         assert not (tmp_home / "pending" / "yt-abc12345678" / "proposals").exists()
@@ -367,7 +368,8 @@ class TestApproveReadingInteractive:
         assert len(prompts) >= 1
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert approved.exists()
-        assert "reading_status: approved" in approved.read_text(encoding="utf-8")
+        assert "# Reading: Session 3" in approved.read_text(encoding="utf-8")
+        assert "reading_status" not in approved.read_text(encoding="utf-8")
         # approve-reading no longer cascades into plan/extract
         assert not (tmp_home / "pending" / "yt-abc12345678" / "plan.yaml").exists()
 
@@ -496,7 +498,8 @@ class TestApproveReadingInteractive:
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert approved.exists()
-        assert "reading_status: approved" in approved.read_text(encoding="utf-8")
+        assert "# Reading: Session 3" in approved.read_text(encoding="utf-8")
+        assert "reading_status" not in approved.read_text(encoding="utf-8")
 
     def test_undo_restores_segment_files(
         self,
@@ -520,7 +523,7 @@ class TestApproveReadingInteractive:
 
         corrupted = (
             b"---\nschema_version: 1\nsegment_id: seg-001\n"
-            b"segment_status: approved\nstart: '0:00:00'\nend: '0:02:00'\n"
+            b"segment_status: accepted\nstart: '0:00:00'\nend: '0:02:00'\n"
             b"title: CORRUPTED\nspeaker: DM\nnotes: null\noverrides: []\n"
             b"---\nCORRUPTED BODY\n"
         )

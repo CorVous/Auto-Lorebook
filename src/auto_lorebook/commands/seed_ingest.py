@@ -154,27 +154,27 @@ def _seed(cfg: cfg_mod.Config, sid: str, at: str, fixture_name: str) -> None:
         if key == "segments":
             _emit_segments_dir(fixture_root, pending_reading / "segments", sid)
         else:
-            src_name, dest, status = _emit_target(key, wiki_src, pending_reading)
-            _emit_file(fixture_root, src_name, dest, sid, status=status)
+            src_name, dest = _emit_target(key, wiki_src, pending_reading)
+            _emit_file(fixture_root, src_name, dest, sid)
 
 
 def _emit_target(
     key: str,
     wiki_src: Path,
     pending_reading: Path,
-) -> tuple[str, Path, str | None]:
+) -> tuple[str, Path]:
     if key == "info":
-        return "info.yaml", wiki_src / "info.yaml", None
+        return "info.yaml", wiki_src / "info.yaml"
     if key == "transcript":
-        return "transcript.en.srt", wiki_src / "transcript.en.srt", None
+        return "transcript.en.srt", wiki_src / "transcript.en.srt"
     if key == "structure":
-        return "structure.yaml", pending_reading / "structure.yaml", None
+        return "structure.yaml", pending_reading / "structure.yaml"
     if key == "bullets":
-        return "bullets.yaml", pending_reading / "bullets.yaml", None
+        return "bullets.yaml", pending_reading / "bullets.yaml"
     if key == "sidecar":
-        return "reading.yaml", pending_reading / "reading.yaml", None
+        return "reading.yaml", pending_reading / "reading.yaml"
     if key == "approved_reading":
-        return "reading.md", wiki_src / "reading.md", "approved"
+        return "reading.md", wiki_src / "reading.md"
     msg = f"internal: unknown seed key {key!r}"
     raise SeedIngestError(msg)
 
@@ -184,8 +184,6 @@ def _emit_file(
     fixture_filename: str,
     dest: Path,
     sid: str,
-    *,
-    status: str | None,
 ) -> None:
     src = fixture_root / fixture_filename
     if not src.is_file():
@@ -193,12 +191,6 @@ def _emit_file(
         raise SeedIngestError(msg)
     text = src.read_text(encoding="utf-8")
     text = text.replace(_SOURCE_ID_PLACEHOLDER, sid)
-    if status is not None:
-        # fixture's reading.md ships approved; rewrite for pre-approval seeding.
-        text = text.replace(
-            "reading_status: approved",
-            f"reading_status: {status}",
-        )
     atomic_write_text(dest, text)
 
 
