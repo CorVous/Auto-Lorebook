@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
@@ -241,7 +242,7 @@ class TestRun:
             )
 
     def test_bullet_anchor_outside_segment_raises(self) -> None:
-        # anchor is in seg-001 range but returned for seg-002
+        # anchor is in seg-001 range but returned for seg-002; far outside tolerance
         client = MagicMock()
         client.complete.return_value = OpenRouterResponse(
             text=_bullets_payload([{"text": "x", "anchor": "0:00:10"}]),
@@ -274,6 +275,158 @@ class TestRun:
                 client=client,
                 model="m/one",
             )
+
+    def test_anchor_slightly_past_end_clamps_and_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # anchor 1.5s past segment.end (within default tolerance 2.0) — clamps, no raise
+        s = Structure(
+            source_id="yt-x",
+            generated_at="2026-04-20T00:00:00Z",
+            default_speaker="DM",
+            segments=[
+                Segment(id="seg-002", start=7.0, end=30.0, title="x", speaker="DM"),
+            ],
+        )
+        # 30 + 1.5 = 31.5s → "0:00:31" is the closest h:mm:ss representation
+        client = MagicMock()
+        client.complete.return_value = OpenRouterResponse(
+            text=_bullets_payload([{"text": "claim", "anchor": "0:00:31"}]),
+            model="m",
+            tokens_in=0,
+            tokens_out=0,
+        )
+        transcript = LoadedTranscript(text_for_llm="plain text", total_duration=60.0)
+        with caplog.at_level(logging.WARNING, logger="auto_lorebook.stage1b"):
+            result = run(
+                transcript=transcript,
+                structure=s,
+                preamble_text="",
+                client=client,
+                model="m/one",
+            )
+        bullets = result.segments["seg-002"]
+        assert len(bullets) == 1
+        assert bullets[0].anchor == pytest.approx(30.0)  # clamped to segment.end
+        assert any("clamp" in r.message.lower() for r in caplog.records)
+
+    def test_anchor_slightly_before_start_clamps_and_warns(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # anchor 1.0s before segment.start — clamps to start, no raise
+        s = Structure(
+            source_id="yt-x",
+            generated_at="2026-04-20T00:00:00Z",
+            default_speaker="DM",
+            segments=[
+                Segment(id="seg-002", start=10.0, end=40.0, title="x", speaker="DM"),
+            ],
+        )
+        client = MagicMock()
+        client.complete.return_value = OpenRouterResponse(
+            text=_bullets_payload([{"text": "claim", "anchor": "0:00:09"}]),
+            model="m",
+            tokens_in=0,
+            tokens_out=0,
+        )
+        transcript = LoadedTranscript(text_for_llm="plain text", total_duration=60.0)
+        with caplog.at_level(logging.WARNING, logger="auto_lorebook.stage1b"):
+            result = run(
+                transcript=transcript,
+                structure=s,
+                preamble_text="",
+                client=client,
+                model="m/one",
+            )
+        bullets = result.segments["seg-002"]
+        assert len(bullets) == 1
+        assert bullets[0].anchor == pytest.approx(10.0)  # clamped to segment.start
+        assert any("clamp" in r.message.lower() for r in caplog.records)
+
+    def test_clamped_locator_hints_stay_in_segment(self) -> None:
+        # after clamping, hints stay within segment bounds
+        s = Structure(
+            source_id="yt-x",
+            generated_at="2026-04-20T00:00:00Z",
+            default_speaker="DM",
+            segments=[
+                Segment(id="seg-002", start=7.0, end=30.0, title="x", speaker="DM"),
+            ],
+        )
+        client = MagicMock()
+        client.complete.return_value = OpenRouterResponse(
+            text=_bullets_payload([{"text": "claim", "anchor": "0:00:31"}]),
+            model="m",
+            tokens_in=0,
+            tokens_out=0,
+        )
+        transcript = LoadedTranscript(text_for_llm="plain text", total_duration=60.0)
+        result = run(
+            transcript=transcript,
+            structure=s,
+            preamble_text="",
+            client=client,
+            model="m/one",
+        )
+        b = result.segments["seg-002"][0]
+        assert b.locator_hint_start >= 7.0
+        assert b.locator_hint_end <= 30.0
+
+    def test_anchor_beyond_tolerance_raises(self) -> None:
+        # anchor 4.0s past segment.end with default tolerance 2.0 — must raise
+        s = Structure(
+            source_id="yt-x",
+            generated_at="2026-04-20T00:00:00Z",
+            default_speaker="DM",
+            segments=[
+                Segment(id="seg-002", start=7.0, end=30.0, title="x", speaker="DM"),
+            ],
+        )
+        client = MagicMock()
+        client.complete.return_value = OpenRouterResponse(
+            text=_bullets_payload([{"text": "claim", "anchor": "0:00:34"}]),
+            model="m",
+            tokens_in=0,
+            tokens_out=0,
+        )
+        transcript = LoadedTranscript(text_for_llm="plain text", total_duration=60.0)
+        with pytest.raises(Stage1bError, match="anchor"):
+            run(
+                transcript=transcript,
+                structure=s,
+                preamble_text="",
+                client=client,
+                model="m/one",
+            )
+
+    def test_custom_anchor_tolerance_plumbs_through(self) -> None:
+        # custom tolerance of 5.0s allows an anchor 4.0s past segment.end
+        s = Structure(
+            source_id="yt-x",
+            generated_at="2026-04-20T00:00:00Z",
+            default_speaker="DM",
+            segments=[
+                Segment(id="seg-002", start=7.0, end=30.0, title="x", speaker="DM"),
+            ],
+        )
+        client = MagicMock()
+        client.complete.return_value = OpenRouterResponse(
+            text=_bullets_payload([{"text": "claim", "anchor": "0:00:34"}]),
+            model="m",
+            tokens_in=0,
+            tokens_out=0,
+        )
+        transcript = LoadedTranscript(text_for_llm="plain text", total_duration=60.0)
+        result = run(
+            transcript=transcript,
+            structure=s,
+            preamble_text="",
+            client=client,
+            model="m/one",
+            anchor_tolerance_seconds=5.0,
+        )
+        b = result.segments["seg-002"][0]
+        assert b.anchor == pytest.approx(30.0)  # clamped to end
 
 
 class TestBullet:

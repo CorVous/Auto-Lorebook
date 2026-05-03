@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 DEFAULT_HINT_WINDOW_SECONDS = 15.0
+DEFAULT_ANCHOR_TOLERANCE_SECONDS = 2.0
 DEFAULT_MAX_CONCURRENCY = 4
 
 _TIMESTAMP_LINE_RE = re.compile(r"^\[(?P<ts>[0-9:,.]+)\]\s?(?P<body>.*)$")
@@ -126,6 +127,7 @@ def run(
     client: OpenRouterClient,
     model: str,
     hint_window_seconds: float = DEFAULT_HINT_WINDOW_SECONDS,
+    anchor_tolerance_seconds: float = DEFAULT_ANCHOR_TOLERANCE_SECONDS,
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
     segment_ids: list[str] | None = None,
 ) -> ReadingBullets:
@@ -133,6 +135,8 @@ def run(
 
     :param segment_ids: if given, run only these segments (unknown ids
         raise). Default: run all segments.
+    :param anchor_tolerance_seconds: anchors this far outside segment bounds
+        are clamped; further raises Stage1bError.
     :raises Stage1bError: any segment's LLM response fails parsing /
         validation
     """
@@ -157,6 +161,7 @@ def run(
                 client,
                 model,
                 hint_window_seconds,
+                anchor_tolerance_seconds,
             ): seg.id
             for seg in targets
         }
@@ -177,6 +182,7 @@ def _run_one(
     client: OpenRouterClient,
     model: str,
     hint_window_seconds: float,
+    anchor_tolerance_seconds: float = DEFAULT_ANCHOR_TOLERANCE_SECONDS,
 ) -> list[Bullet]:
     messages = [
         {
@@ -204,7 +210,10 @@ def _run_one(
         msg = f"Stage 1b for {segment.id}: 'bullets' must be a list"
         raise Stage1bError(msg)
 
-    return [_parse_bullet(raw, segment, hint_window_seconds) for raw in raw_bullets]
+    return [
+        _parse_bullet(raw, segment, hint_window_seconds, anchor_tolerance_seconds)
+        for raw in raw_bullets
+    ]
 
 
 def _build_user(segment: Segment, segment_text: str) -> str:
@@ -220,6 +229,7 @@ def _parse_bullet(
     raw: dict[str, Any],
     segment: Segment,
     hint_window_seconds: float,
+    anchor_tolerance_seconds: float = DEFAULT_ANCHOR_TOLERANCE_SECONDS,
 ) -> Bullet:
     if not isinstance(raw, dict):
         msg = f"Stage 1b for {segment.id}: each bullet must be an object"
@@ -234,11 +244,31 @@ def _parse_bullet(
         msg = f"Stage 1b for {segment.id}: bad anchor timestamp: {e}"
         raise Stage1bError(msg) from e
     if not (segment.start <= anchor <= segment.end):
-        msg = (
-            f"Stage 1b for {segment.id}: bullet anchor {anchor}s outside "
-            f"segment ({segment.start}-{segment.end})"
-        )
-        raise Stage1bError(msg)
+        # check if within tolerance window; clamp if so, else raise
+        if segment.end < anchor <= segment.end + anchor_tolerance_seconds:
+            _logger.warning(
+                "stage1b: clamping anchor %ss to segment %s end %ss (was %ss past)",
+                anchor,
+                segment.id,
+                segment.end,
+                anchor - segment.end,
+            )
+            anchor = segment.end
+        elif segment.start - anchor_tolerance_seconds <= anchor < segment.start:
+            _logger.warning(
+                "stage1b: clamping anchor %ss to segment %s start %ss (was %ss before)",
+                anchor,
+                segment.id,
+                segment.start,
+                segment.start - anchor,
+            )
+            anchor = segment.start
+        else:
+            msg = (
+                f"Stage 1b for {segment.id}: bullet anchor {anchor}s outside "
+                f"segment ({segment.start}-{segment.end})"
+            )
+            raise Stage1bError(msg)
     hint_start = max(segment.start, anchor - hint_window_seconds)
     hint_end = min(segment.end, anchor + hint_window_seconds)
     return Bullet(

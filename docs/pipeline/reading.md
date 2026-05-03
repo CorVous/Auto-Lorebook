@@ -167,6 +167,15 @@ edited anchor at save time. This preserves the hint's usefulness after
 routine timestamp corrections without requiring the human to think
 about windows.
 
+**Anchor tolerance.** When an LLM returns an anchor a few seconds
+outside a segment's bounds — common with plain-text (.txt) sources
+where Stage 1a invents second-based bounds — Stage 1b clamps the
+anchor to the nearest boundary rather than failing. Anchors within
+`DEFAULT_ANCHOR_TOLERANCE_SECONDS` (default 2.0s) of a boundary are
+silently clamped and a warning is logged; anchors further outside
+still raise `Stage1bError`. The `anchor_tolerance_seconds` kwarg on
+`run()` overrides the default when needed.
+
 ## Reading assembly
 
 The final `reading.md` interleaves segment headers (from 1a) with
