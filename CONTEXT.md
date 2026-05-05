@@ -66,6 +66,10 @@ One end-to-end run from source to (possibly partial) approved facts. Identified 
 - A **Bundle** is the runtime view of one **Claim group** during review.
 - Approving a **Bundle** appends one **Fact** per checked **Route** to its target entity's YAML.
 
+## Invariants
+
+- **Plan/proposal correspondence**: at the start of `review`, the set of on-disk proposal files must correspond 1:1 to `(claim_group_id, target_entity)` keys in the plan. Missing keys (Ctrl-C resume after partial approval) are allowed — proposals are a subset of plan routes. Extra keys (orphans) raise `ReviewError` and direct the user to `replan`.
+
 ## Flagged ambiguities
 
 - "Target" appears in code (`target_entity`, `targets:`) and the doc uses both "target" and "route". Resolution: **route** is the preferred domain term for the row; **target** is acceptable when emphasising the destination entity.
