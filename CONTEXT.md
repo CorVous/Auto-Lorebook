@@ -69,6 +69,7 @@ One end-to-end run from source to (possibly partial) approved facts. Identified 
 ## Invariants
 
 - **Plan/proposal correspondence**: at the start of `review`, the set of on-disk proposal files must correspond 1:1 to `(claim_group_id, target_entity)` keys in the plan. Missing keys (Ctrl-C resume after partial approval) are allowed — proposals are a subset of plan routes. Extra keys (orphans) raise `ReviewError` and direct the user to `replan`.
+- **Alias decline memory**: declined aliases are remembered in-memory for the duration of one `run()` call only. Ctrl-C resume re-asks for declined aliases (only accepted aliases survive on disk via `added_by_ingest`).
 
 ## Flagged ambiguities
 
