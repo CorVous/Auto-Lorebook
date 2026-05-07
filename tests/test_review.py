@@ -275,6 +275,134 @@ class TestSortedProposals:
 
 
 # ---------------------------------------------------------------------------
+# Validate proposals subset of plan
+# ---------------------------------------------------------------------------
+
+
+class TestValidateProposalsSubsetOfPlan:
+    def test_exact_match_succeeds(self, cfg: cfg_mod.Config) -> None:
+        """Proposals exactly matching plan keys → run() succeeds."""
+        source_id = "yt-x"
+        _write_info(cfg.wiki_repo_path, source_id)
+        proposal = _make_proposal(target="Aldara", proposed_id="aldara-f001")
+        _write_proposal(source_id, proposal)
+        _write_plan(
+            cfg.wiki_repo_path,
+            source_id,
+            new_entities=[
+                plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
+            ],
+            planned_claims=[
+                _make_claim(
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="new",
+                            proposed_section="founding",
+                            proposed_category="locations",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        result = review.run(
+            cfg=cfg,
+            source_id=source_id,
+            reviewer=ScriptedReviewer([ApproveDecision()]),
+        )
+        assert result.approved == 1
+
+    def test_strict_subset_succeeds(self, cfg: cfg_mod.Config) -> None:
+        """Plan has two claim groups; only one proposal on disk (Ctrl-C resume)."""
+        source_id = "yt-x"
+        _write_info(cfg.wiki_repo_path, source_id)
+        # Only write proposal for cg-001, not cg-002
+        proposal = _make_proposal(
+            target="Aldara", proposed_id="aldara-f001", cg="cg-001"
+        )
+        _write_proposal(source_id, proposal)
+        _write_plan(
+            cfg.wiki_repo_path,
+            source_id,
+            new_entities=[
+                plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
+                plan_yaml.NewEntityProposal(name="Theron", category="characters"),
+            ],
+            planned_claims=[
+                _make_claim(
+                    cg="cg-001",
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="new",
+                            proposed_section="founding",
+                            proposed_category="locations",
+                        ),
+                    ],
+                ),
+                _make_claim(
+                    cg="cg-002",
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Theron",
+                            entity_state="new",
+                            proposed_section="lineage",
+                            proposed_category="characters",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        result = review.run(
+            cfg=cfg,
+            source_id=source_id,
+            reviewer=ScriptedReviewer([ApproveDecision()]),
+        )
+        assert result.approved == 1
+
+    def test_orphan_raises_review_error(self, cfg: cfg_mod.Config) -> None:
+        """Proposal whose (claim_group_id, target_entity) not in plan → ReviewError."""
+        source_id = "yt-x"
+        _write_info(cfg.wiki_repo_path, source_id)
+        # In-plan proposal
+        valid = _make_proposal(target="Aldara", proposed_id="aldara-f001", cg="cg-001")
+        _write_proposal(source_id, valid)
+        # Orphan proposal — cg-999 not in the plan
+        orphan = _make_proposal(target="Ghost", proposed_id="ghost-f001", cg="cg-999")
+        _write_proposal(source_id, orphan)
+        _write_plan(
+            cfg.wiki_repo_path,
+            source_id,
+            new_entities=[
+                plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
+            ],
+            planned_claims=[
+                _make_claim(
+                    cg="cg-001",
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="new",
+                            proposed_section="founding",
+                            proposed_category="locations",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        with pytest.raises(review.ReviewError) as exc_info:
+            review.run(
+                cfg=cfg,
+                source_id=source_id,
+                reviewer=ScriptedReviewer([ApproveDecision()]),
+            )
+        msg = str(exc_info.value)
+        orphan_path = reading_pipeline.pending_proposal_path(source_id, "ghost-f001")
+        assert str(orphan_path) in msg
+        assert "replan" in msg
+
+
+# ---------------------------------------------------------------------------
 # Fact dict shape
 # ---------------------------------------------------------------------------
 

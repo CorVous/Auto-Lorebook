@@ -155,6 +155,30 @@ seeds its dedup set from on-disk alias records whose
   screen — once a bundle has been approved or rejected and the next
   one is shown, undo cannot bring it back.
 
+### Crash recovery
+
+Review writes happen in two steps: `entity_yaml.write` then
+`proposal_path.unlink`. A Ctrl-C between them leaves a proposal file on
+disk that references a fact already written. Two recovery invariants cover
+this:
+
+1. **Idempotent skip.** When `_approve` finds the proposal's `proposed_id`
+   already present in the entity's facts list, it skips the append and
+   unlinks the proposal file anyway. The approved and edited counters do not
+   increment — the resume run sees the correct totals.
+
+2. **Proposals as subset.** At the start of `run()`, the engine validates
+   that every on-disk proposal corresponds to a `(claim_group_id,
+   target_entity)` key in the plan. Missing keys are normal after a partial
+   run (already-approved proposals were unlinked). Extra keys — orphans
+   whose plan key doesn't exist — raise `ReviewError` and name each
+   offending file. The recovery path is
+   [`replan`](planner.md#replan-escape-hatch), which rebuilds the plan and
+   discards proposals no longer sanctioned by it.
+
+See also [ADR 0001](../adr/0001-plan-canonicality.md) for the decision
+rationale.
+
 ## No skip, no defer
 
 A "come back to it later" action would accumulate stale state that
