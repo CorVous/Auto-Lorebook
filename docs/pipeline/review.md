@@ -83,12 +83,14 @@ Routes:
 >
 ```
 
-Bundle-level edits to `text`, `status`, or `status_reason` propagate
-to every checked route — those are claim-level facts about the world,
-so they should agree across siblings. Per-target overrides for
-`section` and `speaker` live in the `[t]argets` sub-prompt because
-they're inherently route-shaped (different entities have different
-sections).
+**Bundle-level edits** carry only `text`, `status`, and `status_reason`
+— those are claim-level facts about the world, so they propagate to
+every checked route and should agree across siblings.
+**Per-target overrides** carry only `section` and `speaker` and live
+in the `[t]argets` sub-prompt: different routes point at different
+entities, so section is inherently route-shaped, and speaker
+attribution can vary route-by-route. The two field sets are disjoint
+by design — a reviewer cannot set a bundle-wide `section`.
 
 ### New-entity routes
 
@@ -136,11 +138,12 @@ seeds its dedup set from on-disk alias records whose
 
 - **Approve** — every checked route becomes a fact, appended to its
   target entity's YAML (creating the YAML if this is the first
-  approval for a new entity); summary regenerated. Unchecked routes
-  are dropped — their proposal files are deleted.
+  approval for a new entity). Unchecked routes are dropped — their
+  proposal files are deleted.
 - **Edit** — bundle-level edits to `text`, `status`, and
-  `status_reason` propagate to every checked route. Tracks original
-  text as `text_source` on each affected fact.
+  `status_reason` propagate to every checked route. Per-target
+  `section` / `speaker` overrides are set in `[t]argets`. Tracks
+  original text as `text_source` on each affected fact.
 - **Reject** — discards the whole bundle: every route's proposal
   file is removed, no entity is touched.
 - **Play** — prints the URL; user clicks through to verify against

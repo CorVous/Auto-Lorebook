@@ -18,11 +18,13 @@ from auto_lorebook import (
 from auto_lorebook.review import (
     ApproveDecision,
     BundleDecision,
+    BundleEdits,
     BundleView,
     Decision,
-    EditDecision,
+    MergedEdits,
     RejectDecision,
     ReviewResult,
+    TargetEdits,
 )
 
 if TYPE_CHECKING:
@@ -300,7 +302,7 @@ class TestFactDict:
         p = _make_proposal(target="Aldara", proposed_id="aldara-f001")
         fact = review.proposal_to_fact_dict(
             p,
-            edits=EditDecision(new_text="Aldara was founded earlier than that."),
+            edits=MergedEdits(new_text="Aldara was founded earlier than that."),
             ingest_id="yt-x",
             by_label="human-review",
         )
@@ -322,7 +324,7 @@ class TestFactDict:
         p = _make_proposal(target="Aldara", proposed_id="aldara-f001")
         fact = review.proposal_to_fact_dict(
             p,
-            edits=EditDecision(
+            edits=MergedEdits(
                 new_speaker="Player-Thorin",
                 new_status="hearsay",
                 new_status_reason="Speaker is a tavern rumor source.",
@@ -348,7 +350,7 @@ class TestFactDict:
         p = _make_proposal(target="Aldara", proposed_id="aldara-f001")
         fact = review.proposal_to_fact_dict(
             p,
-            edits=EditDecision(new_status="trustworthy"),
+            edits=MergedEdits(new_status="trustworthy"),
             ingest_id="yt-x",
             by_label="human-review",
         )
@@ -361,7 +363,7 @@ class TestFactDict:
         p = _make_proposal(target="Aldara", proposed_id="aldara-f001")
         fact = review.proposal_to_fact_dict(
             p,
-            edits=EditDecision(),  # no overrides
+            edits=MergedEdits(),  # no overrides
             ingest_id="yt-x",
             by_label="human-review",
         )
@@ -1147,7 +1149,7 @@ class TestBundle:
         scripted = ScriptedReviewer(
             bundle_decisions=[
                 BundleDecision(
-                    decision=EditDecision(new_text="Edited claim text."),
+                    decision=BundleEdits(new_text="Edited claim text."),
                     selected_indices=(0, 1, 2),
                 )
             ]
@@ -1175,7 +1177,7 @@ class TestBundle:
                     decision=ApproveDecision(),
                     selected_indices=(0, 1, 2),
                     per_target_overrides={
-                        1: EditDecision(new_section="bloodlines"),
+                        1: TargetEdits(new_section="bloodlines"),
                     },
                 )
             ]
@@ -1186,6 +1188,102 @@ class TestBundle:
         second = entity_yaml.read(cfg.wiki_repo_path / "events" / "second-age.yaml")
         assert aldara.facts[0]["section"] == "founding"
         assert theron.facts[0]["section"] == "bloodlines"
+        assert second.facts[0]["section"] == "events-in-era"
+
+    def test_bundle_level_edit_propagates_text_status_status_reason_to_all_routes(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        """Bundle-level text/status/status_reason land on every selected route."""
+        source_id = "yt-x"
+        _multi_target_setup(cfg, source_id)
+        scripted = ScriptedReviewer(
+            bundle_decisions=[
+                BundleDecision(
+                    decision=BundleEdits(
+                        new_text="Edited claim.",
+                        new_status="hearsay",
+                        new_status_reason="tavern rumor",
+                    ),
+                    selected_indices=(0, 1, 2),
+                )
+            ]
+        )
+        result = review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        assert result.edited == 3
+        for slug, cat in (
+            ("aldara", "locations"),
+            ("theron", "characters"),
+            ("second-age", "events"),
+        ):
+            e = entity_yaml.read(cfg.wiki_repo_path / cat / f"{slug}.yaml")
+            assert e.facts[0]["text"] == "Edited claim."
+            assert e.facts[0]["status"] == "hearsay"
+            assert e.facts[0]["status_reason"] == "tavern rumor"
+
+    def test_per_target_section_speaker_scoped_to_that_target_only(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        """TargetEdits on idx 1 must not leak to idx 0 or idx 2."""
+        source_id = "yt-x"
+        _multi_target_setup(cfg, source_id)
+        scripted = ScriptedReviewer(
+            bundle_decisions=[
+                BundleDecision(
+                    decision=ApproveDecision(),
+                    selected_indices=(0, 1, 2),
+                    per_target_overrides={
+                        1: TargetEdits(
+                            new_section="bloodlines",
+                            new_speaker="Player-Thorin",
+                        ),
+                    },
+                )
+            ]
+        )
+        review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        aldara = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        theron = entity_yaml.read(cfg.wiki_repo_path / "characters" / "theron.yaml")
+        second = entity_yaml.read(cfg.wiki_repo_path / "events" / "second-age.yaml")
+        # idx 1 (Theron) has both overrides
+        assert theron.facts[0]["section"] == "bloodlines"
+        assert theron.facts[0]["speaker"] == "Player-Thorin"
+        # idx 0 / idx 2 keep proposal values for both fields
+        assert aldara.facts[0]["section"] == "founding"
+        assert aldara.facts[0]["speaker"] == "DM"
+        assert second.facts[0]["section"] == "events-in-era"
+        assert second.facts[0]["speaker"] == "DM"
+
+    def test_bundle_edit_combined_with_per_target_override_layers_disjoint_fields(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        """Bundle text/status + per-target section coexist on the same fact."""
+        source_id = "yt-x"
+        _multi_target_setup(cfg, source_id)
+        scripted = ScriptedReviewer(
+            bundle_decisions=[
+                BundleDecision(
+                    decision=BundleEdits(
+                        new_text="Edited claim.",
+                        new_status="hearsay",
+                    ),
+                    selected_indices=(0, 1, 2),
+                    per_target_overrides={
+                        1: TargetEdits(new_section="bloodlines"),
+                    },
+                )
+            ]
+        )
+        review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        aldara = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        theron = entity_yaml.read(cfg.wiki_repo_path / "characters" / "theron.yaml")
+        second = entity_yaml.read(cfg.wiki_repo_path / "events" / "second-age.yaml")
+        # bundle fields land on every route
+        for e in (aldara, theron, second):
+            assert e.facts[0]["text"] == "Edited claim."
+            assert e.facts[0]["status"] == "hearsay"
+        # only Theron has the per-target section override
+        assert theron.facts[0]["section"] == "bloodlines"
+        assert aldara.facts[0]["section"] == "founding"
         assert second.facts[0]["section"] == "events-in-era"
 
     def test_singleton_claim_group_renders_as_single_target(
@@ -1475,7 +1573,7 @@ class TestEditPath:
         result = review.run(
             cfg=cfg,
             source_id=source_id,
-            reviewer=ScriptedReviewer([EditDecision(new_text="Edited by hand.")]),
+            reviewer=ScriptedReviewer([BundleEdits(new_text="Edited by hand.")]),
         )
         assert result.edited == 1
         assert result.approved == 0

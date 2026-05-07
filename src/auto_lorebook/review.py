@@ -53,14 +53,49 @@ class ApproveDecision:
 
 
 @dataclass(frozen=True)
-class EditDecision:
-    """Approve with one or more field overrides.
+class BundleEdits:
+    """Bundle-level overrides: claim-wide fields only.
 
-    Fields default to ``None`` meaning "keep the original value". A
-    non-None ``new_text`` triggers ``edited_by_human=True`` and stashes
-    the original in ``text_source``; the other overrides change the
-    fact value silently (status changes are reflected in
-    ``status_history``).
+    ``new_text`` triggers ``edited_by_human=True`` + ``text_source``
+    on every checked route. Status fields change the recorded value
+    (reflected in ``status_history``). Section/speaker are absent by
+    design — those are route-shaped and live in ``TargetEdits``.
+    """
+
+    new_text: str | None = None
+    new_status: str | None = None
+    new_status_reason: str | None = None
+
+    def is_noop(self) -> bool:
+        """Return True when no field override is set."""
+        return (
+            self.new_text is None
+            and self.new_status is None
+            and self.new_status_reason is None
+        )
+
+
+@dataclass(frozen=True)
+class TargetEdits:
+    """Per-target overrides: route-shaped fields only.
+
+    Section and speaker differ per entity, so they live here rather
+    than in ``BundleEdits``. Text/status fields are absent by design.
+    """
+
+    new_section: str | None = None
+    new_speaker: str | None = None
+
+    def is_noop(self) -> bool:
+        """Return True when no field override is set."""
+        return self.new_section is None and self.new_speaker is None
+
+
+@dataclass(frozen=True)
+class MergedEdits:
+    """Internal shape after layering bundle + per-target overrides.
+
+    Consumed only by ``proposal_to_fact_dict`` and ``_approve``.
     """
 
     new_text: str | None = None
@@ -88,7 +123,7 @@ class RejectDecision:
     """Discard the proposal."""
 
 
-Decision = ApproveDecision | EditDecision | RejectDecision
+Decision = ApproveDecision | BundleEdits | RejectDecision
 
 
 @dataclass(frozen=True)
@@ -119,16 +154,17 @@ class BundleView:
 class BundleDecision:
     """Result of one `decide_bundle` call.
 
-    `decision` is bundle-wide. `selected_indices` lists which target
-    rows the user kept checked. Unselected targets are dropped on
-    Approve / Edit. Reject discards the whole bundle (selection
-    ignored). `per_target_overrides[i]` overlays an `EditDecision`
-    on top of the bundle-level edit, last-write-wins per field.
+    `decision` is bundle-wide: ``ApproveDecision`` or ``BundleEdits``
+    (text/status/status_reason) or ``RejectDecision``. `selected_indices`
+    lists which target rows the user kept checked. Unselected targets are
+    dropped on Approve / Edit; Reject discards the whole bundle (selection
+    ignored). `per_target_overrides[i]` holds ``TargetEdits``
+    (section/speaker) for route `i` — disjoint from bundle-level fields.
     """
 
-    decision: ApproveDecision | EditDecision | RejectDecision
+    decision: ApproveDecision | BundleEdits | RejectDecision
     selected_indices: tuple[int, ...]
-    per_target_overrides: dict[int, EditDecision] = field(default_factory=dict)
+    per_target_overrides: dict[int, TargetEdits] = field(default_factory=dict)
 
 
 class Reviewer(Protocol):
@@ -226,7 +262,7 @@ def _category_for_new(plan: Plan, target_entity: str) -> str | None:
 def proposal_to_fact_dict(
     proposal: Proposal,
     *,
-    edits: EditDecision | None,
+    edits: MergedEdits | None,
     ingest_id: str,
     by_label: str,
 ) -> dict[str, Any]:
@@ -335,7 +371,7 @@ def _approve(
     proposal: Proposal,
     proposal_path: Path,
     *,
-    edits: EditDecision | None,
+    edits: MergedEdits | None,
     confirmed_aliases: list[str],
     by_label: str,
 ) -> bool:
@@ -484,32 +520,34 @@ def _bundle_proposals(ordered: list[Proposal]) -> list[list[Proposal]]:
 
 
 def _merge_edits(
-    bundle_decision: ApproveDecision | EditDecision,
-    override: EditDecision | None,
-) -> EditDecision | None:
-    """Layer per-target override on top of bundle-level edit.
+    bundle_decision: ApproveDecision | BundleEdits,
+    override: TargetEdits | None,
+) -> MergedEdits | None:
+    """Combine bundle-level and per-target edits into a single ``MergedEdits``.
 
-    Per-target wins per field. Returns None when both are absent /
-    no-op so `_approve` takes the plain-approve path.
+    Returns None (plain-approve path) when result would be a no-op.
+    Fields are disjoint: bundle owns text/status/status_reason;
+    override owns section/speaker.
     """
     if isinstance(bundle_decision, ApproveDecision):
         if override is None or override.is_noop():
             return None
-        return override
-    if override is None:
-        return bundle_decision if not bundle_decision.is_noop() else None
-    merged = EditDecision(
-        new_text=override.new_text or bundle_decision.new_text,
-        new_speaker=override.new_speaker or bundle_decision.new_speaker,
-        new_status=override.new_status or bundle_decision.new_status,
-        new_status_reason=(
-            override.new_status_reason
-            if override.new_status_reason is not None
-            else bundle_decision.new_status_reason
-        ),
-        new_section=override.new_section or bundle_decision.new_section,
+        return MergedEdits(
+            new_section=override.new_section,
+            new_speaker=override.new_speaker,
+        )
+    # BundleEdits branch
+    has_bundle = not bundle_decision.is_noop()
+    has_override = override is not None and not override.is_noop()
+    if not has_bundle and not has_override:
+        return None
+    return MergedEdits(
+        new_text=bundle_decision.new_text,
+        new_status=bundle_decision.new_status,
+        new_status_reason=bundle_decision.new_status_reason,
+        new_section=override.new_section if override else None,
+        new_speaker=override.new_speaker if override else None,
     )
-    return None if merged.is_noop() else merged
 
 
 def _count_remaining(source_id: str) -> int:
