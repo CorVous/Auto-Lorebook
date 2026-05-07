@@ -869,6 +869,51 @@ class TestSiblingAliasDedup:
 
 
 class TestDeclinedAliasMemory:
+    def test_decline_in_first_route_skips_alias_for_sibling_routes(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        # Single bundle: three routes, all targeting Aldara with "the Realm".
+        source_id = "yt-x"
+        _write_info(cfg.wiki_repo_path, source_id)
+        cg = "cg-001"
+        pids = ["aldara-f001", "aldara-f002", "aldara-f003"]
+        for pid in pids:
+            _write_proposal(
+                source_id,
+                _make_proposal(target="Aldara", proposed_id=pid, cg=cg),
+            )
+        _write_plan(
+            cfg.wiki_repo_path,
+            source_id,
+            new_entities=[
+                plan_yaml.NewEntityProposal(
+                    name="Aldara",
+                    category="locations",
+                    aliases_suggested=["the Realm"],
+                ),
+            ],
+            planned_claims=[
+                _make_claim(
+                    cg=cg,
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="new",
+                            proposed_section="founding",
+                            proposed_category="locations",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        # One bundle decision selects all three routes; alias declined in first.
+        scripted = ScriptedReviewer([ApproveDecision()], alias_responses=[False])
+        review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        # Declined in first route → skipped for the other two.
+        assert len(scripted.alias_calls) == 1
+        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        assert len(e.aliases) == 0
+
     def _setup_two_bundles_same_alias(
         self, cfg: cfg_mod.Config, source_id: str
     ) -> None:
