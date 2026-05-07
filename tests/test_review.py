@@ -864,6 +864,129 @@ class TestSiblingAliasDedup:
 
 
 # ---------------------------------------------------------------------------
+# Declined-alias dedup (in-memory, single run)
+# ---------------------------------------------------------------------------
+
+
+class TestDeclinedAliasMemory:
+    def _setup_two_bundles_same_alias(
+        self, cfg: cfg_mod.Config, source_id: str
+    ) -> None:
+        """Two consecutive bundles both suggesting 'the Realm' for Aldara."""
+        _write_info(cfg.wiki_repo_path, source_id)
+        _write_proposal(
+            source_id,
+            _make_proposal(target="Aldara", proposed_id="aldara-f001", cg="cg-001"),
+        )
+        _write_proposal(
+            source_id,
+            _make_proposal(target="Aldara", proposed_id="aldara-f002", cg="cg-002"),
+        )
+        _write_plan(
+            cfg.wiki_repo_path,
+            source_id,
+            new_entities=[
+                plan_yaml.NewEntityProposal(
+                    name="Aldara",
+                    category="locations",
+                    aliases_suggested=["the Realm"],
+                ),
+            ],
+            planned_claims=[
+                _make_claim(
+                    cg="cg-001",
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="new",
+                            proposed_section="founding",
+                            proposed_category="locations",
+                        ),
+                    ],
+                ),
+                _make_claim(
+                    cg="cg-002",
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="new",
+                            proposed_section="lore",
+                            proposed_category="locations",
+                        ),
+                    ],
+                ),
+            ],
+        )
+
+    def test_decline_in_first_bundle_skips_alias_in_second_bundle(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        source_id = "yt-x"
+        self._setup_two_bundles_same_alias(cfg, source_id)
+        scripted = ScriptedReviewer(
+            [ApproveDecision(), ApproveDecision()], alias_responses=[False]
+        )
+        review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
+        # Declined in first bundle → skipped in second bundle.
+        assert len(scripted.alias_calls) == 1
+        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        assert len(e.aliases) == 0
+
+    def test_second_run_does_not_inherit_declines_from_first(
+        self, cfg: cfg_mod.Config
+    ) -> None:
+        source_id = "yt-x"
+        self._setup_two_bundles_same_alias(cfg, source_id)
+        # First run: decline alias once, entity gets created (both proposals approved).
+        scripted1 = ScriptedReviewer(
+            [ApproveDecision(), ApproveDecision()], alias_responses=[False]
+        )
+        review.run(cfg=cfg, source_id=source_id, reviewer=scripted1)
+        assert len(scripted1.alias_calls) == 1
+
+        # Second run: new plan targeting existing Aldara with same alias.
+        source_id2 = "yt-y"
+        _write_info(cfg.wiki_repo_path, source_id2)
+        _write_proposal(
+            source_id2,
+            _make_proposal(
+                target="Aldara",
+                proposed_id="aldara-g001",
+                cg="cg-001",
+                proposal_type="new_fact",
+            ),
+        )
+        _write_plan(
+            cfg.wiki_repo_path,
+            source_id2,
+            entity_resolutions=[
+                plan_yaml.EntityResolution(
+                    mention="the Realm",
+                    resolution="existing",
+                    matched_entity="Aldara",
+                    suggested_aliases_to_add=["the Realm"],
+                ),
+            ],
+            planned_claims=[
+                _make_claim(
+                    cg="cg-001",
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="existing",
+                            proposed_section="lore",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        scripted2 = ScriptedReviewer([ApproveDecision()], alias_responses=[True])
+        review.run(cfg=cfg, source_id=source_id2, reviewer=scripted2)
+        # Prompt fires because declines don't persist across run() calls.
+        assert scripted2.alias_calls == [("Aldara", "the Realm")]
+
+
+# ---------------------------------------------------------------------------
 # In-memory index refresh (end-to-end)
 # ---------------------------------------------------------------------------
 

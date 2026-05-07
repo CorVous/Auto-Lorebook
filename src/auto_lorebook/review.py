@@ -296,6 +296,7 @@ class _ApprovalContext:
     plan: Plan
     index: entity_index_mod.EntityIndex
     merged_aliases: set[tuple[str, str]] = field(default_factory=set)
+    declined_aliases: set[tuple[str, str]] = field(default_factory=set)
 
 
 def _resolve_entity_path(
@@ -419,6 +420,7 @@ def _build_target_view(ctx: _ApprovalContext, proposal: Proposal) -> TargetView:
         a
         for a in suggested
         if (target_key, normalize_alias_name(a)) not in ctx.merged_aliases
+        and (target_key, normalize_alias_name(a)) not in ctx.declined_aliases
     )
     matched_via = _matched_via_for(ctx.plan, proposal)
     created_earlier = False
@@ -642,20 +644,22 @@ def _process_bundle(
     for i, proposal in enumerate(bundle):
         if i not in selected:
             continue
-        # re-filter aliases against ctx.merged_aliases — earlier
-        # selected siblings in this same bundle may have already merged
-        # an alias that this target also suggests.
+        # re-filter aliases against ctx.merged_aliases and ctx.declined_aliases —
+        # earlier siblings in this bundle (or earlier bundles) may have already
+        # settled the alias.
         target_key = proposal.target_entity.casefold()
         fresh_aliases = tuple(
             a
             for a in _suggested_aliases_for(ctx.plan, proposal)
             if (target_key, normalize_alias_name(a)) not in ctx.merged_aliases
+            and (target_key, normalize_alias_name(a)) not in ctx.declined_aliases
         )
-        confirmed: list[str] = [
-            alias
-            for alias in fresh_aliases
-            if reviewer.confirm_alias(proposal.target_entity, alias)
-        ]
+        confirmed: list[str] = []
+        for alias in fresh_aliases:
+            if reviewer.confirm_alias(proposal.target_entity, alias):
+                confirmed.append(alias)
+            else:
+                ctx.declined_aliases.add((target_key, normalize_alias_name(alias)))
 
         edits = _merge_edits(
             bundle_decision.decision,
