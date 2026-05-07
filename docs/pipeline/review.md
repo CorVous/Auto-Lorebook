@@ -83,12 +83,14 @@ Routes:
 >
 ```
 
-Bundle-level edits to `text`, `status`, or `status_reason` propagate
-to every checked route — those are claim-level facts about the world,
-so they should agree across siblings. Per-target overrides for
-`section` and `speaker` live in the `[t]argets` sub-prompt because
-they're inherently route-shaped (different entities have different
-sections).
+**Bundle-level edits** carry only `text`, `status`, and `status_reason`
+— those are claim-level facts about the world, so they propagate to
+every checked route and should agree across siblings.
+**Per-target overrides** carry only `section` and `speaker` and live
+in the `[t]argets` sub-prompt: different routes point at different
+entities, so section is inherently route-shaped, and speaker
+attribution can vary route-by-route. The two field sets are disjoint
+by design — a reviewer cannot set a bundle-wide `section`.
 
 ### New-entity routes
 
@@ -136,11 +138,12 @@ seeds its dedup set from on-disk alias records whose
 
 - **Approve** — every checked route becomes a fact, appended to its
   target entity's YAML (creating the YAML if this is the first
-  approval for a new entity); summary regenerated. Unchecked routes
-  are dropped — their proposal files are deleted.
+  approval for a new entity). Unchecked routes are dropped — their
+  proposal files are deleted.
 - **Edit** — bundle-level edits to `text`, `status`, and
-  `status_reason` propagate to every checked route. Tracks original
-  text as `text_source` on each affected fact.
+  `status_reason` propagate to every checked route. Per-target
+  `section` / `speaker` overrides are set in `[t]argets`. Tracks
+  original text as `text_source` on each affected fact.
 - **Reject** — discards the whole bundle: every route's proposal
   file is removed, no entity is touched.
 - **Play** — prints the URL; user clicks through to verify against
@@ -154,6 +157,30 @@ seeds its dedup set from on-disk alias records whose
   toggled off via `[t]argets`). Scope is the bundle currently on
   screen — once a bundle has been approved or rejected and the next
   one is shown, undo cannot bring it back.
+
+### Crash recovery
+
+Review writes happen in two steps: `entity_yaml.write` then
+`proposal_path.unlink`. A Ctrl-C between them leaves a proposal file on
+disk that references a fact already written. Two recovery invariants cover
+this:
+
+1. **Idempotent skip.** When `_approve` finds the proposal's `proposed_id`
+   already present in the entity's facts list, it skips the append and
+   unlinks the proposal file anyway. The approved and edited counters do not
+   increment — the resume run sees the correct totals.
+
+2. **Proposals as subset.** At the start of `run()`, the engine validates
+   that every on-disk proposal corresponds to a `(claim_group_id,
+   target_entity)` key in the plan. Missing keys are normal after a partial
+   run (already-approved proposals were unlinked). Extra keys — orphans
+   whose plan key doesn't exist — raise `ReviewError` and name each
+   offending file. The recovery path is
+   [`replan`](planner.md#replan-escape-hatch), which rebuilds the plan and
+   discards proposals no longer sanctioned by it.
+
+See also [ADR 0001](../adr/0001-plan-canonicality.md) for the decision
+rationale.
 
 ## No skip, no defer
 
