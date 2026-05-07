@@ -75,3 +75,6 @@ nav:
       - reference/audit.md
   - Roadmap: roadmap/index.md
   - Contributing: contributing.md
+  - ADRs:
+      - adr/0001-plan-canonicality.md
+      - adr/0002-status-edit-audit-asymmetry.md

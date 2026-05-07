@@ -191,8 +191,47 @@ class ReviewResult:
 # ------------- ordering / lookup helpers ---------------------------------
 
 
+def _validate_proposals_subset_of_plan(plan: Plan, source_id: str) -> None:
+    """Raise ReviewError if any on-disk proposal is not in plan keys.
+
+    Missing keys are fine (subset allowed — covers Ctrl-C resume).
+    Orphans (extra keys) indicate drift; user must replan.
+    """
+    proposals_dir = reading_pipeline.pending_proposals_dir(source_id)
+    if not proposals_dir.is_dir():
+        return
+    plan_keys: set[tuple[str, str]] = {
+        (claim.claim_group_id, target.entity)
+        for claim in plan.planned_claims
+        for target in claim.targets
+    }
+    orphans: list[str] = []
+    for path in sorted(proposals_dir.glob("*.yaml")):
+        try:
+            p = proposal_yaml_mod.read(path)
+        except proposal_yaml_mod.ProposalError:
+            _logger.warning("review: could not parse %s; skipping", path)
+            continue
+        if (p.claim_group_id, p.target_entity) not in plan_keys:
+            orphans.append(
+                f"  - {path}  (claim_group_id={p.claim_group_id},"
+                f" target_entity={p.target_entity})"
+            )
+    if orphans:
+        lines = "\n".join(orphans)
+        msg = (
+            f"Orphan proposals not in plan"
+            f" (run `auto-lorebook replan {source_id}` to recover):\n{lines}"
+        )
+        raise ReviewError(msg)
+
+
 def sorted_proposals(plan: Plan, source_id: str) -> list[Proposal]:
-    """Walk plan in order; yield proposals still on disk."""
+    """Walk plan in order; yield proposals still on disk.
+
+    Precondition: on-disk proposals are a subset of plan keys
+    (enforced by _validate_proposals_subset_of_plan before this runs).
+    """
     proposals_dir = reading_pipeline.pending_proposals_dir(source_id)
     if not proposals_dir.is_dir():
         return []
@@ -212,9 +251,6 @@ def sorted_proposals(plan: Plan, source_id: str) -> list[Proposal]:
             p = by_key.pop(key, None)
             if p is not None:
                 out.append(p)
-    # Any proposal whose plan-key didn't match (orphan) gets appended
-    # deterministically by file order so we never silently drop work.
-    out.extend(by_key[key] for key in sorted(by_key))
     return out
 
 
@@ -611,6 +647,7 @@ def run(
         msg = f"No plan at {plan_path}; run `approve-reading {source_id}` first."
         raise ReviewError(msg)
     plan = plan_yaml_mod.read(plan_path)
+    _validate_proposals_subset_of_plan(plan, source_id)
     index = entity_index_mod.build(wiki_repo)
     ctx = _ApprovalContext(
         cfg=cfg, source_id=source_id, info=info, plan=plan, index=index
