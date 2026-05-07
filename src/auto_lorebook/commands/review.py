@@ -19,9 +19,10 @@ from auto_lorebook.interactive import _is_interactive
 from auto_lorebook.review import (
     ApproveDecision,
     BundleDecision,
+    BundleEdits,
     BundleView,
-    EditDecision,
     RejectDecision,
+    TargetEdits,
     TargetView,
 )
 from auto_lorebook.timestamps import TimestampError, parse_locator_hint
@@ -135,8 +136,8 @@ class InteractiveReviewer:
         # `selected[i]` toggles route i. Default: every route checked.
         selected = [True] * len(view.targets)
         # Per-target overrides accumulated via `[t]`.
-        overrides: dict[int, EditDecision] = {}
-        bundle_edits: EditDecision | None = None
+        overrides: dict[int, TargetEdits] = {}
+        bundle_edits: BundleEdits | None = None
         _render_bundle(view, selected, overrides, bundle_edits)
         while True:
             try:
@@ -201,8 +202,8 @@ class InteractiveReviewer:
 
 
 def _gather_bundle_edits(
-    view: BundleView, current: EditDecision | None
-) -> EditDecision | None:
+    view: BundleView, current: BundleEdits | None
+) -> BundleEdits | None:
     """Bundle-level edits: text / status / status_reason only.
 
     `section` and `speaker` vary per route, so they live in the
@@ -224,7 +225,7 @@ def _gather_bundle_edits(
             else sample.status_reason or ""
         ),
     )
-    edits = EditDecision(
+    edits = BundleEdits(
         new_text=new_text,
         new_status=new_status,
         new_status_reason=new_status_reason,
@@ -235,7 +236,7 @@ def _gather_bundle_edits(
 def _gather_target_toggles(
     view: BundleView,
     selected: list[bool],
-    overrides: dict[int, EditDecision],
+    overrides: dict[int, TargetEdits],
 ) -> None:
     """Toggle inclusion per route; for kept rows, override section / speaker."""
     print("  Targets (per route):")  # noqa: T201
@@ -271,7 +272,7 @@ def _gather_target_toggles(
 
 
 def _edit_target_override(
-    target: TargetView, idx: int, overrides: dict[int, EditDecision]
+    target: TargetView, idx: int, overrides: dict[int, TargetEdits]
 ) -> None:
     """Prompt for per-target section / speaker; merge into overrides."""
     p = target.proposal
@@ -284,7 +285,7 @@ def _edit_target_override(
         "speaker",
         current.new_speaker if current and current.new_speaker else p.speaker,
     )
-    edits = EditDecision(new_section=new_section, new_speaker=new_speaker)
+    edits = TargetEdits(new_section=new_section, new_speaker=new_speaker)
     if edits.is_noop():
         overrides.pop(idx, None)
     else:
@@ -305,8 +306,8 @@ def _prompt_line(view: BundleView) -> str:
 def _render_bundle(
     view: BundleView,
     selected: list[bool],
-    overrides: dict[int, EditDecision],
-    bundle_edits: EditDecision | None,
+    overrides: dict[int, TargetEdits],
+    bundle_edits: BundleEdits | None,
 ) -> None:
     """Render one claim-group bundle.
 
