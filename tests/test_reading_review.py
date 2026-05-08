@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,9 +14,11 @@ from auto_lorebook import config as cfg_mod
 from auto_lorebook import reading_pipeline as pipeline
 from auto_lorebook import segment_file as segment_file_mod
 from auto_lorebook.commands.approve_reading import AutoAcceptReviewer
+from auto_lorebook.openrouter import OpenRouterResponse
 from auto_lorebook.reading_review import (
     AcceptDecision,
     CommitDecision,
+    RegenBatch,
     RegenerateAgainDecision,
     SegmentView,
     SkipBulletsDecision,
@@ -400,3 +403,175 @@ class TestPureNoInputOrPrint:
                         " — engine must be pure-logic (no I/O)"
                     )
                     raise AssertionError(msg)
+
+
+class TestRegenBatchAtCommit:
+    """Engine emits RegenBatch when at least one segment is regenerating."""
+
+    def test_regen_decision_produces_regen_batch(
+        self, env: tuple[cfg_mod.Config, Path]
+    ) -> None:
+        cfg, _ = env
+        # seg-001 accepted, seg-002 regen, seg-003 accepted
+        reviewer = _scripted([
+            AcceptDecision(),
+            RegenerateAgainDecision(),
+            AcceptDecision(),
+        ])
+        result = run(cfg=cfg, source_id=_SOURCE_ID, reviewer=reviewer)
+
+        assert result.gate_fired is False
+        assert result.wiki_reading_path is None
+        assert result.regen_batch is not None
+        assert isinstance(result.regen_batch, RegenBatch)
+        assert result.regen_batch.regen_segment_ids == ("seg-002",)
+        assert result.regen_batch.source_id == _SOURCE_ID
+
+    def test_regen_batch_accepted_context_includes_in_quit_commits(
+        self, env: tuple[cfg_mod.Config, Path]
+    ) -> None:
+        cfg, _ = env
+        # seg-001 accepted, seg-002 regen, seg-003 accepted
+        reviewer = _scripted([
+            AcceptDecision(),
+            RegenerateAgainDecision(),
+            AcceptDecision(),
+        ])
+        result = run(cfg=cfg, source_id=_SOURCE_ID, reviewer=reviewer)
+
+        assert result.regen_batch is not None
+        ctx = result.regen_batch.accepted_context
+        # only accepted segments in context
+        ids = tuple(e.segment_id for e in ctx)
+        assert ids == ("seg-001", "seg-003")
+        # bodies present
+        for entry in ctx:
+            assert entry.bullets_body
+
+    def test_regen_batch_accepted_context_excludes_skipped(
+        self, env: tuple[cfg_mod.Config, Path]
+    ) -> None:
+        cfg, _ = env
+        # seg-001 skipped, seg-002 regen, seg-003 accepted
+        reviewer = _scripted([
+            SkipBulletsDecision(),
+            RegenerateAgainDecision(),
+            AcceptDecision(),
+        ])
+        result = run(cfg=cfg, source_id=_SOURCE_ID, reviewer=reviewer)
+
+        assert result.regen_batch is not None
+        ids = tuple(e.segment_id for e in result.regen_batch.accepted_context)
+        # seg-001 is skipped → not in accepted_context; seg-003 is accepted
+        assert ids == ("seg-003",)
+
+    def test_regen_batch_none_when_no_regenerating_segments(
+        self, env: tuple[cfg_mod.Config, Path]
+    ) -> None:
+        cfg, _ = env
+        reviewer = _scripted([
+            AcceptDecision(),
+            AcceptDecision(),
+            AcceptDecision(),
+        ])
+        result = run(cfg=cfg, source_id=_SOURCE_ID, reviewer=reviewer)
+
+        assert result.regen_batch is None
+
+
+class TestRegenAfterReviewIntegrates:
+    """End-to-end: quit with regen → regenerate_after_review → segment back to draft."""
+
+    def test_regenerated_segment_returns_to_draft(
+        self,
+        tmp_path: Path,
+        tmp_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from auto_lorebook.commands import (  # noqa: PLC0415
+            generate_reading as generate_reading_cmd,
+        )
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
+        (home / "config.yaml").write_text(
+            f"schema_version: 1\nwiki_repo_path: {tmp_wiki}\n"
+            "openrouter:\n  api_key_env: FAKE_OR_KEY\n"
+            "models:\n  primary: anthropic/claude-sonnet-4-5\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+
+        source_id = "yt-abc12345678"
+        src_dir = tmp_wiki / "sources" / source_id
+        src_dir.mkdir(parents=True, exist_ok=True)
+        (src_dir / "transcript.en.srt").write_text(_SRT, encoding="utf-8")
+        _write_info(tmp_wiki)
+
+        client = MagicMock()
+        _wire_client_responses(client)
+
+        def _args(**kwargs: object) -> argparse.Namespace:
+            return argparse.Namespace(**kwargs)
+
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            generate_reading_cmd.run(_args(source_id=source_id))
+
+        # manually mark seg-001 as accepted on disk, seg-002 as regenerating
+        seg001_path = pipeline.pending_segment_path(source_id, "seg-001")
+        seg002_path = pipeline.pending_segment_path(source_id, "seg-002")
+        segment_file_mod.set_status(seg001_path, "accepted")
+        segment_file_mod.set_status(seg002_path, "regenerating")
+
+        # build regen batch directly and call regenerate_after_review
+        from auto_lorebook import reading_review as rr_mod  # noqa: PLC0415
+        from auto_lorebook.stage1b import AcceptedContextEntry  # noqa: PLC0415
+
+        sf_001 = segment_file_mod.read(seg001_path)
+
+        batch = rr_mod.RegenBatch(
+            source_id=source_id,
+            regen_segment_ids=("seg-002",),
+            accepted_context=(
+                AcceptedContextEntry(
+                    segment_id=sf_001.frontmatter.segment_id,
+                    start=sf_001.frontmatter.start,
+                    end=sf_001.frontmatter.end,
+                    title=sf_001.frontmatter.title,
+                    speaker=sf_001.frontmatter.speaker,
+                    bullets_body=sf_001.body,
+                ),
+            ),
+        )
+
+        cfg = cfg_mod.Config(wiki_repo_path=tmp_wiki)
+
+        # custom mock: always returns a bullet valid for seg-002's range
+        regen_client = MagicMock()
+        regen_client.complete.return_value = OpenRouterResponse(
+            text=json.dumps({
+                "bullets": [{"text": "Regen bullet", "anchor": "0:02:30"}]
+            }),
+            model="m",
+            tokens_in=0,
+            tokens_out=0,
+        )
+
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=regen_client
+        ):
+            pipeline.regenerate_after_review(cfg, batch)
+
+        # seg-002 should be draft after regen
+        sf_002_after = segment_file_mod.read(seg002_path)
+        assert sf_002_after.frontmatter.segment_status == "draft"
+
+        # body rewritten (contains new regen bullet)
+        assert "Regen bullet" in sf_002_after.body
+
+        # no wiki reading.md written (gate not fired)
+        wiki_reading = tmp_wiki / "sources" / source_id / "reading.md"
+        assert not wiki_reading.exists()

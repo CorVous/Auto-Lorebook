@@ -36,6 +36,20 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 DEFAULT_HINT_WINDOW_SECONDS = 15.0
+
+
+@dataclass(frozen=True)
+class AcceptedContextEntry:
+    """Accepted segment snapshot injected into regen user messages."""
+
+    segment_id: str
+    start: float
+    end: float
+    title: str
+    speaker: str
+    bullets_body: str  # verbatim body from seg-NNN.md
+
+
 DEFAULT_ANCHOR_TOLERANCE_SECONDS = 2.0
 DEFAULT_MAX_CONCURRENCY = 4
 
@@ -130,6 +144,7 @@ def run(
     anchor_tolerance_seconds: float = DEFAULT_ANCHOR_TOLERANCE_SECONDS,
     max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
     segment_ids: list[str] | None = None,
+    accepted_context: list[AcceptedContextEntry] | None = None,
 ) -> ReadingBullets:
     """Run Stage 1b in parallel across `structure.segments`.
 
@@ -137,6 +152,8 @@ def run(
         raise). Default: run all segments.
     :param anchor_tolerance_seconds: anchors this far outside segment bounds
         are clamped; further raises Stage1bError.
+    :param accepted_context: accepted segments injected as context block into
+        user messages. None or empty → legacy message format.
     :raises Stage1bError: any segment's LLM response fails parsing /
         validation
     """
@@ -162,6 +179,7 @@ def run(
                 model,
                 hint_window_seconds,
                 anchor_tolerance_seconds,
+                accepted_context,
             ): seg.id
             for seg in targets
         }
@@ -183,6 +201,7 @@ def _run_one(
     model: str,
     hint_window_seconds: float,
     anchor_tolerance_seconds: float = DEFAULT_ANCHOR_TOLERANCE_SECONDS,
+    accepted_context: list[AcceptedContextEntry] | None = None,
 ) -> list[Bullet]:
     messages = [
         {
@@ -192,7 +211,9 @@ def _run_one(
         {
             "role": "user",
             "content": _build_user(
-                segment, slice_transcript_for_segment(transcript, segment)
+                segment,
+                slice_transcript_for_segment(transcript, segment),
+                accepted_context,
             ),
         },
     ]
@@ -216,13 +237,30 @@ def _run_one(
     ]
 
 
-def _build_user(segment: Segment, segment_text: str) -> str:
-    return (
+def _build_user(
+    segment: Segment,
+    segment_text: str,
+    accepted_context: list[AcceptedContextEntry] | None = None,
+) -> str:
+    parts: list[str] = []
+    if accepted_context:
+        parts.append("Accepted segments (context only — do not re-extract):\n")
+        for entry in accepted_context:
+            start_ts = format_timestamp(entry.start)
+            end_ts = format_timestamp(entry.end)
+            parts.append(
+                f"## {entry.segment_id} [{start_ts}–{end_ts}]"  # noqa: RUF001
+                f" {entry.title} ({entry.speaker})\n"
+                f"{entry.bullets_body}"
+            )
+        parts.append("---\n")
+    parts.append(
         f'Segment {segment.id}: "{segment.title}" '
         f"(speaker: {segment.speaker})\n"
         f"Range: {segment.start:.0f}s - {segment.end:.0f}s\n\n"
         f"Transcript for this segment:\n\n{segment_text}"
     )
+    return "\n".join(parts)
 
 
 def _parse_bullet(

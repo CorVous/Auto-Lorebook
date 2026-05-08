@@ -26,6 +26,7 @@ from auto_lorebook import reading_assembly as reading_assembly_mod
 from auto_lorebook import reading_pipeline as pipeline_mod
 from auto_lorebook import reading_sidecar as sidecar_mod
 from auto_lorebook import segment_file as segment_file_mod
+from auto_lorebook.stage1b import AcceptedContextEntry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -96,6 +97,15 @@ class SegmentView:
     source_title: str | None
 
 
+@dataclass(frozen=True)
+class RegenBatch:
+    """Segments queued for quit-time regeneration."""
+
+    source_id: str
+    regen_segment_ids: tuple[str, ...]
+    accepted_context: tuple[AcceptedContextEntry, ...]  # snapshot of accepted at commit
+
+
 @dataclass
 class ReadingReviewResult:
     """Counts per terminal status after a run."""
@@ -106,6 +116,7 @@ class ReadingReviewResult:
     unchanged: int = 0
     gate_fired: bool = False
     wiki_reading_path: Path | None = None
+    regen_batch: RegenBatch | None = None
 
 
 # ------------- reviewer protocol --------------------------------------------
@@ -232,6 +243,31 @@ def run(
                 result.regenerating += 1
             committed_segments.append(new_sf)
 
+    # Build regen_batch if any committed segment is regenerating.
+    regen_ids = tuple(
+        sf.frontmatter.segment_id
+        for sf in committed_segments
+        if sf.frontmatter.segment_status == "regenerating"
+    )
+    if regen_ids:
+        accepted_entries = tuple(
+            AcceptedContextEntry(
+                segment_id=sf.frontmatter.segment_id,
+                start=sf.frontmatter.start,
+                end=sf.frontmatter.end,
+                title=sf.frontmatter.title,
+                speaker=sf.frontmatter.speaker,
+                bullets_body=sf.body,
+            )
+            for sf in committed_segments
+            if sf.frontmatter.segment_status == "accepted"
+        )
+        result.regen_batch = RegenBatch(
+            source_id=source_id,
+            regen_segment_ids=regen_ids,
+            accepted_context=accepted_entries,
+        )
+
     # Gate: all segments decided?
     effective_statuses = {
         sf.frontmatter.segment_id: sf.frontmatter.segment_status
@@ -240,7 +276,7 @@ def run(
     gate = all(s in {"accepted", "skipped"} for s in effective_statuses.values())
     result.gate_fired = gate
 
-    if gate:
+    if gate and result.regen_batch is None:
         text = reading_assembly_mod.assemble(
             segments=committed_segments, sidecar=sc, info=info
         )

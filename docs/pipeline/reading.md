@@ -284,8 +284,9 @@ file is the approval artefact — there is no `reading_status`
 frontmatter flag.
 
 **Decision verbs:** `accept`, `skip-bullets`,
-`regenerate-again` (deferred — slice #5; no-op in current implementation;
-marks segment as `regenerating`, which blocks the gate),
+`regenerate-again` (queue segment for quit-time re-summarisation; marks
+segment `regenerating`, blocks gate, triggers parallel Stage 1b call on
+`[q]uit`),
 `undo` (clears the pending mark for one segment), `commit` (the quit path
 that writes and evaluates the gate).
 
@@ -319,6 +320,7 @@ pending status:
 |-----|--------|
 | `a` | Accept: queue this segment for `accepted` status; return to outer. |
 | `s` | Skip-bullets: queue this segment for `skipped` status; return to outer. |
+| `g` | Regenerate-again: queue this segment for `regenerating` status; on `[q]uit`, this segment is re-summarised in parallel against a snapshot of accepted segments and returns to `draft` for re-decision. |
 | `e` | Edit: open the segment file (`seg-NNN.md`) in `$EDITOR`. Stays in per-segment prompt on return. |
 | `u` | Undo: clear this segment's pending mark. Stays in per-segment prompt. |
 | `b` | Back: return to outer without changing any pending mark. |
@@ -327,6 +329,48 @@ Pending marks live in memory until `[q]`. On `[q]`, the engine commits
 all marks in one transaction and evaluates the gate. Ctrl-C at any
 prompt exits 130 with no committed mutations; pending marks are not
 persisted.
+
+The outer segment list shows `→regenerating` for pending regenerate-again
+marks.
+
+## Quit-time regeneration batch
+
+When `[q]` commits and at least one segment has status `regenerating`, the
+engine returns a `RegenBatch` instead of (or alongside) the gate check.
+The gate cannot fire on the same quit that includes regenerating segments —
+`regenerating` is not a decided status.
+
+**Snapshot.** After the commit-write loop, the pipeline takes a snapshot
+of all committed segments with status `accepted`. This snapshot becomes
+the accepted-context for every re-summarised segment; flagged segments do
+not see each other's regenerations.
+
+**Stage 1b user message for a regen call.** The system preamble is
+unchanged. The user message gains a compact accepted-segments block before
+the target segment's transcript slice:
+
+```
+Accepted segments (context only — do not re-extract):
+
+## seg-001 [0:00:00–0:02:15] Introduction (DM)
+- Intro bullet [0:00:15]
+
+---
+
+Segment seg-002: "Rules discussion"
+Range: ...
+
+Transcript for this segment:
+
+<sliced transcript>
+```
+
+**After regen.** Regenerated segments' `bullets.yaml` entries and
+`seg-NNN.md` files are rewritten; status is reset to `draft` for
+re-decision in the next review session.
+
+**Exit message.** `[q]` with a regen batch prints "Still N undecided" —
+the gate cannot fire on the same quit that regenerates.
 
 `--yes` skips the loop and auto-approves; required for non-TTY runs
 (scripts, CI).
