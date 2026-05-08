@@ -150,6 +150,7 @@ def regenerate_after_review(
     new_bullets.segments = merged
     stage1b_mod.write_bullets(new_bullets, pending_bullets_path(source_id))
 
+    warnings = gap_check_mod.check(structure)
     existing_sc = _load_existing_sidecar(source_id)
     name_corrections = existing_sc.name_corrections if existing_sc else {}
     session_date = existing_sc.session_date if existing_sc else None
@@ -157,6 +158,7 @@ def regenerate_after_review(
         default_speaker=structure.default_speaker,
         name_corrections=name_corrections,
         session_date=session_date,
+        gap_warnings=warnings,
     )
     sidecar_path = pending_sidecar_path(source_id)
     sidecar_mod.write(sc, sidecar_path)
@@ -195,7 +197,7 @@ def regenerate_after_review(
         segments_dir=segs_dir,
         structure_path=pending_structure_path(source_id),
         bullets_path=pending_bullets_path(source_id),
-        gap_warnings=gap_check_mod.check(structure),
+        gap_warnings=warnings,
     )
 
 
