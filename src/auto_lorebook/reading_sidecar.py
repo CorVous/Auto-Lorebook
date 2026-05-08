@@ -12,12 +12,14 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from auto_lorebook._io import atomic_write_text
+from auto_lorebook.gap_check import GapWarning
 from auto_lorebook.schema import SchemaVersionError, read_schema_version
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-_MAX_SCHEMA = 1
+# v2: persist gap_warnings produced at generate time
+_MAX_SCHEMA = 2
 
 
 class ReadingSidecarError(ValueError):
@@ -31,14 +33,43 @@ class Sidecar:
     default_speaker: str
     name_corrections: dict[str, str] = field(default_factory=dict)
     session_date: str | None = None
+    gap_warnings: list[GapWarning] = field(default_factory=list)
+
+
+def _warning_to_dict(w: GapWarning) -> dict[str, Any]:
+    return {
+        "start": w.start,
+        "end": w.end,
+        "segment_ids": list(w.segment_ids),
+        "segment_titles": list(w.segment_titles),
+    }
+
+
+def _warning_from_dict(d: dict[str, Any], path: str) -> GapWarning:
+    """Parse a gap_warnings list entry; raise ReadingSidecarError on bad shape."""
+    try:
+        start = float(d["start"])
+        end = float(d["end"])
+        segment_ids = tuple(str(s) for s in d["segment_ids"])
+        segment_titles = tuple(str(s) for s in d["segment_titles"])
+    except (KeyError, TypeError, ValueError) as e:
+        msg = f"{path}: malformed gap_warnings entry: {e}"
+        raise ReadingSidecarError(msg) from e
+    return GapWarning(
+        start=start,
+        end=end,
+        segment_ids=segment_ids,
+        segment_titles=segment_titles,
+    )
 
 
 def _to_dict(sc: Sidecar) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "default_speaker": sc.default_speaker,
         "session_date": sc.session_date,
         "name_corrections": dict(sc.name_corrections),
+        "gap_warnings": [_warning_to_dict(w) for w in sc.gap_warnings],
     }
 
 
@@ -91,8 +122,15 @@ def read(path: Path) -> Sidecar:
         raise ReadingSidecarError(msg)
     name_corrections = {str(k): str(v) for k, v in raw_corrections.items()}
 
+    raw_warnings = data.get("gap_warnings") or []
+    if not isinstance(raw_warnings, list):
+        msg = f"{path}: gap_warnings must be a list"
+        raise ReadingSidecarError(msg)
+    gap_warnings = [_warning_from_dict(w, str(path)) for w in raw_warnings]
+
     return Sidecar(
         default_speaker=default_speaker,
         name_corrections=name_corrections,
         session_date=session_date,
+        gap_warnings=gap_warnings,
     )

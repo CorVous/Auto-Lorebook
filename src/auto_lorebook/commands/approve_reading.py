@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from auto_lorebook import config as cfg_mod
 from auto_lorebook import info_yaml as info_yaml_mod
 from auto_lorebook import reading_pipeline as pipeline
+from auto_lorebook import reading_sidecar as sidecar_mod
 from auto_lorebook import segment_file as segment_file_mod
 from auto_lorebook.interactive import _is_interactive
 from auto_lorebook.reading_review import (
@@ -21,12 +22,14 @@ from auto_lorebook.reading_review import (
     SkipBulletsDecision,
     UndoDecision,
 )
+from auto_lorebook.reading_sidecar import ReadingSidecarError
 from auto_lorebook.timestamps import format_timestamp
 
 if TYPE_CHECKING:
     import argparse
     from pathlib import Path
 
+    from auto_lorebook.gap_check import GapWarning
     from auto_lorebook.reading_review import SegmentDecision
 
 _logger = logging.getLogger(__name__)
@@ -182,11 +185,30 @@ def _load_summaries(source_id: str) -> list[_SegSummary]:
     return out
 
 
+def _render_gap_warnings(warnings: list[GapWarning]) -> None:
+    """Print gap-warning blocks sorted by start. No output when empty."""
+    if not warnings:
+        return
+    # below segment list, above prompt — keeps warnings in last-screen view
+    print()  # noqa: T201
+    for idx, w in enumerate(sorted(warnings, key=lambda x: x.start)):
+        if idx > 0:
+            print()  # noqa: T201
+        titles = ", ".join(f'"{t}"' for t in w.segment_titles)
+        start_ts = format_timestamp(w.start)
+        end_ts = format_timestamp(w.end)
+        print("⚠ Possible coverage gap:")  # noqa: T201
+        print(f"  {start_ts}–{end_ts} covered only by segments titled")  # noqa: T201, RUF001
+        print(f"  {titles}.")  # noqa: T201
+        print("  If this stretch contained worldbuilding, regenerate with a hint.")  # noqa: T201
+
+
 def _render_outer(
     source_id: str,
     summaries: list[_SegSummary],
     pending_marks: _PendingMarks,
     source_title: str | None,
+    gap_warnings: list[GapWarning] | None = None,
 ) -> None:
     title_str = source_title or source_id
     print(f"\nReading: {source_id} — {title_str}")  # noqa: T201
@@ -199,6 +221,7 @@ def _render_outer(
             f"  {i:>3}. [{s.current_status}]  {start_ts}–{end_ts}  "  # noqa: RUF001
             f"{s.title}  ({s.speaker}){arrow}"
         )
+    _render_gap_warnings(gap_warnings or [])
     print(_OUTER_PROMPT, end="", flush=True)  # noqa: T201
 
 
@@ -360,11 +383,19 @@ def _interactive_session(cfg: cfg_mod.Config, source_id: str) -> int:
     except info_yaml_mod.InfoError:
         pass
 
+    # load gap_warnings from sidecar; fall back to [] on parse failure
+    gap_warnings: list[GapWarning] = []
+    try:
+        sc = sidecar_mod.read(sidecar_path)
+        gap_warnings = sc.gap_warnings
+    except ReadingSidecarError:
+        pass
+
     summaries = _load_summaries(source_id)
     pending_marks: _PendingMarks = {}
 
     while True:
-        _render_outer(source_id, summaries, pending_marks, source_title)
+        _render_outer(source_id, summaries, pending_marks, source_title, gap_warnings)
 
         try:
             choice = input("").strip().lower()
