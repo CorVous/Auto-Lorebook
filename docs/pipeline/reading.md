@@ -283,10 +283,14 @@ gate fires, `reading_assembly.assemble` renders the wiki-side
 file is the approval artefact — there is no `reading_status`
 frontmatter flag.
 
-**Decision verbs (current slice):** `accept`, `skip-bullets`,
-`regenerate-again` (no-op; marks as `regenerating`, gate blocks),
-`undo` (clears the pending mark for one segment), `commit` (the quit
-path that writes and evaluates the gate).
+**Decision verbs:** `accept`, `skip-bullets`,
+`regenerate-again` (deferred — slice #5; no-op in current implementation;
+marks segment as `regenerating`, which blocks the gate),
+`undo` (clears the pending mark for one segment), `commit` (the quit path
+that writes and evaluates the gate).
+
+All committed status changes are produced by the reading-review engine; the
+command layer only translates keystrokes into engine decisions.
 
 ```bash
 auto-lorebook approve-reading <source_id> --yes
@@ -296,23 +300,36 @@ auto-lorebook approve-reading <source_id> --yes
 segment `accepted` and commits unconditionally. The gate always fires
 for fixtures where every segment is decidable.
 
-The interactive per-segment hierarchical UX (keys `[a]/[s]/[r]/[u]/[q]`
-per segment) is deferred to slice #4. In the current slice, the
-interactive `[a]` key at the session level still assembles and copies
-to the wiki in one step (unchanged from slice #29).
+`approve-reading` opens a hierarchical interactive session over the draft.
 
-`approve-reading` opens an interactive session over the draft:
+**Outer view** — numbered list of all segments with their current status and
+any pending mark for the session:
 
 | Key | Action |
 |-----|--------|
-| `a` | Approve: assemble segment files + sidecar into `reading.md`, copy to wiki. |
-| `e` | Preview: assemble draft into a temp file and open in `$EDITOR`. Edits are discarded on exit (preview-only; per-segment editing lands in a future slice). |
-| `r` | Reject: queue the pending reading dir for deletion. Deferred — nothing happens until you `q`. |
-| `u` | Undo: restore all segment files and sidecar to session-start contents and clear any queued reject. |
-| `q` | Quit: if a reject is queued, confirm and delete `pending/<id>/reading/`; otherwise no-op. |
+| `#` | Open the numbered segment in the per-segment prompt. |
+| `n` | Jump to the next undecided `draft` segment. |
+| `m` | Open `reading.yaml` (sidecar) in `$EDITOR`. |
+| `q` | Commit pending marks. If every segment is now decided, write wiki-side `reading.md` (gate fires). |
+
+**Per-segment prompt** — shows segment body (up to 60 lines) and current /
+pending status:
+
+| Key | Action |
+|-----|--------|
+| `a` | Accept: queue this segment for `accepted` status; return to outer. |
+| `s` | Skip-bullets: queue this segment for `skipped` status; return to outer. |
+| `e` | Edit: open the segment file (`seg-NNN.md`) in `$EDITOR`. Stays in per-segment prompt on return. |
+| `u` | Undo: clear this segment's pending mark. Stays in per-segment prompt. |
+| `b` | Back: return to outer without changing any pending mark. |
+
+Pending marks live in memory until `[q]`. On `[q]`, the engine commits
+all marks in one transaction and evaluates the gate. Ctrl-C at any
+prompt exits 130 with no committed mutations; pending marks are not
+persisted.
 
 `--yes` skips the loop and auto-approves; required for non-TTY runs
-(scripts, CI). Ctrl-C exits 130 with no changes.
+(scripts, CI).
 
 After approval, the reading is committed to the wiki alongside the
 raw transcript. The intermediate `structure.yaml` is retained in the

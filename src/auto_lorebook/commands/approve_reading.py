@@ -4,35 +4,40 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess  # noqa: S404
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from auto_lorebook import config as cfg_mod
+from auto_lorebook import info_yaml as info_yaml_mod
 from auto_lorebook import reading_pipeline as pipeline
+from auto_lorebook import segment_file as segment_file_mod
 from auto_lorebook.interactive import _is_interactive
 from auto_lorebook.reading_review import (
     AcceptDecision,
     CommitDecision,
     SegmentView,
+    SkipBulletsDecision,
     UndoDecision,
 )
+from auto_lorebook.timestamps import format_timestamp
 
 if TYPE_CHECKING:
     import argparse
+    from pathlib import Path
 
     from auto_lorebook.reading_review import SegmentDecision
 
 _logger = logging.getLogger(__name__)
 
-_PROMPT = "[a]pprove / [e]dit / [r]eject / [u]ndo / [q]uit > "
+_OUTER_PROMPT = "[#] open  [n] next-draft  [m] meta  [q] quit\n> "
+_SEG_PROMPT = "[a] accept  [e] edit  [s] skip-bullets  [u] undo  [b] back\n> "
 
 
 class AutoAcceptReviewer:
     """Marks every still-draft segment accepted, then commits unconditionally.
 
     Used by `--yes` (non-interactive) path and `reading_pipeline.approve`.
-    Interactive hierarchical UX lands in slice #4.
     """
 
     by_label = "auto-accept"
@@ -50,7 +55,40 @@ class AutoAcceptReviewer:
         return CommitDecision()
 
 
-_RENDER_LINES = 40
+@dataclass
+class _SegSummary:
+    """Flat summary for outer list view."""
+
+    segment_id: str
+    title: str
+    start: float
+    end: float
+    speaker: str
+    current_status: str  # disk truth: draft|accepted|skipped|regenerating
+
+
+# keyed by segment_id; value in {"accepted","skipped"}
+_PendingMarks = dict[str, str]
+
+
+class _ReplayReviewer:
+    """Drives engine with pre-recorded per-segment decisions."""
+
+    by_label = "interactive"
+
+    def __init__(self, marks: _PendingMarks) -> None:
+        self._marks = dict(marks)
+
+    def decide_segment(self, view: SegmentView) -> SegmentDecision:
+        mark = self._marks.get(view.segment_id)
+        if mark == "accepted":
+            return AcceptDecision()
+        if mark == "skipped":
+            return SkipBulletsDecision()
+        return UndoDecision()
+
+    def decide_quit(self, pending: tuple[SegmentView, ...]) -> CommitDecision:  # noqa: ARG002
+        return CommitDecision()
 
 
 def add_parser(
@@ -61,15 +99,16 @@ def add_parser(
     parser = subparsers.add_parser(
         "approve-reading",
         parents=[common_parser],
-        help="Interactively approve, edit, or reject the draft reading",
+        help="Interactively approve or skip draft reading segments",
         description=(
-            "Opens an interactive session over the draft reading under "
-            "~/.auto-lorebook/pending/<source_id>/reading/. Keys: "
-            "[a]pprove (assemble + copy to wiki), "
-            "[e]dit (preview assembled draft in $EDITOR — preview only), "
-            "[r]eject (queue pending dir for delete), "
-            "[u]ndo (restore to session start, clear reject), "
-            "[q]uit (commit a queued reject after confirmation, else no-op). "
+            "Opens a hierarchical interactive session over the draft reading. "
+            "Outer view: numbered segment list with status; "
+            "keys [#] (open segment N), [n] (next draft), "
+            "[m] (open reading.yaml in $EDITOR), "
+            "[q] (commit pending marks; if every segment is decided, "
+            "write wiki-side reading.md). "
+            "Per-segment prompt: [a] accept, [e] edit body in $EDITOR, "
+            "[s] skip-bullets, [u] undo this segment, [b] back. "
             "Pass --yes to skip the loop and auto-approve."
         ),
     )
@@ -114,6 +153,178 @@ def _approve_only(cfg: cfg_mod.Config, source_id: str) -> int:
     return 0
 
 
+def _load_summaries(source_id: str) -> list[_SegSummary]:
+    """Load frontmatter from all seg-NNN.md files, sorted by filename."""
+    segs_dir = pipeline.pending_segments_dir(source_id)
+    if not segs_dir.exists():
+        return []
+    paths = sorted(segs_dir.glob("*.md"))
+    out = []
+    for p in paths:
+        sf = segment_file_mod.read(p)
+        fm = sf.frontmatter
+        out.append(
+            _SegSummary(
+                segment_id=fm.segment_id,
+                title=fm.title,
+                start=fm.start,
+                end=fm.end,
+                speaker=fm.speaker,
+                current_status=fm.segment_status,
+            )
+        )
+    return out
+
+
+def _render_outer(
+    source_id: str,
+    summaries: list[_SegSummary],
+    pending_marks: _PendingMarks,
+    source_title: str | None,
+) -> None:
+    title_str = source_title or source_id
+    print(f"\nReading: {source_id} — {title_str}")  # noqa: T201
+    for i, s in enumerate(summaries, start=1):
+        start_ts = format_timestamp(s.start)
+        end_ts = format_timestamp(s.end)
+        mark = pending_marks.get(s.segment_id)
+        arrow = f" →{mark}" if mark else ""
+        print(  # noqa: T201
+            f"  {i:>3}. [{s.current_status}]  {start_ts}–{end_ts}  "  # noqa: RUF001
+            f"{s.title}  ({s.speaker}){arrow}"
+        )
+    print(_OUTER_PROMPT, end="", flush=True)  # noqa: T201
+
+
+def _render_segment(
+    summary: _SegSummary,
+    pending_mark: str | None,
+    body: str,
+) -> None:
+    start_ts = format_timestamp(summary.start)
+    end_ts = format_timestamp(summary.end)
+    pending_str = pending_mark or "?"
+    print(  # noqa: T201
+        f"\n{summary.segment_id} "
+        f"[{summary.current_status} → {pending_str}]  "
+        f"{start_ts}–{end_ts}  {summary.title}  ({summary.speaker})"  # noqa: RUF001
+    )
+    lines = body.splitlines()
+    limit = 60
+    if len(lines) <= limit:
+        print(body)  # noqa: T201
+    else:
+        print("\n".join(lines[:limit]))  # noqa: T201
+        print(f"... ({len(lines) - limit} more lines)")  # noqa: T201
+    print(_SEG_PROMPT, end="", flush=True)  # noqa: T201
+
+
+def _open_in_editor(path: Path) -> None:
+    editor = os.environ.get("EDITOR", "vi")
+    subprocess.run([editor, str(path)], check=False)  # noqa: S603
+
+
+def _pick_segment_index(raw: str, total: int) -> int | None:
+    """Parse 1-based digit string → 0-based index, or None if out of range."""
+    if not raw.isdigit():
+        return None
+    one_based = int(raw)
+    if 1 <= one_based <= total:
+        return one_based - 1
+    return None
+
+
+def _next_draft_index(
+    summaries: list[_SegSummary],
+    pending_marks: _PendingMarks,
+    start_at: int = 0,
+) -> int | None:
+    """First index ≥ start_at that is draft and not yet pending; wraps once."""
+    n = len(summaries)
+    for offset in range(n):
+        idx = (start_at + offset) % n
+        s = summaries[idx]
+        if s.current_status == "draft" and s.segment_id not in pending_marks:
+            return idx
+    return None
+
+
+def _per_segment_prompt(
+    source_id: str,
+    idx: int,
+    summaries: list[_SegSummary],
+    pending_marks: _PendingMarks,
+) -> None:
+    """Inner per-segment loop; mutates pending_marks in place."""
+    summary = summaries[idx]
+    sid = summary.segment_id
+
+    while True:
+        # re-read body each iteration so edits show
+        seg_path = pipeline.pending_segment_path(source_id, sid)
+        sf = segment_file_mod.read(seg_path)
+        _render_segment(summary, pending_marks.get(sid), sf.body)
+
+        try:
+            choice = input("").strip().lower()
+        except EOFError:
+            return
+        # KeyboardInterrupt propagates to outer
+
+        if choice == "a":
+            pending_marks[sid] = "accepted"
+            return
+        if choice == "s":
+            pending_marks[sid] = "skipped"
+            return
+        if choice == "e":
+            _open_in_editor(pipeline.pending_segment_path(source_id, sid))
+            # reload summary so edits show (status might have changed externally)
+            summaries[idx] = _load_summaries(source_id)[idx]
+            summary = summaries[idx]
+        elif choice == "u":
+            pending_marks.pop(sid, None)
+            # stay in segment prompt
+        elif choice == "b":
+            return
+        # unrecognized → re-prompt
+
+
+def _open_meta(source_id: str) -> None:
+    _open_in_editor(pipeline.pending_sidecar_path(source_id))
+
+
+def _commit_and_exit(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    pending_marks: _PendingMarks,
+) -> int:
+    from auto_lorebook import reading_review as reading_review_mod  # noqa: PLC0415
+
+    try:
+        result = reading_review_mod.run(
+            cfg=cfg,
+            source_id=source_id,
+            reviewer=_ReplayReviewer(pending_marks),
+        )
+    except reading_review_mod.ReadingReviewError as e:
+        _logger.error("%s", e)
+        return 1
+
+    if result.gate_fired and result.wiki_reading_path is not None:
+        print(f"Approved: {result.wiki_reading_path}")  # noqa: T201
+        print(f"Run `auto-lorebook plan {source_id}` next.")  # noqa: T201
+        return 0
+
+    remaining = sum(
+        1
+        for s in _load_summaries(source_id)
+        if s.current_status not in {"accepted", "skipped"}
+    )
+    print(f"Still {remaining} undecided; pending marks committed for the rest.")  # noqa: T201
+    return 0
+
+
 def _interactive_session(cfg: cfg_mod.Config, source_id: str) -> int:
     sidecar_path = pipeline.pending_sidecar_path(source_id)
     if not sidecar_path.exists():
@@ -122,110 +333,52 @@ def _interactive_session(cfg: cfg_mod.Config, source_id: str) -> int:
         )
         return 1
 
-    # snapshot all segment files + sidecar at session start for [u]ndo
-    snapshot = _take_snapshot(source_id)
-    pending_action = "none"
+    # load source title for header
+    source_title: str | None = None
+    try:
+        info_path = cfg.wiki_repo_path / "sources" / source_id / "info.yaml"
+        info = info_yaml_mod.read(info_path)
+        source_title = info.title
+    except info_yaml_mod.InfoError:
+        pass
+
+    summaries = _load_summaries(source_id)
+    pending_marks: _PendingMarks = {}
 
     while True:
-        _render(cfg, source_id, pending_action)
+        _render_outer(source_id, summaries, pending_marks, source_title)
+
         try:
-            choice = input(_PROMPT).strip().lower()
+            choice = input("").strip().lower()
         except EOFError:
-            print()  # noqa: T201
-            return _commit_quit(source_id, pending_action)
+            choice = "q"
         except KeyboardInterrupt:
             print()  # noqa: T201
             return 130
 
-        if choice == "a":
-            return _approve_only(cfg, source_id)
-        if choice == "q":
-            return _commit_quit(source_id, pending_action)
-        if choice == "r":
-            pending_action = "reject"
-            continue
-        if choice == "u":
-            _restore_snapshot(snapshot)
-            pending_action = "none"
-            continue
-        if choice == "e":
-            _preview_edit(cfg, source_id)
-            continue
+        if choice.isdigit():
+            idx = _pick_segment_index(choice, len(summaries))
+            if idx is None:
+                continue
+            try:
+                _per_segment_prompt(source_id, idx, summaries, pending_marks)
+            except KeyboardInterrupt:
+                print()  # noqa: T201
+                return 130
+            summaries = _load_summaries(source_id)
+        elif choice == "n":
+            idx = _next_draft_index(summaries, pending_marks)
+            if idx is None:
+                print("  (no remaining draft segments)")  # noqa: T201
+                continue
+            try:
+                _per_segment_prompt(source_id, idx, summaries, pending_marks)
+            except KeyboardInterrupt:
+                print()  # noqa: T201
+                return 130
+            summaries = _load_summaries(source_id)
+        elif choice == "m":
+            _open_meta(source_id)
+        elif choice == "q":
+            return _commit_and_exit(cfg, source_id, pending_marks)
         # unrecognized → re-prompt
-
-
-def _render(cfg: cfg_mod.Config, source_id: str, pending_action: str) -> None:
-    try:
-        text = pipeline.assemble_draft(cfg, source_id)
-    except pipeline.ReadingPipelineError as e:
-        print(f"\n[error assembling draft: {e}]")  # noqa: T201
-        text = ""
-    lines = text.splitlines()
-    head = "\n".join(lines[:_RENDER_LINES])
-    suffix = (
-        f"\n  ... ({len(lines) - _RENDER_LINES} more lines, {len(text)} chars total)"
-        if len(lines) > _RENDER_LINES
-        else ""
-    )
-    pdir = pipeline.pending_dir(source_id)
-    print(f"\n--- {pdir} ---")  # noqa: T201
-    print(head + suffix)  # noqa: T201
-    print(f"--- pending action: {pending_action} ---")  # noqa: T201
-
-
-def _preview_edit(cfg: cfg_mod.Config, source_id: str) -> None:
-    """Open assembled draft in $EDITOR for preview; discard edits on exit."""
-    try:
-        text = pipeline.assemble_draft(cfg, source_id)
-    except pipeline.ReadingPipelineError as e:
-        _logger.error("Could not assemble draft: %s", e)
-        return
-    draft_path = pipeline.pending_dir(source_id) / ".draft-edit.md"
-    draft_path.write_text(text, encoding="utf-8")
-    editor = os.environ.get("EDITOR", "vi")
-    subprocess.run([editor, str(draft_path)], check=False)  # noqa: S603
-    import contextlib  # noqa: PLC0415
-
-    with contextlib.suppress(OSError):
-        draft_path.unlink(missing_ok=True)
-    print(  # noqa: T201
-        "Per-segment editing lands in slice #31. "
-        "This view is preview-only — your edits were not saved."
-    )
-
-
-def _take_snapshot(source_id: str) -> dict[str, bytes]:
-    """Snapshot all segment files + sidecar; keyed by file path string."""
-    snapshot: dict[str, bytes] = {}
-    sidecar = pipeline.pending_sidecar_path(source_id)
-    if sidecar.exists():
-        snapshot[str(sidecar)] = sidecar.read_bytes()
-    segs_dir = pipeline.pending_segments_dir(source_id)
-    if segs_dir.exists():
-        for p in segs_dir.glob("*.md"):
-            snapshot[str(p)] = p.read_bytes()
-    return snapshot
-
-
-def _restore_snapshot(snapshot: dict[str, bytes]) -> None:
-    from pathlib import Path  # noqa: PLC0415
-
-    for path_str, data in snapshot.items():
-        p = Path(path_str)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(data)
-
-
-def _commit_quit(source_id: str, pending_action: str) -> int:
-    if pending_action != "reject":
-        return 0
-    pending_dir = pipeline.pending_dir(source_id)
-    try:
-        answer = input(f"Delete {pending_dir}? [y/N] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()  # noqa: T201
-        return 0
-    if answer in {"y", "yes"}:
-        shutil.rmtree(pending_dir, ignore_errors=True)
-        print(f"Deleted {pending_dir}")  # noqa: T201
-    return 0
