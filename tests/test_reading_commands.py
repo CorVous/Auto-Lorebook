@@ -259,7 +259,7 @@ class TestGenerateReading:
         import yaml as _yaml  # noqa: PLC0415
 
         sidecar_data = _yaml.safe_load((pending / "reading.yaml").read_text())
-        assert sidecar_data["schema_version"] == 1
+        assert sidecar_data["schema_version"] == 2
         assert sidecar_data["default_speaker"] == "DM"
 
         # seg-002.md contains the Theron claim
@@ -280,6 +280,72 @@ class TestGenerateReading:
         _write_user_config(tmp_home, ingested_wiki)
         rc = generate_reading_cmd.run(_args(source_id="yt-not-ingested"))
         assert rc == 1
+
+
+class TestGenerateReadingSidecarSchema:
+    """Sidecar written by generate-reading has correct schema and gap_warnings."""
+
+    def test_sidecar_schema_v2_and_gap_warnings_empty(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+
+        client = MagicMock()
+        _wire_client_responses(client)
+        with patch(
+            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        ):
+            rc = generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+        assert rc == 0
+
+        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        sidecar_data = yaml.safe_load((pending / "reading.yaml").read_text())
+        assert sidecar_data["schema_version"] == 2
+        # fixture has only "Intro" + "Founding of Aldara" — no low-yield matches
+        assert sidecar_data["gap_warnings"] == []
+
+    def test_sidecar_gap_warnings_persisted_when_present(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+
+        from auto_lorebook.gap_check import GapWarning  # noqa: PLC0415
+
+        stub_warning = GapWarning(
+            start=2050.0,
+            end=2902.0,
+            segment_ids=("seg-005",),
+            segment_titles=("Pizza discussion",),
+        )
+        client = MagicMock()
+        _wire_client_responses(client)
+        with (
+            patch(
+                "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+            ),
+            patch(
+                "auto_lorebook.reading_pipeline.gap_check_mod.check",
+                return_value=[stub_warning],
+            ),
+        ):
+            rc = generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+        assert rc == 0
+
+        from auto_lorebook import reading_sidecar as sidecar_mod  # noqa: PLC0415
+
+        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        sc = sidecar_mod.read(pending / "reading.yaml")
+        assert len(sc.gap_warnings) == 1
+        assert sc.gap_warnings[0].start == pytest.approx(2050.0)
+        assert sc.gap_warnings[0].segment_titles == ("Pizza discussion",)
 
 
 class TestApproveReading:
@@ -839,6 +905,79 @@ class TestPlan:
 
         out = capsys.readouterr().out
         assert "Plan:" in out
+
+
+class TestRenderOuterGapWarnings:
+    """_render_outer renders gap warnings below segment list, above prompt."""
+
+    def _make_summaries(self) -> list:
+        from auto_lorebook.commands.approve_reading import (  # noqa: PLC0415
+            _SegSummary,  # noqa: PLC2701
+        )
+
+        return [
+            _SegSummary(
+                segment_id="seg-001",
+                title="Intro",
+                start=0.0,
+                end=120.0,
+                speaker="DM",
+                current_status="draft",
+            )
+        ]
+
+    def test_empty_warnings_no_gap_block(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from auto_lorebook.commands.approve_reading import (  # noqa: PLC0415
+            _render_outer,  # noqa: PLC2701
+        )
+
+        summaries = self._make_summaries()
+        _render_outer("yt-test", summaries, {}, "Test Session", gap_warnings=[])
+        out = capsys.readouterr().out
+        assert "seg-001" in out or "Intro" in out
+        assert "Possible coverage gap" not in out
+        assert "⚠" not in out
+
+    def test_nonempty_warnings_renders_blocks(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from auto_lorebook.commands.approve_reading import (  # noqa: PLC0415
+            _render_outer,  # noqa: PLC2701
+        )
+        from auto_lorebook.gap_check import GapWarning  # noqa: PLC0415
+
+        w1 = GapWarning(
+            start=2050.0,
+            end=2902.0,
+            segment_ids=("seg-005", "seg-006", "seg-007"),
+            segment_titles=("Pizza discussion", "Break", "Rules: initiative"),
+        )
+        w2 = GapWarning(
+            start=5400.0,
+            end=6100.0,
+            segment_ids=("seg-012",),
+            segment_titles=("Silence",),
+        )
+        summaries = self._make_summaries()
+        _render_outer("yt-test", summaries, {}, "Test Session", gap_warnings=[w1, w2])
+        out = capsys.readouterr().out
+        assert "⚠ Possible coverage gap:" in out
+        # w1 timestamps
+        assert "0:34:10" in out
+        assert "0:48:22" in out
+        assert '"Pizza discussion"' in out
+        assert '"Break"' in out
+        assert '"Rules: initiative"' in out
+        assert "If this stretch contained worldbuilding" in out
+        # w2 timestamps
+        assert "1:30:00" in out
+        assert "1:41:40" in out
+        # w1 before w2 in output
+        idx1 = out.index("0:34:10")
+        idx2 = out.index("1:30:00")
+        assert idx1 < idx2
 
 
 class TestExtract:
