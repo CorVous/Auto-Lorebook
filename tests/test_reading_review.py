@@ -547,7 +547,7 @@ class TestRegenAfterReviewIntegrates:
             ),
         )
 
-        cfg = cfg_mod.Config(wiki_repo_path=tmp_wiki)
+        cfg = cfg_mod.load_config()
 
         # custom mock: always returns a bullet valid for seg-002's range
         regen_client = MagicMock()
