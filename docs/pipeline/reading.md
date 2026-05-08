@@ -121,6 +121,10 @@ surfaces it in reading review:
 The human confirms the stretch is genuinely low-yield or regenerates
 1a with a hint about what to look for.
 
+Warnings are persisted in reading.yaml (gap_warnings: field, schema v2) at generate
+/ regenerate time and re-rendered below the segment list in the approve-reading outer
+view, so the human sees them on every iteration without re-running the generate command.
+
 ## Stage 1b: Summarize
 
 **Purpose.** For each segment from 1a, produce claim bullets — or
@@ -311,6 +315,9 @@ any pending mark for the session:
 | `n` | Jump to the next undecided `draft` segment. |
 | `m` | Open `reading.yaml` (sidecar) in `$EDITOR`. |
 | `q` | Commit pending marks. If every segment is now decided, write wiki-side `reading.md` (gate fires). |
+
+Below the segment list, any persisted gap-check warnings are rendered as
+⚠ Possible coverage gap: blocks (one per stretch, transcript order).
 
 **Per-segment prompt** — shows segment body (up to 60 lines) and current /
 pending status:
