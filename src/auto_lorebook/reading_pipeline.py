@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from auto_lorebook.info_yaml import Info
     from auto_lorebook.plan_yaml import Plan
     from auto_lorebook.proposal_yaml import Proposal
+    from auto_lorebook.reading_review import RegenBatch
     from auto_lorebook.reading_sidecar import Sidecar
     from auto_lorebook.segment_file import SegmentFile
 
@@ -105,6 +106,99 @@ def regenerate(
         return _run_summarize_only(cfg, source_id, segment_ids=segment_ids)
     msg = f"unknown --from value: {from_stage!r} (expected structure|summarize)"
     raise ReadingPipelineError(msg)
+
+
+def regenerate_after_review(
+    cfg: cfg_mod.Config,
+    batch: RegenBatch,
+) -> GenerateResult:
+    """Re-run Stage 1b on regenerating segments after a quit-commit.
+
+    Injects accepted-segments context; writes updated bullets.yaml and
+    seg-NNN.md files with status reset to draft.
+    """
+    source_id = batch.source_id
+    structure_path = pending_structure_path(source_id)
+    if not structure_path.exists():
+        msg = (
+            f"No prior structure.yaml for {source_id!r}. "
+            "Run `regenerate-reading --from=structure` or `generate-reading` first."
+        )
+        raise ReadingPipelineError(msg)
+    structure = structure_mod.read(structure_path)
+
+    info, ctx = _load_context(cfg, source_id)
+    client = _build_client(cfg)
+    model = cfg.models.primary
+
+    existing = _load_existing_bullets(source_id)
+    new_bullets = stage1b_mod.run(
+        transcript=ctx.transcript,
+        structure=structure,
+        preamble_text=ctx.preamble_text,
+        client=client,
+        model=model,
+        segment_ids=list(batch.regen_segment_ids),
+        accepted_context=list(batch.accepted_context),
+    )
+    # rebuilt segments overwrite; untouched segments keep existing bullets
+    merged = existing.segments.copy()
+    for sid, bullets_list in new_bullets.segments.items():
+        merged[sid] = bullets_list
+    for seg in structure.segments:
+        merged.setdefault(seg.id, [])
+    new_bullets.segments = merged
+    stage1b_mod.write_bullets(new_bullets, pending_bullets_path(source_id))
+
+    warnings = gap_check_mod.check(structure)
+    existing_sc = _load_existing_sidecar(source_id)
+    name_corrections = existing_sc.name_corrections if existing_sc else {}
+    session_date = existing_sc.session_date if existing_sc else None
+    sc = sidecar_mod.Sidecar(
+        default_speaker=structure.default_speaker,
+        name_corrections=name_corrections,
+        session_date=session_date,
+        gap_warnings=warnings,
+    )
+    sidecar_path = pending_sidecar_path(source_id)
+    sidecar_mod.write(sc, sidecar_path)
+
+    segs_dir = pending_segments_dir(source_id)
+    segs_dir.mkdir(parents=True, exist_ok=True)
+    flags_by_seg = _flags_by_segment(structure)
+    target_ids = set(batch.regen_segment_ids)
+    for seg in structure.segments:
+        if seg.id not in target_ids:
+            continue
+        body = build_segment_body(
+            seg,
+            new_bullets.segments.get(seg.id, []),
+            flags_by_seg.get(seg.id, []),
+            info.source_url,
+            name_corrections,
+        )
+        sf = segment_file_mod.SegmentFile(
+            frontmatter=segment_file_mod.SegmentFrontmatter(
+                segment_id=seg.id,
+                segment_status="draft",
+                start=seg.start,
+                end=seg.end,
+                title=seg.title,
+                speaker=seg.speaker,
+                notes=seg.notes,
+                overrides=list(seg.overrides),
+            ),
+            body=body,
+        )
+        segment_file_mod.write(sf, pending_segment_path(source_id, seg.id))
+
+    return GenerateResult(
+        sidecar_path=sidecar_path,
+        segments_dir=segs_dir,
+        structure_path=pending_structure_path(source_id),
+        bullets_path=pending_bullets_path(source_id),
+        gap_warnings=warnings,
+    )
 
 
 def approve(cfg: cfg_mod.Config, source_id: str) -> Path:

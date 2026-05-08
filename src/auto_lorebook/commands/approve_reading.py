@@ -17,6 +17,7 @@ from auto_lorebook.interactive import _is_interactive
 from auto_lorebook.reading_review import (
     AcceptDecision,
     CommitDecision,
+    RegenerateAgainDecision,
     SegmentView,
     SkipBulletsDecision,
     UndoDecision,
@@ -34,7 +35,10 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 _OUTER_PROMPT = "[#] open  [n] next-draft  [m] meta  [q] quit\n> "
-_SEG_PROMPT = "[a] accept  [e] edit  [s] skip-bullets  [u] undo  [b] back\n> "
+_SEG_PROMPT = (
+    "[a] accept  [e] edit  [s] skip-bullets  [g] regenerate-again"
+    "  [u] undo  [b] back\n> "
+)
 
 
 class AutoAcceptReviewer:
@@ -70,7 +74,7 @@ class _SegSummary:
     current_status: str  # disk truth: draft|accepted|skipped|regenerating
 
 
-# keyed by segment_id; value in {"accepted","skipped"}
+# keyed by segment_id; value in {"accepted","skipped","regenerating"}
 _PendingMarks = dict[str, str]
 
 
@@ -88,6 +92,8 @@ class _ReplayReviewer:
             return AcceptDecision()
         if mark == "skipped":
             return SkipBulletsDecision()
+        if mark == "regenerating":
+            return RegenerateAgainDecision()
         return UndoDecision()
 
     def decide_quit(self, pending: tuple[SegmentView, ...]) -> CommitDecision:  # noqa: ARG002
@@ -300,6 +306,9 @@ def _per_segment_prompt(
         if choice == "s":
             pending_marks[sid] = "skipped"
             return
+        if choice == "g":
+            pending_marks[sid] = "regenerating"
+            return
         if choice == "e":
             _open_in_editor(pipeline.pending_segment_path(source_id, sid))
             # reload summary so edits show (status might have changed externally)
@@ -338,6 +347,15 @@ def _commit_and_exit(
         print(f"Approved: {result.wiki_reading_path}")  # noqa: T201
         print(f"Run `auto-lorebook plan {source_id}` next.")  # noqa: T201
         return 0
+
+    if result.regen_batch is not None:
+        n = len(result.regen_batch.regen_segment_ids)
+        print(f"Regenerating {n} segment(s)...")  # noqa: T201
+        try:
+            pipeline.regenerate_after_review(cfg, result.regen_batch)
+        except pipeline.ReadingPipelineError as e:
+            _logger.error("%s", e)
+            return 1
 
     remaining = sum(
         1

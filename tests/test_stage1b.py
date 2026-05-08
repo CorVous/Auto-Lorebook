@@ -12,6 +12,7 @@ import pytest
 
 from auto_lorebook.openrouter import OpenRouterResponse
 from auto_lorebook.stage1b import (
+    AcceptedContextEntry,
     Bullet,
     ReadingBullets,
     Stage1bError,
@@ -465,3 +466,158 @@ class TestBulletsIO:
         assert len(loaded.segments["seg-001"]) == 1
         assert loaded.segments["seg-001"][0].text == "Hello Aldara"
         assert loaded.segments["seg-002"] == []
+
+
+class TestAcceptedContext:
+    """accepted_context kwarg on run() / _build_user."""
+
+    def _client_routing(
+        self,
+        per_segment: dict[str, list[dict[str, object]]],
+        captured: dict[str, str],
+    ) -> MagicMock:
+        """Capture user message per segment; return canned bullets."""
+        client = MagicMock()
+        lock = threading.Lock()
+
+        def side_effect(
+            messages: list[dict[str, str]], **_kwargs: object
+        ) -> OpenRouterResponse:
+            user = next(m for m in messages if m["role"] == "user")
+            for seg_id, bullets in per_segment.items():
+                if seg_id in user["content"]:
+                    with lock:
+                        captured[seg_id] = user["content"]
+                        return OpenRouterResponse(
+                            text=_bullets_payload(bullets),
+                            model="m",
+                            tokens_in=0,
+                            tokens_out=0,
+                        )
+            msg = f"no canned response: {user['content'][:80]}"
+            raise AssertionError(msg)
+
+        client.complete.side_effect = side_effect
+        return client
+
+    def test_accepted_context_block_in_user_message(self) -> None:
+        captured: dict[str, str] = {}
+        ctx = [
+            AcceptedContextEntry(
+                segment_id="seg-001",
+                start=0.0,
+                end=135.0,
+                title="Introduction",
+                speaker="DM",
+                bullets_body="- Intro bullet\n",
+            ),
+            AcceptedContextEntry(
+                segment_id="seg-003",
+                start=270.0,
+                end=480.0,
+                title="Founding of Aldara",
+                speaker="DM",
+                bullets_body="- King Theron founded Aldara\n",
+            ),
+        ]
+        client = self._client_routing(
+            {"seg-002": [{"text": "x", "anchor": "0:02:30"}]}, captured
+        )
+        s = Structure(
+            source_id="yt-x",
+            generated_at="2026-04-20T00:00:00Z",
+            default_speaker="DM",
+            segments=[
+                Segment(
+                    id="seg-002",
+                    start=120.0,
+                    end=270.0,
+                    title="Rules",
+                    speaker="mixed",
+                ),
+            ],
+        )
+        transcript = LoadedTranscript(
+            text_for_llm="[0:02:30] some rules text\n", total_duration=600.0
+        )
+        run(
+            transcript=transcript,
+            structure=s,
+            preamble_text="",
+            client=client,
+            model="m",
+            accepted_context=ctx,
+        )
+        msg = captured["seg-002"]
+        # accepted-context block present
+        assert "Accepted segments (context only" in msg
+        # both segment headers present
+        assert "## seg-001 [0:00:00–0:02:15] Introduction (DM)" in msg  # noqa: RUF001
+        assert "## seg-003 [0:04:30–0:08:00] Founding of Aldara (DM)" in msg  # noqa: RUF001
+        # bullets verbatim
+        assert "- Intro bullet" in msg
+        assert "- King Theron founded Aldara" in msg
+        # separator present
+        assert "---" in msg
+        # target segment transcript still there
+        assert "Transcript for this segment:" in msg
+        assert "some rules text" in msg
+        # target segment header present
+        assert "Segment seg-002" in msg
+
+    def test_no_accepted_context_block_when_param_omitted(self) -> None:
+        captured: dict[str, str] = {}
+        client = self._client_routing({"seg-001": []}, captured)
+        s = Structure(
+            source_id="yt-x",
+            generated_at="2026-04-20T00:00:00Z",
+            default_speaker="DM",
+            segments=[
+                Segment(
+                    id="seg-001",
+                    start=0.0,
+                    end=120.0,
+                    title="Intro",
+                    speaker="DM",
+                ),
+            ],
+        )
+        transcript = LoadedTranscript(text_for_llm="plain text", total_duration=120.0)
+        run(
+            transcript=transcript,
+            structure=s,
+            preamble_text="",
+            client=client,
+            model="m",
+        )
+        msg = captured["seg-001"]
+        assert "Accepted segments" not in msg
+
+    def test_accepted_context_with_empty_list_omits_block(self) -> None:
+        captured: dict[str, str] = {}
+        client = self._client_routing({"seg-001": []}, captured)
+        s = Structure(
+            source_id="yt-x",
+            generated_at="2026-04-20T00:00:00Z",
+            default_speaker="DM",
+            segments=[
+                Segment(
+                    id="seg-001",
+                    start=0.0,
+                    end=120.0,
+                    title="Intro",
+                    speaker="DM",
+                ),
+            ],
+        )
+        transcript = LoadedTranscript(text_for_llm="plain text", total_duration=120.0)
+        run(
+            transcript=transcript,
+            structure=s,
+            preamble_text="",
+            client=client,
+            model="m",
+            accepted_context=[],
+        )
+        msg = captured["seg-001"]
+        assert "Accepted segments" not in msg
