@@ -363,6 +363,7 @@ class _ApprovalContext:
     """Mutable state shared across the loop."""
 
     cfg: cfg_mod.Config
+    wiki_repo: Path
     source_id: str
     info: Info
     plan: Plan
@@ -389,7 +390,7 @@ def _resolve_entity_path(
             )
             raise ReviewError(msg)
         slug = entity_yaml_mod.slugify(proposal.target_entity)
-        path = ctx.cfg.resolve_active_wiki(None) / category / f"{slug}.yaml"
+        path = ctx.wiki_repo / category / f"{slug}.yaml"
         return path, slug, category
 
     entry = ctx.index.lookup(proposal.target_entity)
@@ -399,7 +400,7 @@ def _resolve_entity_path(
             f"is marked existing but not found in entity index"
         )
         raise ReviewError(msg)
-    path = ctx.cfg.resolve_active_wiki(None) / entry.category / f"{entry.slug}.yaml"
+    path = ctx.wiki_repo / entry.category / f"{entry.slug}.yaml"
     return path, entry.slug, entry.category
 
 
@@ -467,7 +468,7 @@ def _approve(
     entity_yaml_mod.write(entity, path)
     proposal_path.unlink(missing_ok=True)
     # refresh in-memory index so siblings later in the loop see this entity
-    ctx.index = entity_index_mod.build(ctx.cfg.resolve_active_wiki(None))
+    ctx.index = entity_index_mod.build(ctx.wiki_repo)
     # record merged aliases so sibling prompts skip them
     target_key = proposal.target_entity.casefold()
     for alias in confirmed_aliases:
@@ -500,9 +501,7 @@ def _build_target_view(ctx: _ApprovalContext, proposal: Proposal) -> TargetView:
         existing_entry = ctx.index.lookup(proposal.target_entity)
         if existing_entry is not None:
             entity_path = (
-                ctx.cfg.resolve_active_wiki(None)
-                / existing_entry.category
-                / f"{existing_entry.slug}.yaml"
+                ctx.wiki_repo / existing_entry.category / f"{existing_entry.slug}.yaml"
             )
             try:
                 existing = entity_yaml_mod.read(entity_path)
@@ -612,11 +611,7 @@ def _seed_merged_aliases_from_disk(ctx: _ApprovalContext) -> None:
             entry = ctx.index.lookup(target.entity)
             if entry is None:
                 continue
-            path = (
-                ctx.cfg.resolve_active_wiki(None)
-                / entry.category
-                / f"{entry.slug}.yaml"
-            )
+            path = ctx.wiki_repo / entry.category / f"{entry.slug}.yaml"
             if not path.exists():
                 continue
             try:
@@ -637,6 +632,7 @@ def run(
     cfg: cfg_mod.Config,
     source_id: str,
     reviewer: Reviewer,
+    wiki_override: str | None = None,
 ) -> ReviewResult:
     """Walk pending bundles; mutate entity YAMLs; return counts.
 
@@ -645,7 +641,7 @@ def run(
     route. KeyboardInterrupt propagates after recording the count of
     proposal files left on disk as `remaining`.
     """
-    wiki_repo = cfg.resolve_active_wiki(None)
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
     info_path = wiki_repo / "sources" / source_id / "info.yaml"
     info = info_yaml_mod.read(info_path)
     plan_path = reading_pipeline.pending_plan_path(source_id)
@@ -656,7 +652,12 @@ def run(
     _validate_proposals_subset_of_plan(plan, source_id)
     index = entity_index_mod.build(wiki_repo)
     ctx = _ApprovalContext(
-        cfg=cfg, source_id=source_id, info=info, plan=plan, index=index
+        cfg=cfg,
+        wiki_repo=wiki_repo,
+        source_id=source_id,
+        info=info,
+        plan=plan,
+        index=index,
     )
     _seed_merged_aliases_from_disk(ctx)
 

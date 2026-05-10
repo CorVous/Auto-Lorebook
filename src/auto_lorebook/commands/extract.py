@@ -48,7 +48,9 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        extract_result = pipeline.extract(cfg, args.source_id)
+        extract_result = pipeline.extract(
+            cfg, args.source_id, wiki_override=getattr(args, "wiki", None)
+        )
     except pipeline.ReadingPipelineError as e:
         _logger.error("extractor failed: %s", e)
         return 1

@@ -84,9 +84,13 @@ class ExtractResult:
     flagged_count: int
 
 
-def generate(cfg: cfg_mod.Config, source_id: str) -> GenerateResult:
+def generate(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> GenerateResult:
     """Run Stage 1a + 1b from scratch and write draft segment files."""
-    return _run_full(cfg, source_id)
+    return _run_full(cfg, source_id, wiki_override=wiki_override)
 
 
 def regenerate(
@@ -95,15 +99,18 @@ def regenerate(
     *,
     from_stage: str,
     segment_ids: list[str] | None = None,
+    wiki_override: str | None = None,
 ) -> GenerateResult:
     """Re-run from the given stage, preserving name_corrections + selective bullets."""
     if from_stage == "structure":
         if segment_ids is not None:
             msg = "--segments is only valid with --from=summarize"
             raise ReadingPipelineError(msg)
-        return _run_full(cfg, source_id)
+        return _run_full(cfg, source_id, wiki_override=wiki_override)
     if from_stage == "summarize":
-        return _run_summarize_only(cfg, source_id, segment_ids=segment_ids)
+        return _run_summarize_only(
+            cfg, source_id, segment_ids=segment_ids, wiki_override=wiki_override
+        )
     msg = f"unknown --from value: {from_stage!r} (expected structure|summarize)"
     raise ReadingPipelineError(msg)
 
@@ -111,6 +118,7 @@ def regenerate(
 def regenerate_after_review(
     cfg: cfg_mod.Config,
     batch: RegenBatch,
+    wiki_override: str | None = None,
 ) -> GenerateResult:
     """Re-run Stage 1b on regenerating segments after a quit-commit.
 
@@ -127,7 +135,7 @@ def regenerate_after_review(
         raise ReadingPipelineError(msg)
     structure = structure_mod.read(structure_path)
 
-    info, ctx = _load_context(cfg, source_id)
+    info, ctx = _load_context(cfg, source_id, wiki_override=wiki_override)
     client = _build_client(cfg)
     model = cfg.models.primary
 
@@ -201,7 +209,11 @@ def regenerate_after_review(
     )
 
 
-def approve(cfg: cfg_mod.Config, source_id: str) -> Path:
+def approve(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> Path:
     """Auto-accept all draft segments via the reading-review engine.
 
     :raises ReadingPipelineError: sidecar missing, engine error, or gate did
@@ -217,6 +229,7 @@ def approve(cfg: cfg_mod.Config, source_id: str) -> Path:
             cfg=cfg,
             source_id=source_id,
             reviewer=AutoAcceptReviewer(),
+            wiki_override=wiki_override,
         )
     except reading_review_mod.ReadingReviewError as e:
         raise ReadingPipelineError(str(e)) from e
@@ -231,14 +244,18 @@ def approve(cfg: cfg_mod.Config, source_id: str) -> Path:
     return result.wiki_reading_path
 
 
-def assemble_draft(cfg: cfg_mod.Config, source_id: str) -> str:
+def assemble_draft(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> str:
     """Assemble the current segment files into a draft preview string."""
     sidecar_path = pending_sidecar_path(source_id)
     if not sidecar_path.exists():
         msg = f"No draft reading for {source_id!r}. Run `generate-reading` first."
         raise ReadingPipelineError(msg)
 
-    wiki_repo = cfg.resolve_active_wiki(None)
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
     info_path = wiki_repo / "sources" / source_id / "info.yaml"
     try:
         info = info_yaml_mod.read(info_path)
@@ -293,13 +310,17 @@ def pending_proposal_path(source_id: str, proposal_id: str) -> Path:
     return pending_proposals_dir(source_id) / f"{proposal_id}.yaml"
 
 
-def plan(cfg: cfg_mod.Config, source_id: str) -> PlanResult:
+def plan(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> PlanResult:
     """Run Stage 2 on an approved reading and write `plan.yaml`.
 
     :raises ReadingPipelineError: reading not approved, prior pipeline
         artifacts missing, or planner / preamble failure.
     """
-    wiki_repo = cfg.resolve_active_wiki(None)
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
     approved_path = wiki_repo / "sources" / source_id / "reading.md"
     if not approved_path.exists():
         msg = (
@@ -367,13 +388,17 @@ def plan(cfg: cfg_mod.Config, source_id: str) -> PlanResult:
     return PlanResult(plan_path=plan_path, plan=result_plan)
 
 
-def extract(cfg: cfg_mod.Config, source_id: str) -> ExtractResult:
+def extract(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> ExtractResult:
     """Run Stage 3 against an existing plan and write proposal yamls.
 
     :raises ReadingPipelineError: missing plan, plain-text source, or
         Stage 3 failure (bad LLM output, schema violation).
     """
-    wiki_repo = cfg.resolve_active_wiki(None)
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
     plan_path = pending_plan_path(source_id)
     if not plan_path.exists():
         msg = f"No plan at {plan_path}. Run `plan {source_id}` first."
@@ -488,8 +513,12 @@ def _collect_existing_target_metadata(
     return fact_counts, slugs
 
 
-def _run_full(cfg: cfg_mod.Config, source_id: str) -> GenerateResult:
-    info, ctx = _load_context(cfg, source_id)
+def _run_full(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> GenerateResult:
+    info, ctx = _load_context(cfg, source_id, wiki_override=wiki_override)
     client = _build_client(cfg)
     model = cfg.models.primary
 
@@ -571,6 +600,7 @@ def _run_summarize_only(
     source_id: str,
     *,
     segment_ids: list[str] | None,
+    wiki_override: str | None = None,
 ) -> GenerateResult:
     structure_path = pending_structure_path(source_id)
     if not structure_path.exists():
@@ -581,7 +611,7 @@ def _run_summarize_only(
         raise ReadingPipelineError(msg)
     structure = structure_mod.read(structure_path)
 
-    info, ctx = _load_context(cfg, source_id)
+    info, ctx = _load_context(cfg, source_id, wiki_override=wiki_override)
     client = _build_client(cfg)
     model = cfg.models.primary
 
@@ -666,8 +696,12 @@ class _Context:
     preamble_text: str
 
 
-def _load_context(cfg: cfg_mod.Config, source_id: str) -> tuple[Info, _Context]:
-    wiki_repo = cfg.resolve_active_wiki(None)
+def _load_context(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> tuple[Info, _Context]:
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
     info_path = wiki_repo / "sources" / source_id / "info.yaml"
     if not info_path.exists():
         msg = f"info.yaml not found for {source_id!r}: run `ingest` first"

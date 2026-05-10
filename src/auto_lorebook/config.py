@@ -350,7 +350,9 @@ def save_config(cfg: Config, home: Path | None = None) -> None:
         data["models"]["extractor"] = cfg.models.extractor
     if cfg.models.planner is not None:
         data["models"]["planner"] = cfg.models.planner
-    atomic_write_text(cfg_path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
+    atomic_write_text(
+        cfg_path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    )
 
 
 def _bootstrap_wiki(wiki: Path) -> None:

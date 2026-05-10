@@ -51,14 +51,18 @@ def run(args: argparse.Namespace) -> int:
         _logger.error("%s", e)
         return 1
 
+    wiki_override: str | None = getattr(args, "wiki", None)
+
     try:
-        plan_result = pipeline.plan(cfg, args.source_id)
+        plan_result = pipeline.plan(cfg, args.source_id, wiki_override=wiki_override)
     except pipeline.ReadingPipelineError as e:
         _logger.error("planner failed: %s", e)
         return 1
 
     try:
-        extract_result = pipeline.extract(cfg, args.source_id)
+        extract_result = pipeline.extract(
+            cfg, args.source_id, wiki_override=wiki_override
+        )
     except pipeline.ReadingPipelineError as e:
         _logger.error("extractor failed: %s", e)
         return 1
