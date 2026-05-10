@@ -104,8 +104,12 @@ unreviewed proposals with no cleanup needed.
   session review fits inside a 10–20 min/hour budget.
 - **Raw evidence preserved at every stage.** Transcripts untouched;
   facts store their raw transcript span; audit trails everywhere.
-- **The wiki filesystem only ever reflects human-approved state.**
-  Pending work lives in `~/.auto-lorebook/pending/`.
+- **The wiki filesystem reflects human-approved state at the visible
+  level.** Hand-edited canon and source material sit at the wiki
+  root; pending work lives under `<wiki>/.wiki-state/pending/`,
+  hidden by the leading dot and `.gitignore`d. See
+  [repository layout](repository-layout.md) and
+  [ADR-0003](../adr/0003-wiki-state-lives-inside-the-wiki.md).
 - **Compounding corrections.** Name corrections accumulate in
   `.transcription-corrections.yaml`; aliases accumulate on entity
   YAMLs. The tool gets better as the wiki grows.
