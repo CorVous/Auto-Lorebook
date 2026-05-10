@@ -13,10 +13,11 @@ import yaml
 
 from auto_lorebook._io import atomic_write_text
 from auto_lorebook.schema import SchemaVersionError, read_schema_version
+from auto_lorebook.wiki_registry import WikiEntry
 
 _logger = logging.getLogger(__name__)
 
-_MAX_SCHEMA = 1
+_MAX_SCHEMA = 2
 _CONFIG_DIR_ENV = "AUTO_LOREBOOK_HOME"
 
 
@@ -48,7 +49,8 @@ class PreambleConfig:
 class Config:
     """Loaded ~/.auto-lorebook/config.yaml."""
 
-    wiki_repo_path: Path
+    wikis: list[WikiEntry]
+    active_wiki: str | None
     openrouter: OpenRouterConfig = field(default_factory=OpenRouterConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
     preamble: PreambleConfig = field(default_factory=PreambleConfig)
@@ -59,6 +61,30 @@ class Config:
         if env_value:
             return env_value
         return _read_credentials()
+
+    def resolve_active_wiki(self, override: str | None) -> Path:
+        """Resolve the active wiki path.
+
+        Precedence: override > active_wiki.
+
+        :raises ConfigError: override unknown, active unset, or path missing on disk
+        """
+        known: dict[str, Path] = {e.nickname: e.path for e in self.wikis}
+        nick = override if override is not None else self.active_wiki
+        if nick is None:
+            msg = "No active wiki configured. Set active_wiki in config.yaml."
+            raise ConfigError(msg)
+        if nick not in known:
+            msg = f"Unknown wiki nickname: {nick!r}. Check config.yaml."
+            raise ConfigError(msg)
+        path = known[nick]
+        if not path.exists():
+            msg = (
+                f"Wiki {nick!r} path does not exist: {path}. "
+                "Update or remove the entry in config.yaml."
+            )
+            raise ConfigError(msg)
+        return path
 
 
 @dataclass
@@ -105,14 +131,32 @@ def load_config(home: Path | None = None) -> Config:
     if not isinstance(raw, dict):
         msg = f"{cfg_path}: expected a YAML mapping, got {type(raw).__name__}"
         raise ConfigError(msg)
+
+    # v1 hard error: schema_version == 1 or wiki_repo_path key present
+    if raw.get("schema_version") == 1 or "wiki_repo_path" in raw:
+        msg = (
+            f"{cfg_path}: schema_version 1 is not supported. "
+            "Delete this file and re-run `auto-lorebook ingest` "
+            "to create a v2 config."
+        )
+        raise ConfigError(msg)
+
     try:
         read_schema_version(raw, str(cfg_path), max_supported=_MAX_SCHEMA)
     except SchemaVersionError as e:
         raise ConfigError(str(e)) from e
 
-    wiki_repo_path_raw = raw.get("wiki_repo_path")
-    if not wiki_repo_path_raw:
-        msg = f"{cfg_path}: wiki_repo_path is required"
+    wikis_raw = raw.get("wikis")
+    if not wikis_raw:
+        msg = f"{cfg_path}: wikis is required"
+        raise ConfigError(msg)
+
+    wikis = [WikiEntry(d["nickname"], Path(d["path"])) for d in wikis_raw]
+    active_wiki: str | None = raw.get("active_wiki") or None
+
+    known = {e.nickname for e in wikis}
+    if active_wiki is not None and active_wiki not in known:
+        msg = f"{cfg_path}: active_wiki {active_wiki!r} not found in wikis"
         raise ConfigError(msg)
 
     or_raw: dict[str, Any] = raw.get("openrouter") or {}
@@ -133,7 +177,8 @@ def load_config(home: Path | None = None) -> Config:
     )
 
     return Config(
-        wiki_repo_path=Path(wiki_repo_path_raw),
+        wikis=wikis,
+        active_wiki=active_wiki,
         openrouter=openrouter,
         models=models,
         preamble=preamble,
@@ -237,6 +282,7 @@ def interactive_setup(home: Path | None = None) -> Config:
     print("First run: setting up ~/.auto-lorebook/config.yaml.")  # noqa: T201
     print()  # noqa: T201
 
+    nick = _prompt("Wiki nickname")
     wiki_raw = _prompt("Wiki repository directory")
     wiki = Path(wiki_raw).expanduser().resolve()
     api_key = getpass.getpass(
@@ -249,8 +295,9 @@ def interactive_setup(home: Path | None = None) -> Config:
     )
 
     data: dict[str, Any] = {
-        "schema_version": 1,
-        "wiki_repo_path": str(wiki),
+        "schema_version": 2,
+        "active_wiki": nick,
+        "wikis": [{"nickname": nick, "path": str(wiki)}],
         "openrouter": {"api_key_env": _DEFAULT_API_KEY_ENV},
         "models": {"primary": model},
     }

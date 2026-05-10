@@ -377,7 +377,7 @@ def _interactive_session(cfg: cfg_mod.Config, source_id: str) -> int:
     # load source title for header
     source_title: str | None = None
     try:
-        info_path = cfg.wiki_repo_path / "sources" / source_id / "info.yaml"
+        info_path = cfg.resolve_active_wiki(None) / "sources" / source_id / "info.yaml"
         info = info_yaml_mod.read(info_path)
         source_title = info.title
     except info_yaml_mod.InfoError:

@@ -238,7 +238,7 @@ def assemble_draft(cfg: cfg_mod.Config, source_id: str) -> str:
         msg = f"No draft reading for {source_id!r}. Run `generate-reading` first."
         raise ReadingPipelineError(msg)
 
-    wiki_repo = cfg.wiki_repo_path
+    wiki_repo = cfg.resolve_active_wiki(None)
     info_path = wiki_repo / "sources" / source_id / "info.yaml"
     try:
         info = info_yaml_mod.read(info_path)
@@ -299,7 +299,7 @@ def plan(cfg: cfg_mod.Config, source_id: str) -> PlanResult:
     :raises ReadingPipelineError: reading not approved, prior pipeline
         artifacts missing, or planner / preamble failure.
     """
-    wiki_repo = cfg.wiki_repo_path
+    wiki_repo = cfg.resolve_active_wiki(None)
     approved_path = wiki_repo / "sources" / source_id / "reading.md"
     if not approved_path.exists():
         msg = (
@@ -373,7 +373,7 @@ def extract(cfg: cfg_mod.Config, source_id: str) -> ExtractResult:
     :raises ReadingPipelineError: missing plan, plain-text source, or
         Stage 3 failure (bad LLM output, schema violation).
     """
-    wiki_repo = cfg.wiki_repo_path
+    wiki_repo = cfg.resolve_active_wiki(None)
     plan_path = pending_plan_path(source_id)
     if not plan_path.exists():
         msg = f"No plan at {plan_path}. Run `plan {source_id}` first."
@@ -667,7 +667,7 @@ class _Context:
 
 
 def _load_context(cfg: cfg_mod.Config, source_id: str) -> tuple[Info, _Context]:
-    wiki_repo = cfg.wiki_repo_path
+    wiki_repo = cfg.resolve_active_wiki(None)
     info_path = wiki_repo / "sources" / source_id / "info.yaml"
     if not info_path.exists():
         msg = f"info.yaml not found for {source_id!r}: run `ingest` first"

@@ -389,7 +389,7 @@ def _resolve_entity_path(
             )
             raise ReviewError(msg)
         slug = entity_yaml_mod.slugify(proposal.target_entity)
-        path = ctx.cfg.wiki_repo_path / category / f"{slug}.yaml"
+        path = ctx.cfg.resolve_active_wiki(None) / category / f"{slug}.yaml"
         return path, slug, category
 
     entry = ctx.index.lookup(proposal.target_entity)
@@ -399,7 +399,7 @@ def _resolve_entity_path(
             f"is marked existing but not found in entity index"
         )
         raise ReviewError(msg)
-    path = ctx.cfg.wiki_repo_path / entry.category / f"{entry.slug}.yaml"
+    path = ctx.cfg.resolve_active_wiki(None) / entry.category / f"{entry.slug}.yaml"
     return path, entry.slug, entry.category
 
 
@@ -467,7 +467,7 @@ def _approve(
     entity_yaml_mod.write(entity, path)
     proposal_path.unlink(missing_ok=True)
     # refresh in-memory index so siblings later in the loop see this entity
-    ctx.index = entity_index_mod.build(ctx.cfg.wiki_repo_path)
+    ctx.index = entity_index_mod.build(ctx.cfg.resolve_active_wiki(None))
     # record merged aliases so sibling prompts skip them
     target_key = proposal.target_entity.casefold()
     for alias in confirmed_aliases:
@@ -500,7 +500,7 @@ def _build_target_view(ctx: _ApprovalContext, proposal: Proposal) -> TargetView:
         existing_entry = ctx.index.lookup(proposal.target_entity)
         if existing_entry is not None:
             entity_path = (
-                ctx.cfg.wiki_repo_path
+                ctx.cfg.resolve_active_wiki(None)
                 / existing_entry.category
                 / f"{existing_entry.slug}.yaml"
             )
@@ -612,7 +612,11 @@ def _seed_merged_aliases_from_disk(ctx: _ApprovalContext) -> None:
             entry = ctx.index.lookup(target.entity)
             if entry is None:
                 continue
-            path = ctx.cfg.wiki_repo_path / entry.category / f"{entry.slug}.yaml"
+            path = (
+                ctx.cfg.resolve_active_wiki(None)
+                / entry.category
+                / f"{entry.slug}.yaml"
+            )
             if not path.exists():
                 continue
             try:
@@ -641,7 +645,7 @@ def run(
     route. KeyboardInterrupt propagates after recording the count of
     proposal files left on disk as `remaining`.
     """
-    wiki_repo = cfg.wiki_repo_path
+    wiki_repo = cfg.resolve_active_wiki(None)
     info_path = wiki_repo / "sources" / source_id / "info.yaml"
     info = info_yaml_mod.read(info_path)
     plan_path = reading_pipeline.pending_plan_path(source_id)

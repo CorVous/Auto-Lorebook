@@ -95,7 +95,7 @@ def _walk_entity_paths(wiki_repo: Path) -> list[Path]:
 def preview(cfg: Config, source_id: str) -> RejectResult:
     """Read-only count of what `reject_ingest` would change."""
     result = RejectResult()
-    for path in _walk_entity_paths(cfg.wiki_repo_path):
+    for path in _walk_entity_paths(cfg.resolve_active_wiki(None)):
         try:
             entity = entity_yaml.read(path)
         except entity_yaml.EntityError:
@@ -113,7 +113,7 @@ def preview(cfg: Config, source_id: str) -> RejectResult:
 def reject_ingest(cfg: Config, source_id: str) -> RejectResult:
     """Remove `source_id`'s contributions from every entity; clean pending."""
     result = RejectResult()
-    for path in _walk_entity_paths(cfg.wiki_repo_path):
+    for path in _walk_entity_paths(cfg.resolve_active_wiki(None)):
         try:
             entity = entity_yaml.read(path)
         except entity_yaml.EntityError:
