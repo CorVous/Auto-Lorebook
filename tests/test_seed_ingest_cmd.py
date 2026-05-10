@@ -38,8 +38,11 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _write_user_config(home: Path, wiki: Path) -> None:
     (home / "config.yaml").write_text(
-        f"""schema_version: 1
-wiki_repo_path: {wiki}
+        f"""schema_version: 2
+active_wiki: main
+wikis:
+- nickname: main
+  path: {wiki}
 openrouter:
   api_key_env: FAKE_OR_KEY
 models:

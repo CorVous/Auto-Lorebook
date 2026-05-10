@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 def _mock_config(wiki: Path) -> MagicMock:
     cfg = MagicMock()
-    cfg.wiki_repo_path = wiki
+    cfg.resolve_active_wiki.return_value = wiki
     cfg.models.primary_context_window = 200000
     cfg.preamble.budget_fraction = 0.8
     return cfg

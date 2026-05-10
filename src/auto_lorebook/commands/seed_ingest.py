@@ -130,22 +130,23 @@ def _mint_source_id(cfg: cfg_mod.Config) -> str:
 
 
 def _source_collides(cfg: cfg_mod.Config, sid: str) -> bool:
-    wiki_src = cfg.wiki_repo_path / "sources" / sid
+    wiki_src = cfg.resolve_active_wiki(None) / "sources" / sid
     pending = cfg_mod.config_dir() / "pending" / sid
     return wiki_src.exists() or pending.exists()
 
 
 def _seed(cfg: cfg_mod.Config, sid: str, at: str, fixture_name: str) -> None:
+    wiki_repo = cfg.resolve_active_wiki(None)
     if _source_collides(cfg, sid):
         msg = (
             f"source {sid!r} already exists under "
-            f"{cfg.wiki_repo_path / 'sources' / sid} or "
+            f"{wiki_repo / 'sources' / sid} or "
             f"{cfg_mod.config_dir() / 'pending' / sid}"
         )
         raise SeedIngestError(msg)
 
     fixture_root = _resolve_fixture(fixture_name)
-    wiki_src = cfg.wiki_repo_path / "sources" / sid
+    wiki_src = wiki_repo / "sources" / sid
     pending_reading = cfg_mod.config_dir() / "pending" / sid / "reading"
 
     # wiki side first so a half-failed seed leaves only sources/<sid>

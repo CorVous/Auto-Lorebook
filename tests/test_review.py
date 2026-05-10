@@ -26,6 +26,7 @@ from auto_lorebook.review import (
     ReviewResult,
     TargetEdits,
 )
+from auto_lorebook.wiki_registry import WikiEntry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -43,7 +44,7 @@ def cfg(
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
-    return cfg_mod.Config(wiki_repo_path=tmp_wiki)
+    return cfg_mod.Config(wikis=[WikiEntry("test", tmp_wiki)], active_wiki="test")
 
 
 def _write_info(wiki: Path, source_id: str = "yt-x") -> None:
@@ -218,7 +219,7 @@ class TestSortedProposals:
     def test_groups_siblings_in_target_order(self, cfg: cfg_mod.Config) -> None:
         """Plan order beats lex sort: targets ordered as in claim.targets."""
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         # cg-001: War of the Dusk first, then Aldara — slug-sort would invert.
         claim1 = _make_claim(
             cg="cg-001",
@@ -249,7 +250,7 @@ class TestSortedProposals:
             ],
         )
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(name="War of the Dusk", category="events"),
@@ -285,11 +286,11 @@ class TestValidateProposalsSubsetOfPlan:
     def test_exact_match_succeeds(self, cfg: cfg_mod.Config) -> None:
         """Proposals exactly matching plan keys → run() succeeds."""
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         proposal = _make_proposal(target="Aldara", proposed_id="aldara-f001")
         _write_proposal(source_id, proposal)
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
@@ -317,14 +318,14 @@ class TestValidateProposalsSubsetOfPlan:
     def test_strict_subset_succeeds(self, cfg: cfg_mod.Config) -> None:
         """Plan has two claim groups; only one proposal on disk (Ctrl-C resume)."""
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         # Only write proposal for cg-001, not cg-002
         proposal = _make_proposal(
             target="Aldara", proposed_id="aldara-f001", cg="cg-001"
         )
         _write_proposal(source_id, proposal)
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
@@ -365,7 +366,7 @@ class TestValidateProposalsSubsetOfPlan:
     def test_orphan_raises_review_error(self, cfg: cfg_mod.Config) -> None:
         """Proposal whose (claim_group_id, target_entity) not in plan → ReviewError."""
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         # In-plan proposal
         valid = _make_proposal(target="Aldara", proposed_id="aldara-f001", cg="cg-001")
         _write_proposal(source_id, valid)
@@ -373,7 +374,7 @@ class TestValidateProposalsSubsetOfPlan:
         orphan = _make_proposal(target="Ghost", proposed_id="ghost-f001", cg="cg-999")
         _write_proposal(source_id, orphan)
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
@@ -510,15 +511,17 @@ class TestFactDict:
 class TestExistingEntityApprove:
     def test_appends_fact_and_deletes_proposal(self, cfg: cfg_mod.Config) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
-        _seed_existing_entity(cfg.wiki_repo_path, name="Aldara", slug="aldara")
+        _write_info(cfg.resolve_active_wiki(None), source_id)
+        _seed_existing_entity(
+            cfg.resolve_active_wiki(None), name="Aldara", slug="aldara"
+        )
 
         proposal = _make_proposal(
             target="Aldara", proposed_id="aldara-f001", proposal_type="new_fact"
         )
         _write_proposal(source_id, proposal)
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             entity_resolutions=[
                 plan_yaml.EntityResolution(
@@ -552,7 +555,9 @@ class TestExistingEntityApprove:
             source_id, "aldara-f001"
         ).exists()
         # entity grew by one fact
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         assert len(e.facts) == 1
         assert e.facts[0]["id"] == "aldara-f001"
 
@@ -565,9 +570,9 @@ class TestExistingEntityApprove:
 class TestIdempotentGuard:
     def test_does_not_double_append(self, cfg: cfg_mod.Config) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         _seed_existing_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             slug="aldara",
             facts=[{"id": "aldara-f001", "text": "previously approved."}],
@@ -578,7 +583,7 @@ class TestIdempotentGuard:
         )
         _write_proposal(source_id, proposal)
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             planned_claims=[
                 _make_claim(
@@ -605,7 +610,9 @@ class TestIdempotentGuard:
             source_id, "aldara-f001"
         ).exists()
         # only the original fact remains
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         assert len(e.facts) == 1
 
 
@@ -617,11 +624,11 @@ class TestIdempotentGuard:
 class TestNewEntityStub:
     def test_creates_stub_with_timestamps(self, cfg: cfg_mod.Config) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         proposal = _make_proposal(target="Aldara", proposed_id="aldara-f001")
         _write_proposal(source_id, proposal)
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
@@ -646,7 +653,7 @@ class TestNewEntityStub:
             reviewer=ScriptedReviewer([ApproveDecision()]),
         )
         assert result.approved == 1
-        path = cfg.wiki_repo_path / "locations" / "aldara.yaml"
+        path = cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
         assert path.exists()
         e = entity_yaml.read(path)
         assert e.entity == "Aldara"
@@ -660,11 +667,11 @@ class TestNewEntityStub:
         self, cfg: cfg_mod.Config
     ) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         proposal = _make_proposal(target="Aldara", proposed_id="aldara-f001")
         _write_proposal(source_id, proposal)
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(
@@ -693,7 +700,9 @@ class TestNewEntityStub:
             reviewer=ScriptedReviewer([ApproveDecision()], alias_responses=[True]),
         )
         assert result.approved == 1
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         assert len(e.aliases) == 1
         assert e.aliases[0].name == "the Realm"
         assert e.aliases[0].source == "stub-creation"
@@ -703,14 +712,16 @@ class TestNewEntityStub:
         self, cfg: cfg_mod.Config
     ) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
-        _seed_existing_entity(cfg.wiki_repo_path, name="Aldara", slug="aldara")
+        _write_info(cfg.resolve_active_wiki(None), source_id)
+        _seed_existing_entity(
+            cfg.resolve_active_wiki(None), name="Aldara", slug="aldara"
+        )
         proposal = _make_proposal(
             target="Aldara", proposed_id="aldara-f001", proposal_type="new_fact"
         )
         _write_proposal(source_id, proposal)
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             entity_resolutions=[
                 plan_yaml.EntityResolution(
@@ -737,7 +748,9 @@ class TestNewEntityStub:
             source_id=source_id,
             reviewer=ScriptedReviewer([ApproveDecision()], alias_responses=[True]),
         )
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         assert len(e.aliases) == 1
         assert e.aliases[0].source == "alias-confirmation"
 
@@ -752,14 +765,16 @@ class TestReject:
         self, cfg: cfg_mod.Config
     ) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
-        _seed_existing_entity(cfg.wiki_repo_path, name="Aldara", slug="aldara")
+        _write_info(cfg.resolve_active_wiki(None), source_id)
+        _seed_existing_entity(
+            cfg.resolve_active_wiki(None), name="Aldara", slug="aldara"
+        )
         proposal = _make_proposal(
             target="Aldara", proposed_id="aldara-f001", proposal_type="new_fact"
         )
         _write_proposal(source_id, proposal)
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             planned_claims=[
                 _make_claim(
@@ -780,7 +795,9 @@ class TestReject:
         )
         assert result.rejected == 1
         assert result.approved == 0
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         assert e.facts == []
         assert not reading_pipeline.pending_proposal_path(
             source_id, "aldara-f001"
@@ -795,7 +812,7 @@ class TestReject:
 class TestMultiTargetDedup:
     def test_two_proposals_share_one_stub(self, cfg: cfg_mod.Config) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         # Two new-entity proposals in the same claim group both targeting Aldara.
         # (Multi-target onto a brand-new entity is rare but legal.)
         # In practice they'd be different entities; we contrive same-target to
@@ -825,7 +842,7 @@ class TestMultiTargetDedup:
             ),
         )
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
@@ -860,7 +877,9 @@ class TestMultiTargetDedup:
             source_id=source_id,
             reviewer=ScriptedReviewer([ApproveDecision(), ApproveDecision()]),
         )
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         assert len(e.facts) == 2
         assert {f["id"] for f in e.facts} == {"aldara-f001", "aldara-f002"}
         # created_by_ingest stays as the first-approval ingest
@@ -879,7 +898,7 @@ class TestCreatedEarlierInSession:
         self, cfg: cfg_mod.Config
     ) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         _write_proposal(
             source_id,
             _make_proposal(target="Aldara", proposed_id="aldara-f001", cg="cg-001"),
@@ -889,7 +908,7 @@ class TestCreatedEarlierInSession:
             _make_proposal(target="Aldara", proposed_id="aldara-f002", cg="cg-002"),
         )
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
@@ -937,7 +956,7 @@ class TestSiblingAliasDedup:
         self, cfg: cfg_mod.Config
     ) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         _write_proposal(
             source_id,
             _make_proposal(target="Aldara", proposed_id="aldara-f001", cg="cg-001"),
@@ -947,7 +966,7 @@ class TestSiblingAliasDedup:
             _make_proposal(target="Aldara", proposed_id="aldara-f002", cg="cg-002"),
         )
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(
@@ -989,7 +1008,9 @@ class TestSiblingAliasDedup:
         # already merged.
         assert len(scripted.alias_calls) == 1
         # And only one alias landed.
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         assert len(e.aliases) == 1
 
 
@@ -1004,7 +1025,7 @@ class TestDeclinedAliasMemory:
     ) -> None:
         # Single bundle: three routes, all targeting Aldara with "the Realm".
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         cg = "cg-001"
         pids = ["aldara-f001", "aldara-f002", "aldara-f003"]
         for pid in pids:
@@ -1013,7 +1034,7 @@ class TestDeclinedAliasMemory:
                 _make_proposal(target="Aldara", proposed_id=pid, cg=cg),
             )
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(
@@ -1041,14 +1062,16 @@ class TestDeclinedAliasMemory:
         review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
         # Declined in first route → skipped for the other two.
         assert len(scripted.alias_calls) == 1
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         assert len(e.aliases) == 0
 
     def _setup_two_bundles_same_alias(
         self, cfg: cfg_mod.Config, source_id: str
     ) -> None:
         """Two consecutive bundles both suggesting 'the Realm' for Aldara."""
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         _write_proposal(
             source_id,
             _make_proposal(target="Aldara", proposed_id="aldara-f001", cg="cg-001"),
@@ -1058,7 +1081,7 @@ class TestDeclinedAliasMemory:
             _make_proposal(target="Aldara", proposed_id="aldara-f002", cg="cg-002"),
         )
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(
@@ -1104,7 +1127,9 @@ class TestDeclinedAliasMemory:
         review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
         # Declined in first bundle → skipped in second bundle.
         assert len(scripted.alias_calls) == 1
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         assert len(e.aliases) == 0
 
     def test_second_run_does_not_inherit_declines_from_first(
@@ -1121,7 +1146,7 @@ class TestDeclinedAliasMemory:
 
         # Second run: new plan targeting existing Aldara with same alias.
         source_id2 = "yt-y"
-        _write_info(cfg.wiki_repo_path, source_id2)
+        _write_info(cfg.resolve_active_wiki(None), source_id2)
         _write_proposal(
             source_id2,
             _make_proposal(
@@ -1132,7 +1157,7 @@ class TestDeclinedAliasMemory:
             ),
         )
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id2,
             entity_resolutions=[
                 plan_yaml.EntityResolution(
@@ -1171,7 +1196,7 @@ class TestIndexRefresh:
         self, cfg: cfg_mod.Config
     ) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         # A targets new entity Aldara; B is a `new_fact` proposal claiming
         # Aldara as existing. B can only succeed if the index refresh after A's
         # approval surfaces Aldara as existing.
@@ -1194,7 +1219,7 @@ class TestIndexRefresh:
             ),
         )
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
@@ -1229,7 +1254,9 @@ class TestIndexRefresh:
             reviewer=ScriptedReviewer([ApproveDecision(), ApproveDecision()]),
         )
         assert result.approved == 2
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         assert len(e.facts) == 2
 
 
@@ -1263,7 +1290,7 @@ class TestResumeAndEmpty:
         self, cfg: cfg_mod.Config
     ) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         for i in range(1, 4):
             _write_proposal(
                 source_id,
@@ -1274,7 +1301,7 @@ class TestResumeAndEmpty:
                 ),
             )
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(name=f"E{i}", category="concepts")
@@ -1311,8 +1338,8 @@ class TestResumeAndEmpty:
         self, cfg: cfg_mod.Config
     ) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
-        _write_plan(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
+        _write_plan(cfg.resolve_active_wiki(None), source_id)
         result = review.run(
             cfg=cfg,
             source_id=source_id,
@@ -1340,7 +1367,7 @@ def _multi_target_setup(
 ) -> None:
     """Plan with one cg routing to (Aldara, Theron, Second Age), all NEW."""
     aliases_per_entity = aliases_per_entity or {}
-    _write_info(cfg.wiki_repo_path, source_id)
+    _write_info(cfg.resolve_active_wiki(None), source_id)
     cg = "cg-multi"
     targets = [
         ("Aldara", "locations", sections[0], "aldara-f001"),
@@ -1367,7 +1394,7 @@ def _multi_target_setup(
             ),
         )
     _write_plan(
-        cfg.wiki_repo_path,
+        cfg.resolve_active_wiki(None),
         source_id,
         new_entities=[
             plan_yaml.NewEntityProposal(
@@ -1411,7 +1438,7 @@ class TestBundle:
             ("theron", "characters"),
             ("second-age", "events"),
         ):
-            assert (cfg.wiki_repo_path / cat / f"{slug}.yaml").exists()
+            assert (cfg.resolve_active_wiki(None) / cat / f"{slug}.yaml").exists()
 
     def test_targets_drop_unchecks_a_route(self, cfg: cfg_mod.Config) -> None:
         source_id = "yt-x"
@@ -1428,10 +1455,12 @@ class TestBundle:
         result = review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
         assert result.approved == 2
         assert result.rejected == 1
-        assert (cfg.wiki_repo_path / "locations" / "aldara.yaml").exists()
-        assert (cfg.wiki_repo_path / "events" / "second-age.yaml").exists()
+        assert (cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml").exists()
+        assert (cfg.resolve_active_wiki(None) / "events" / "second-age.yaml").exists()
         # Theron stub never created.
-        assert not (cfg.wiki_repo_path / "characters" / "theron.yaml").exists()
+        assert not (
+            cfg.resolve_active_wiki(None) / "characters" / "theron.yaml"
+        ).exists()
         # Theron proposal file gone.
         assert not reading_pipeline.pending_proposal_path(
             source_id, "theron-f001"
@@ -1457,7 +1486,7 @@ class TestBundle:
             ("theron", "characters"),
             ("second-age", "events"),
         ):
-            e = entity_yaml.read(cfg.wiki_repo_path / cat / f"{slug}.yaml")
+            e = entity_yaml.read(cfg.resolve_active_wiki(None) / cat / f"{slug}.yaml")
             assert e.facts[0]["text"] == "Edited claim text."
             assert e.facts[0]["text_source"] is not None
             assert e.facts[0]["edited_by_human"] is True
@@ -1479,9 +1508,15 @@ class TestBundle:
             ]
         )
         review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
-        aldara = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
-        theron = entity_yaml.read(cfg.wiki_repo_path / "characters" / "theron.yaml")
-        second = entity_yaml.read(cfg.wiki_repo_path / "events" / "second-age.yaml")
+        aldara = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
+        theron = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "characters" / "theron.yaml"
+        )
+        second = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "events" / "second-age.yaml"
+        )
         assert aldara.facts[0]["section"] == "founding"
         assert theron.facts[0]["section"] == "bloodlines"
         assert second.facts[0]["section"] == "events-in-era"
@@ -1511,7 +1546,7 @@ class TestBundle:
             ("theron", "characters"),
             ("second-age", "events"),
         ):
-            e = entity_yaml.read(cfg.wiki_repo_path / cat / f"{slug}.yaml")
+            e = entity_yaml.read(cfg.resolve_active_wiki(None) / cat / f"{slug}.yaml")
             assert e.facts[0]["text"] == "Edited claim."
             assert e.facts[0]["status"] == "hearsay"
             assert e.facts[0]["status_reason"] == "tavern rumor"
@@ -1537,9 +1572,15 @@ class TestBundle:
             ]
         )
         review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
-        aldara = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
-        theron = entity_yaml.read(cfg.wiki_repo_path / "characters" / "theron.yaml")
-        second = entity_yaml.read(cfg.wiki_repo_path / "events" / "second-age.yaml")
+        aldara = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
+        theron = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "characters" / "theron.yaml"
+        )
+        second = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "events" / "second-age.yaml"
+        )
         # idx 1 (Theron) has both overrides
         assert theron.facts[0]["section"] == "bloodlines"
         assert theron.facts[0]["speaker"] == "Player-Thorin"
@@ -1570,9 +1611,15 @@ class TestBundle:
             ]
         )
         review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
-        aldara = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
-        theron = entity_yaml.read(cfg.wiki_repo_path / "characters" / "theron.yaml")
-        second = entity_yaml.read(cfg.wiki_repo_path / "events" / "second-age.yaml")
+        aldara = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
+        theron = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "characters" / "theron.yaml"
+        )
+        second = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "events" / "second-age.yaml"
+        )
         # bundle fields land on every route
         for e in (aldara, theron, second):
             assert e.facts[0]["text"] == "Edited claim."
@@ -1586,13 +1633,13 @@ class TestBundle:
         self, cfg: cfg_mod.Config
     ) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         _write_proposal(
             source_id,
             _make_proposal(target="Aldara", proposed_id="aldara-f001", cg="cg-001"),
         )
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
@@ -1629,7 +1676,7 @@ class TestBundle:
             ("theron", "characters"),
             ("second-age", "events"),
         ):
-            assert not (cfg.wiki_repo_path / cat / f"{slug}.yaml").exists()
+            assert not (cfg.resolve_active_wiki(None) / cat / f"{slug}.yaml").exists()
         # All proposal files gone.
         for pid in ("aldara-f001", "theron-f001", "second-age-f001"):
             assert not reading_pipeline.pending_proposal_path(source_id, pid).exists()
@@ -1697,7 +1744,7 @@ class TestBundle:
     def test_resume_seeds_merged_aliases_from_disk(self, cfg: cfg_mod.Config) -> None:
         """Alias added by this ingest in a prior run() must not re-prompt."""
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
+        _write_info(cfg.resolve_active_wiki(None), source_id)
         # Pre-existing entity with an alias added by THIS ingest.
         prior = entity_yaml.Entity(
             entity="Aldara",
@@ -1716,7 +1763,9 @@ class TestBundle:
             updated_at="2026-04-20T00:00:00Z",
             facts=[],
         )
-        entity_yaml.write(prior, cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        entity_yaml.write(
+            prior, cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         proposal = _make_proposal(
             target="Aldara",
             proposed_id="aldara-f002",
@@ -1725,7 +1774,7 @@ class TestBundle:
         )
         _write_proposal(source_id, proposal)
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             entity_resolutions=[
                 plan_yaml.EntityResolution(
@@ -1752,7 +1801,9 @@ class TestBundle:
         review.run(cfg=cfg, source_id=source_id, reviewer=scripted)
         # No alias prompt fired — already seeded from disk.
         assert scripted.alias_calls == []
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         # Still exactly one alias (no double-add).
         assert len(e.aliases) == 1
 
@@ -1787,7 +1838,7 @@ class TestBundle:
         # disk are unaffected). Aldara has no suggestion → its
         # confirm_alias is never called → KI fires on Theron's prompt.
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             new_entities=[
                 plan_yaml.NewEntityProposal(name="Aldara", category="locations"),
@@ -1842,8 +1893,10 @@ class TestEditPath:
         self, cfg: cfg_mod.Config
     ) -> None:
         source_id = "yt-x"
-        _write_info(cfg.wiki_repo_path, source_id)
-        _seed_existing_entity(cfg.wiki_repo_path, name="Aldara", slug="aldara")
+        _write_info(cfg.resolve_active_wiki(None), source_id)
+        _seed_existing_entity(
+            cfg.resolve_active_wiki(None), name="Aldara", slug="aldara"
+        )
         proposal = _make_proposal(
             target="Aldara",
             proposed_id="aldara-f001",
@@ -1852,7 +1905,7 @@ class TestEditPath:
         )
         _write_proposal(source_id, proposal)
         _write_plan(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             source_id,
             planned_claims=[
                 _make_claim(
@@ -1873,7 +1926,9 @@ class TestEditPath:
         )
         assert result.edited == 1
         assert result.approved == 0
-        e = entity_yaml.read(cfg.wiki_repo_path / "locations" / "aldara.yaml")
+        e = entity_yaml.read(
+            cfg.resolve_active_wiki(None) / "locations" / "aldara.yaml"
+        )
         assert e.facts[0]["text"] == "Edited by hand."
         assert e.facts[0]["text_source"] == "Original LLM text."
         assert e.facts[0]["edited_by_human"] is True

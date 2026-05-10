@@ -35,7 +35,7 @@ def finalize_context(
     Shared tail for `ingest` and `configure-context` commands.
     Returns the CLI exit code.
     """
-    wiki_repo = cfg.wiki_repo_path
+    wiki_repo = cfg.resolve_active_wiki(None)
     wc = wiki_context.read(wiki_repo / ".wiki-context.yaml")
     cors = corrections.read(wiki_repo / ".transcription-corrections.yaml")
     last_ctx = cfg_mod.load_last_context()

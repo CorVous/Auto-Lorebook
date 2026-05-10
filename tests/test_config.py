@@ -17,6 +17,7 @@ from auto_lorebook.config import (
     load_last_context,
     save_last_context,
 )
+from auto_lorebook.wiki_registry import WikiEntry
 
 
 def _write_config(path: Path, data: dict) -> None:
@@ -24,8 +25,16 @@ def _write_config(path: Path, data: dict) -> None:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
+def _cfg(wiki_path: Path) -> Config:
+    """Build a minimal v2 Config for tests."""
+    return Config(
+        wikis=[WikiEntry("test", wiki_path)],
+        active_wiki="test",
+    )
+
+
 # ---------------------------------------------------------------------------
-# load_config
+# load_config — v2 schema
 # ---------------------------------------------------------------------------
 
 
@@ -34,14 +43,16 @@ def test_load_config_minimal(tmp_path: Path) -> None:
     _write_config(
         tmp_path / "config.yaml",
         {
-            "schema_version": 1,
-            "wiki_repo_path": wiki_path,
+            "schema_version": 2,
+            "wikis": [{"nickname": "home", "path": wiki_path}],
+            "active_wiki": "home",
             "openrouter": {"api_key_env": "OPENROUTER_API_KEY"},
             "models": {"primary": "anthropic/claude-sonnet-4-5"},
         },
     )
     cfg = load_config(home=tmp_path)
-    assert cfg.wiki_repo_path == Path(wiki_path)
+    assert cfg.wikis == [WikiEntry("home", Path(wiki_path))]
+    assert cfg.active_wiki == "home"
     assert cfg.openrouter.api_key_env == "OPENROUTER_API_KEY"
     assert cfg.models.primary == "anthropic/claude-sonnet-4-5"
     assert cfg.models.primary_context_window == 200_000
@@ -53,8 +64,9 @@ def test_load_config_with_all_fields(tmp_path: Path) -> None:
     _write_config(
         tmp_path / "config.yaml",
         {
-            "schema_version": 1,
-            "wiki_repo_path": wiki_path,
+            "schema_version": 2,
+            "wikis": [{"nickname": "main", "path": wiki_path}],
+            "active_wiki": "main",
             "openrouter": {"api_key_env": "MY_KEY"},
             "models": {
                 "primary": "anthropic/claude-opus-4-7",
@@ -77,8 +89,133 @@ def test_load_config_missing_file_raises(tmp_path: Path) -> None:
         load_config(home=tmp_path)
 
 
+def test_load_config_v1_hard_errors(tmp_path: Path) -> None:
+    wiki_path = str(tmp_path / "wiki")
+    _write_config(
+        tmp_path / "config.yaml",
+        {"schema_version": 1, "wiki_repo_path": wiki_path},
+    )
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(home=tmp_path)
+    msg = str(exc_info.value)
+    assert str(tmp_path / "config.yaml") in msg
+    assert "delete" in msg.lower()
+    assert "re-run" in msg.lower()
+
+
+def test_load_config_v1_detected_by_wiki_repo_path_key(tmp_path: Path) -> None:
+    """wiki_repo_path key without schema_version also triggers v1 error."""
+    wiki_path = str(tmp_path / "wiki")
+    _write_config(
+        tmp_path / "config.yaml",
+        {"schema_version": 2, "wiki_repo_path": wiki_path},
+    )
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(home=tmp_path)
+    msg = str(exc_info.value)
+    assert "delete" in msg.lower()
+
+
+def test_load_config_missing_wikis_raises(tmp_path: Path) -> None:
+    _write_config(
+        tmp_path / "config.yaml",
+        {"schema_version": 2, "active_wiki": "home"},
+    )
+    with pytest.raises(ConfigError, match="wikis"):
+        load_config(home=tmp_path)
+
+
+def test_load_config_unknown_active_wiki_raises(tmp_path: Path) -> None:
+    wiki_path = str(tmp_path / "wiki")
+    _write_config(
+        tmp_path / "config.yaml",
+        {
+            "schema_version": 2,
+            "wikis": [{"nickname": "home", "path": wiki_path}],
+            "active_wiki": "nonexistent",
+        },
+    )
+    with pytest.raises(ConfigError, match="nonexistent"):
+        load_config(home=tmp_path)
+
+
+def test_load_config_bad_schema_version_raises(tmp_path: Path) -> None:
+    wiki_path = str(tmp_path / "wiki")
+    _write_config(
+        tmp_path / "config.yaml",
+        {
+            "schema_version": 99,
+            "wikis": [{"nickname": "home", "path": wiki_path}],
+            "active_wiki": "home",
+        },
+    )
+    with pytest.raises(ConfigError, match="exceeds max supported"):
+        load_config(home=tmp_path)
+
+
+def test_load_config_missing_schema_version_raises(tmp_path: Path) -> None:
+    wiki_path = str(tmp_path / "wiki")
+    _write_config(
+        tmp_path / "config.yaml",
+        {
+            "wikis": [{"nickname": "home", "path": wiki_path}],
+            "active_wiki": "home",
+        },
+    )
+    with pytest.raises(ConfigError, match="missing schema_version"):
+        load_config(home=tmp_path)
+
+
 # ---------------------------------------------------------------------------
-# interactive_setup
+# Config.resolve_active_wiki
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_active_wiki_returns_active_path(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    cfg = _cfg(wiki)
+    assert cfg.resolve_active_wiki(None) == wiki
+
+
+def test_resolve_active_wiki_override_wins(tmp_path: Path) -> None:
+    wiki1 = tmp_path / "wiki1"
+    wiki1.mkdir()
+    wiki2 = tmp_path / "wiki2"
+    wiki2.mkdir()
+    cfg = Config(
+        wikis=[WikiEntry("main", wiki1), WikiEntry("alt", wiki2)],
+        active_wiki="main",
+    )
+    assert cfg.resolve_active_wiki("alt") == wiki2
+
+
+def test_resolve_active_wiki_unknown_override_raises(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    cfg = _cfg(wiki)
+    with pytest.raises(ConfigError, match="nope"):
+        cfg.resolve_active_wiki("nope")
+
+
+def test_resolve_active_wiki_unset_raises(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    cfg = Config(wikis=[WikiEntry("home", wiki)], active_wiki=None)
+    with pytest.raises(ConfigError):
+        cfg.resolve_active_wiki(None)
+
+
+def test_resolve_active_wiki_missing_path_raises(tmp_path: Path) -> None:
+    wiki = tmp_path / "missing"
+    # don't create the directory
+    cfg = _cfg(wiki)
+    with pytest.raises(ConfigError, match="test"):
+        cfg.resolve_active_wiki(None)
+
+
+# ---------------------------------------------------------------------------
+# interactive_setup — v2
 # ---------------------------------------------------------------------------
 
 
@@ -99,12 +236,16 @@ def test_interactive_setup_writes_config_and_skeleton(
 ) -> None:
     home = tmp_path / "home"
     wiki = tmp_path / "wiki"
-    _patch_setup_inputs(monkeypatch, inputs=[str(wiki), ""])
+    nick = "mywiki"
+    _patch_setup_inputs(monkeypatch, inputs=[nick, str(wiki), ""])
 
     cfg = interactive_setup(home=home)
 
-    assert (home / "config.yaml").exists()
-    assert cfg.wiki_repo_path == wiki.resolve()
+    raw = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 2
+    assert raw["active_wiki"] == nick
+    assert raw["wikis"][0] == {"nickname": nick, "path": str(wiki.resolve())}
+    assert cfg.resolve_active_wiki(None) == wiki.resolve()
     assert cfg.openrouter.api_key_env == "OPENROUTER_API_KEY"
     assert cfg.models.primary == "anthropic/claude-sonnet-4-5"
     # wiki skeleton created
@@ -119,7 +260,9 @@ def test_interactive_setup_custom_model(
 ) -> None:
     home = tmp_path / "home"
     wiki = tmp_path / "mywiki"
-    _patch_setup_inputs(monkeypatch, inputs=[str(wiki), "anthropic/claude-opus-4-7"])
+    _patch_setup_inputs(
+        monkeypatch, inputs=["main", str(wiki), "anthropic/claude-opus-4-7"]
+    )
 
     cfg = interactive_setup(home=home)
 
@@ -132,11 +275,11 @@ def test_interactive_setup_reprompts_on_blank_required(
 ) -> None:
     home = tmp_path / "home"
     wiki = tmp_path / "wiki"
-    # first answer blank for wiki, second valid; default accepted for model
-    _patch_setup_inputs(monkeypatch, inputs=["", str(wiki), ""])
+    # blank nickname, then valid nickname; then wiki path; default model
+    _patch_setup_inputs(monkeypatch, inputs=["", "home", str(wiki), ""])
 
     cfg = interactive_setup(home=home)
-    assert cfg.wiki_repo_path == wiki.resolve()
+    assert cfg.resolve_active_wiki(None) == wiki.resolve()
 
 
 def test_interactive_setup_preserves_existing_wiki_files(
@@ -150,7 +293,7 @@ def test_interactive_setup_preserves_existing_wiki_files(
         "schema_version: 1\nsetting:\n  name: Aether\n", encoding="utf-8"
     )
 
-    _patch_setup_inputs(monkeypatch, inputs=[str(wiki), ""])
+    _patch_setup_inputs(monkeypatch, inputs=["home", str(wiki), ""])
 
     interactive_setup(home=home)
     # existing content preserved
@@ -168,7 +311,9 @@ def test_interactive_setup_writes_credentials_file_with_strict_perms(
     """Hidden API-key prompt → 0600 credentials file alongside config.yaml."""
     home = tmp_path / "home"
     wiki = tmp_path / "wiki"
-    _patch_setup_inputs(monkeypatch, inputs=[str(wiki), ""], api_key="sk-or-v1-test")
+    _patch_setup_inputs(
+        monkeypatch, inputs=["home", str(wiki), ""], api_key="sk-or-v1-test"
+    )
 
     interactive_setup(home=home)
 
@@ -185,7 +330,7 @@ def test_interactive_setup_blank_api_key_skips_credentials(
     """Blank → no credentials file written; user expected to use env var."""
     home = tmp_path / "home"
     wiki = tmp_path / "wiki"
-    _patch_setup_inputs(monkeypatch, inputs=[str(wiki), ""], api_key="")
+    _patch_setup_inputs(monkeypatch, inputs=["home", str(wiki), ""], api_key="")
 
     interactive_setup(home=home)
 
@@ -198,7 +343,7 @@ def test_get_api_key_falls_back_to_credentials_file(
     monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(tmp_path))
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     (tmp_path / "credentials").write_text("sk-or-v1-fromfile\n", encoding="utf-8")
-    cfg = Config(wiki_repo_path=tmp_path / "wiki")
+    cfg = _cfg(tmp_path / "wiki")
     assert cfg.get_api_key() == "sk-or-v1-fromfile"
 
 
@@ -208,7 +353,7 @@ def test_get_api_key_env_var_wins_over_credentials_file(
     monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(tmp_path))
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-fromenv")
     (tmp_path / "credentials").write_text("sk-or-v1-fromfile", encoding="utf-8")
-    cfg = Config(wiki_repo_path=tmp_path / "wiki")
+    cfg = _cfg(tmp_path / "wiki")
     assert cfg.get_api_key() == "sk-or-v1-fromenv"
 
 
@@ -217,30 +362,8 @@ def test_get_api_key_returns_none_when_neither_present(
 ) -> None:
     monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(tmp_path))
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    cfg = Config(wiki_repo_path=tmp_path / "wiki")
+    cfg = _cfg(tmp_path / "wiki")
     assert cfg.get_api_key() is None
-
-
-def test_load_config_missing_wiki_repo_raises(tmp_path: Path) -> None:
-    _write_config(tmp_path / "config.yaml", {"schema_version": 1})
-    with pytest.raises(ConfigError, match="wiki_repo_path"):
-        load_config(home=tmp_path)
-
-
-def test_load_config_bad_schema_version_raises(tmp_path: Path) -> None:
-    wiki_path = str(tmp_path / "wiki")
-    _write_config(
-        tmp_path / "config.yaml",
-        {"schema_version": 99, "wiki_repo_path": wiki_path},
-    )
-    with pytest.raises(ConfigError, match="exceeds max supported"):
-        load_config(home=tmp_path)
-
-
-def test_load_config_missing_schema_version_raises(tmp_path: Path) -> None:
-    _write_config(tmp_path / "config.yaml", {"wiki_repo_path": str(tmp_path / "wiki")})
-    with pytest.raises(ConfigError, match="missing schema_version"):
-        load_config(home=tmp_path)
 
 
 # ---------------------------------------------------------------------------

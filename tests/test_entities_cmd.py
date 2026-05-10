@@ -26,9 +26,15 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def configured_wiki(tmp_wiki: Path, tmp_home: Path) -> Path:
     """tmp_wiki + a config.yaml pointing at it."""
+    import yaml  # noqa: PLC0415
+
+    data = {
+        "schema_version": 2,
+        "active_wiki": "main",
+        "wikis": [{"nickname": "main", "path": str(tmp_wiki)}],
+    }
     (tmp_home / "config.yaml").write_text(
-        f"schema_version: 1\nwiki_repo_path: {tmp_wiki}\n",
-        encoding="utf-8",
+        yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
     )
     return tmp_wiki
 

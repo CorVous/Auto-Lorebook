@@ -186,8 +186,11 @@ def ingested_wiki(tmp_wiki: Path, tmp_home: Path) -> Path:  # noqa: ARG001
 def _write_user_config(home: Path, wiki: Path) -> None:
     cfg_path = home / "config.yaml"
     cfg_path.write_text(
-        f"""schema_version: 1
-wiki_repo_path: {wiki}
+        f"""schema_version: 2
+active_wiki: main
+wikis:
+- nickname: main
+  path: {wiki}
 openrouter:
   api_key_env: FAKE_OR_KEY
 models:

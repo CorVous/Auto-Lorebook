@@ -25,6 +25,7 @@ from auto_lorebook.reading_review import (
     UndoDecision,
     run,
 )
+from auto_lorebook.wiki_registry import WikiEntry
 from tests._reading_fixtures import _info, _segment_files, _sidecar
 from tests.test_reading_commands import _SRT, _wire_client_responses
 
@@ -104,7 +105,7 @@ def env(
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
-    cfg = cfg_mod.Config(wiki_repo_path=tmp_wiki)
+    cfg = cfg_mod.Config(wikis=[WikiEntry("test", tmp_wiki)], active_wiki="test")
     _write_info(tmp_wiki)
     _write_pending()
     return cfg, tmp_wiki
@@ -350,7 +351,8 @@ class TestYesShortcut:
         home.mkdir()
         monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
         (home / "config.yaml").write_text(
-            f"schema_version: 1\nwiki_repo_path: {tmp_wiki}\n"
+            f"schema_version: 2\nactive_wiki: main\n"
+            f"wikis:\n- nickname: main\n  path: {tmp_wiki}\n"
             "openrouter:\n  api_key_env: FAKE_OR_KEY\n"
             "models:\n  primary: anthropic/claude-sonnet-4-5\n",
             encoding="utf-8",
@@ -496,7 +498,8 @@ class TestRegenAfterReviewIntegrates:
         home.mkdir()
         monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
         (home / "config.yaml").write_text(
-            f"schema_version: 1\nwiki_repo_path: {tmp_wiki}\n"
+            f"schema_version: 2\nactive_wiki: main\n"
+            f"wikis:\n- nickname: main\n  path: {tmp_wiki}\n"
             "openrouter:\n  api_key_env: FAKE_OR_KEY\n"
             "models:\n  primary: anthropic/claude-sonnet-4-5\n",
             encoding="utf-8",

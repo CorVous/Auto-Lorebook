@@ -153,7 +153,7 @@ def run(
     Returns a `ReadingReviewResult` describing what happened. When the gate
     fires (every segment decided), writes the wiki-side `reading.md`.
     """
-    wiki_repo = cfg.wiki_repo_path
+    wiki_repo = cfg.resolve_active_wiki(None)
     info_path = wiki_repo / "sources" / source_id / "info.yaml"
     try:
         info = info_yaml_mod.read(info_path)

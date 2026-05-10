@@ -11,6 +11,7 @@ from auto_lorebook import config as cfg_mod
 from auto_lorebook import entity_yaml, reading_pipeline
 from auto_lorebook.entity_yaml import Alias, Entity
 from auto_lorebook.ingest_cleanup import RejectResult, preview, reject_ingest
+from auto_lorebook.wiki_registry import WikiEntry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -28,7 +29,7 @@ def cfg(
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
-    return cfg_mod.Config(wiki_repo_path=tmp_wiki)
+    return cfg_mod.Config(wikis=[WikiEntry("test", tmp_wiki)], active_wiki="test")
 
 
 def _fact(
@@ -115,7 +116,7 @@ def _write_pending(home: Path, source_id: str) -> tuple[Path, Path, Path]:
 class TestFactRemoval:
     def test_removes_matching_facts(self, cfg: cfg_mod.Config) -> None:
         path = _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
@@ -136,7 +137,7 @@ class TestFactRemoval:
 class TestAliasRemoval:
     def test_removes_matching_aliases(self, cfg: cfg_mod.Config) -> None:
         path = _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
@@ -169,7 +170,7 @@ class TestStubDeletion:
         self, cfg: cfg_mod.Config
     ) -> None:
         path = _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
@@ -184,7 +185,7 @@ class TestStubDeletion:
     def test_keeps_stub_when_created_by_differs(self, cfg: cfg_mod.Config) -> None:
         # Pre-existing entity, all facts happen to be from yt-x.
         path = _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
@@ -203,7 +204,7 @@ class TestStubDeletion:
     ) -> None:
         # Created by yt-x but a later ingest also added facts.
         path = _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
@@ -224,7 +225,7 @@ class TestStubDeletion:
 class TestMixedFacts:
     def test_only_target_ingest_facts_removed(self, cfg: cfg_mod.Config) -> None:
         path = _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
@@ -246,7 +247,7 @@ class TestAliasOnlyChange:
         self, cfg: cfg_mod.Config
     ) -> None:
         path = _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
@@ -277,7 +278,7 @@ class TestHandEdited:
         f = _fact("aldara-f001", ingest="yt-x")
         f.pop("created_by_ingest")
         path = _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
@@ -291,7 +292,7 @@ class TestHandEdited:
 
     def test_alias_without_ingest_tag_kept(self, cfg: cfg_mod.Config) -> None:
         path = _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
@@ -328,7 +329,7 @@ class TestPendingCleanup:
         assert (reading_dir / "structure.yaml").exists()
 
     def test_sources_dir_untouched(self, cfg: cfg_mod.Config) -> None:
-        src = cfg.wiki_repo_path / "sources" / "yt-x"
+        src = cfg.resolve_active_wiki(None) / "sources" / "yt-x"
         src.mkdir(parents=True)
         (src / "info.yaml").write_text("placeholder", encoding="utf-8")
         (src / "transcript.en.srt").write_text("placeholder", encoding="utf-8")
@@ -345,7 +346,7 @@ class TestPendingCleanup:
 class TestIdempotency:
     def test_second_call_returns_zeros(self, cfg: cfg_mod.Config) -> None:
         _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
@@ -369,7 +370,7 @@ class TestMalformed:
         self, cfg: cfg_mod.Config, caplog: pytest.LogCaptureFixture
     ) -> None:
         _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Good",
             category="locations",
             slug="good",
@@ -377,7 +378,7 @@ class TestMalformed:
             facts=[_fact("good-f001", ingest="yt-x")],
         )
         # Malformed entity in the same dir: no schema_version
-        (cfg.wiki_repo_path / "locations" / "bad.yaml").write_text(
+        (cfg.resolve_active_wiki(None) / "locations" / "bad.yaml").write_text(
             "entity: Bad\ncategory: locations\nslug: bad\n",
             encoding="utf-8",
         )
@@ -397,7 +398,7 @@ class TestPreviewMatches:
     def test_preview_matches_reject_counts(self, cfg: cfg_mod.Config) -> None:
         # Several entities with mixed ingests
         _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
@@ -408,7 +409,7 @@ class TestPreviewMatches:
             ],
         )
         _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Theron",
             category="characters",
             slug="theron",
@@ -439,7 +440,7 @@ class TestProposalsDirAbsent:
     def test_runs_clean_when_no_pending(self, cfg: cfg_mod.Config) -> None:
         # Just an entity, no pending dir
         _write_entity(
-            cfg.wiki_repo_path,
+            cfg.resolve_active_wiki(None),
             name="Aldara",
             category="locations",
             slug="aldara",
