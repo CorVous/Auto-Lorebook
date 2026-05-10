@@ -122,16 +122,41 @@ given ingest. See [audit trail](audit.md#rejecting-an-ingest).
 
 ## Wiki
 
+Registry management commands for registered wiki directories.
+
 ```bash
-auto-lorebook wiki list [--category <cat>]
-auto-lorebook wiki show <entity>
-auto-lorebook wiki rebuild
+auto-lorebook wiki list
+auto-lorebook wiki use <nickname-or-path> [--name <nickname>]
+auto-lorebook wiki add <nickname> <path>
+auto-lorebook wiki remove <nickname>
+auto-lorebook wiki rename <old> <new>
 ```
 
-`wiki rebuild` regenerates all summaries from YAML. Skips files whose
-recorded inputs haven't changed; add `--force` to regenerate
-unconditionally. See
-[staleness](../architecture/staleness.md#integration-with-commands).
+`wiki list` prints all registered wikis with `*` next to the active entry.
+
+`wiki use` switches the active wiki. If the argument matches a known nickname,
+it switches immediately. If it is a filesystem path to an existing directory,
+the path is auto-registered (nickname defaults to the directory basename;
+override with `--name`) and bootstrapped if needed, then set active.
+
+`wiki add` registers a wiki without switching the active pointer. The path
+must already exist on disk.
+
+`wiki remove` deregisters a wiki. Refuses if the nickname is the active entry
+— switch to another wiki first.
+
+`wiki rename` renames an entry in place. If the renamed entry is active,
+`active_wiki` is updated to the new nickname.
+
+### `--wiki` override flag
+
+```bash
+auto-lorebook --wiki <nickname> <command> [args...]
+```
+
+Overrides the active wiki for a single invocation without mutating the
+registry. Accepts nicknames only — passing a path-shaped string errors.
+Example: `auto-lorebook --wiki home-game plan <source_id>`.
 
 ## Sources
 

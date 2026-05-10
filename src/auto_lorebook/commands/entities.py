@@ -103,7 +103,7 @@ def run(args: argparse.Namespace) -> int:
     """Dispatch to the matching `_run_*` based on `entities_action`."""
     action = args.entities_action
     cfg = cfg_mod.load_config()
-    wiki = cfg.resolve_active_wiki(None)
+    wiki = cfg.resolve_active_wiki(getattr(args, "wiki", None))
 
     if action == "list":
         return _run_list(args, wiki)

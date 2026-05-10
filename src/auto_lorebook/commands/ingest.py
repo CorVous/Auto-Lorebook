@@ -117,7 +117,7 @@ def run(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         return 130
 
-    wiki_repo = cfg.resolve_active_wiki(None)
+    wiki_repo = cfg.resolve_active_wiki(getattr(args, "wiki", None))
 
     if args.url_or_path.startswith(("http://", "https://")):
         return _run_from_url(args, cfg, wiki_repo)

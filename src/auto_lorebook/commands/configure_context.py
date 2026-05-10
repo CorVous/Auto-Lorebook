@@ -61,7 +61,8 @@ def run(args: argparse.Namespace) -> int:
         _logger.error("%s", e)
         return 1
 
-    info_path = cfg.resolve_active_wiki(None) / "sources" / args.source_id / "info.yaml"
+    wiki_repo = cfg.resolve_active_wiki(getattr(args, "wiki", None))
+    info_path = wiki_repo / "sources" / args.source_id / "info.yaml"
 
     if not info_path.exists():
         _logger.error(
