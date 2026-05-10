@@ -78,3 +78,4 @@ nav:
   - ADRs:
       - adr/0001-plan-canonicality.md
       - adr/0002-status-edit-audit-asymmetry.md
+      - adr/0003-wiki-state-lives-inside-the-wiki.md
