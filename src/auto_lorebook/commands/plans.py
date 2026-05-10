@@ -2,7 +2,7 @@
 
 Inspection-only commands. Mirrors `entities` shape: nested subparser
 with action dispatch on `args.plans_action`. Plans are intermediate
-artifacts in `~/.auto-lorebook/pending/<source_id>/plan.yaml` — there
+artifacts in `<wiki>/.wiki-state/pending/<source_id>/plan.yaml` — there
 is no approval gate at this stage.
 """
 

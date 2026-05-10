@@ -1,4 +1,4 @@
-"""Config loader for ~/.auto-lorebook/config.yaml + last-context.yaml."""
+"""Config loader: ~/.auto-lorebook/config.yaml + <wiki>/.wiki-state/last-context."""
 
 from __future__ import annotations
 
