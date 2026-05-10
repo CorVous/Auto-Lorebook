@@ -78,7 +78,7 @@ Every YAML file carries `schema_version` as its first key — see
 - **Purpose** — model selection, wiki repo path, API key env var name.
 - **Details** — [installation](../getting-started/installation.md#configure).
 
-### `~/.auto-lorebook/pending/<ingest_id>/reading/structure.yaml`
+### `<wiki>/.wiki-state/pending/<ingest_id>/reading/structure.yaml`
 
 - **Stage** — Stage 1a output.
 - **Purpose** — segments, speaker attribution, sub-segment overrides,
@@ -86,14 +86,14 @@ Every YAML file carries `schema_version` as its first key — see
   ingest lifetime.
 - **Details** — [Stage 1a](../pipeline/reading.md#stage-1a-structure).
 
-### `~/.auto-lorebook/pending/<ingest_id>/reading/reading.yaml`
+### `<wiki>/.wiki-state/pending/<ingest_id>/reading/reading.yaml`
 
 - **Stage** — Stage 1b output; sidecar.
 - **Purpose** — session metadata: `default_speaker`, `name_corrections`,
   `session_date`. Preserved across regenerations.
 - **Details** — [Stage 1b](../pipeline/reading.md#stage-1b-summarize).
 
-### `~/.auto-lorebook/pending/<ingest_id>/reading/segments/<segment_id>.md`
+### `<wiki>/.wiki-state/pending/<ingest_id>/reading/segments/<segment_id>.md`
 
 - **Stage** — Stage 1b output; per-segment.
 - **Purpose** — YAML frontmatter (segment metadata, `segment_status`)
@@ -101,14 +101,14 @@ Every YAML file carries `schema_version` as its first key — see
   `reading.md` at approval time.
 - **Details** — [reading assembly](../pipeline/reading.md#reading-assembly).
 
-### `~/.auto-lorebook/pending/<ingest_id>/plan.yaml`
+### `<wiki>/.wiki-state/pending/<ingest_id>/plan.yaml`
 
 - **Stage** — Stage 2 output.
 - **Purpose** — entity resolutions, new-entity proposals, routed
   claims. No filesystem side effects.
 - **Details** — [Stage 2: planner](../pipeline/planner.md#output).
 
-### `~/.auto-lorebook/pending/<ingest_id>/proposals/<proposal_id>.yaml`
+### `<wiki>/.wiki-state/pending/<ingest_id>/proposals/<proposal_id>.yaml`
 
 - **Stage** — Stage 3 output.
 - **Purpose** — one proposed fact per file, with verbatim span,

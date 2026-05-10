@@ -95,16 +95,25 @@ def _write_pending() -> None:
         segment_file_mod.write(sf, segs_dir / f"{sf.frontmatter.segment_id}.md")
 
 
+def _write_config(home: Path, wiki: Path) -> None:
+    (home / "config.yaml").write_text(
+        "schema_version: 2\nactive_wiki: test\nwikis:\n"
+        f"- nickname: test\n  path: {wiki}\n",
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture
 def env(
     tmp_path: Path,
     tmp_wiki: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[cfg_mod.Config, Path]:
-    """Write info.yaml and pending segment files; return (cfg, wiki)."""
+    """Write config + info.yaml + pending segment files; return (cfg, wiki)."""
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
+    _write_config(home, tmp_wiki)
     cfg = cfg_mod.Config(wikis=[WikiEntry("test", tmp_wiki)], active_wiki="test")
     _write_info(tmp_wiki)
     _write_pending()

@@ -249,7 +249,9 @@ class TestGenerateReading:
         out = capsys.readouterr().out
         assert "Draft reading" in out
 
-        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        pending = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
+        )
         assert (pending / "structure.yaml").exists()
         assert (pending / "bullets.yaml").exists()
         assert (pending / "reading.yaml").exists()
@@ -305,7 +307,9 @@ class TestGenerateReadingSidecarSchema:
             rc = generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
         assert rc == 0
 
-        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        pending = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
+        )
         sidecar_data = yaml.safe_load((pending / "reading.yaml").read_text())
         assert sidecar_data["schema_version"] == 2
         # fixture has only "Intro" + "Founding of Aldara" — no low-yield matches
@@ -344,7 +348,9 @@ class TestGenerateReadingSidecarSchema:
 
         from auto_lorebook import reading_sidecar as sidecar_mod  # noqa: PLC0415
 
-        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        pending = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
+        )
         sc = sidecar_mod.read(pending / "reading.yaml")
         assert len(sc.gap_warnings) == 1
         assert sc.gap_warnings[0].start == pytest.approx(2050.0)
@@ -376,8 +382,12 @@ class TestApproveReading:
         assert "# Reading: Session 3" in approved.read_text(encoding="utf-8")
         assert "reading_status" not in approved.read_text(encoding="utf-8")
         # approve-reading must NOT cascade into plan/extract
-        assert not (tmp_home / "pending" / "yt-abc12345678" / "plan.yaml").exists()
-        assert not (tmp_home / "pending" / "yt-abc12345678" / "proposals").exists()
+        assert not (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "plan.yaml"
+        ).exists()
+        assert not (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
+        ).exists()
         out = capsys.readouterr().out
         assert "Approved" in out
 
@@ -459,7 +469,9 @@ class TestApproveReadingInteractive:
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert not approved.exists()
-        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        pending = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
+        )
         assert (pending / "reading.yaml").exists()
         assert not (pending / "reading.md").exists()
         # segments still draft
@@ -489,7 +501,9 @@ class TestApproveReadingInteractive:
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert not approved.exists()
-        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        pending = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
+        )
         import yaml as _yaml  # noqa: PLC0415
 
         fm1 = _yaml.safe_load(
@@ -561,7 +575,9 @@ class TestApproveReadingInteractive:
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert approved.exists()
-        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        pending = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
+        )
         import yaml as _yaml  # noqa: PLC0415
 
         fm1 = _yaml.safe_load(
@@ -587,7 +603,9 @@ class TestApproveReadingInteractive:
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert not approved.exists()
-        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        pending = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
+        )
         import yaml as _yaml  # noqa: PLC0415
 
         fm1 = _yaml.safe_load(
@@ -674,7 +692,9 @@ class TestApproveReadingInteractive:
         assert calls[0][0] == "my-fake-editor"
         assert calls[0][1].endswith("seg-001.md")
 
-        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        pending = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
+        )
         import yaml as _yaml  # noqa: PLC0415
 
         fm1 = _yaml.safe_load(
@@ -697,7 +717,9 @@ class TestApproveReadingInteractive:
         self._patch_inputs(monkeypatch, ["1", "e", "a", "2", "a", "q"])
         self._generate(monkeypatch)
 
-        pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+        pending = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
+        )
         seg001_path = pending / "segments" / "seg-001.md"
 
         def fake_run(cmd: list[str], **_kwargs: object) -> object:
@@ -844,7 +866,9 @@ class TestRegenerateReading:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            pending = tmp_home / "pending" / "yt-abc12345678" / "reading"
+            pending = (
+                ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
+            )
             sidecar_before = (pending / "reading.yaml").read_bytes()
 
             regenerate_reading_cmd.run(
@@ -898,7 +922,9 @@ class TestPlan:
             rc = plan_cmd.run(_args(source_id="yt-abc12345678"))
 
         assert rc == 0
-        plan_path = tmp_home / "pending" / "yt-abc12345678" / "plan.yaml"
+        plan_path = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "plan.yaml"
+        )
         assert plan_path.exists()
         first_line = next(ln for ln in plan_path.read_text().splitlines() if ln.strip())
         assert first_line.startswith("schema_version:")
@@ -1022,7 +1048,9 @@ class TestExtract:
             rc = extract_cmd.run(_args(source_id="yt-abc12345678"))
 
         assert rc == 0
-        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        proposals_dir = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
+        )
         assert proposals_dir.is_dir()
         files = sorted(proposals_dir.glob("*.yaml"))
         assert len(files) == 2

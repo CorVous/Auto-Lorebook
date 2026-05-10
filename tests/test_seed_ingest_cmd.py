@@ -105,8 +105,10 @@ class TestSeedIngestPerStage:
         sid = _seeded_sid_from(capsys.readouterr().out)
         assert sid.startswith("qa-")
 
+        from auto_lorebook import wiki_state  # noqa: PLC0415
+
         wiki_src = tmp_wiki / "sources" / sid
-        pending_reading = tmp_home / "pending" / sid / "reading"
+        pending_reading = wiki_state.pending_reading_dir(tmp_wiki, sid)
 
         assert {p.name for p in wiki_src.iterdir()} == expected_wiki
         if expected_pending:
@@ -134,14 +136,13 @@ class TestSeedIngestPerStage:
         info = info_yaml.read(tmp_wiki / "sources" / sid / "info.yaml")
         assert info.source_id == sid
 
-        struct = structure_mod.read(
-            tmp_home / "pending" / sid / "reading" / "structure.yaml"
-        )
+        from auto_lorebook import wiki_state  # noqa: PLC0415
+
+        pr = wiki_state.pending_reading_dir(tmp_wiki, sid)
+        struct = structure_mod.read(pr / "structure.yaml")
         assert struct.source_id == sid
 
-        bullets = stage1b.read_bullets(
-            tmp_home / "pending" / sid / "reading" / "bullets.yaml"
-        )
+        bullets = stage1b.read_bullets(pr / "bullets.yaml")
         assert bullets.source_id == sid
 
         approved_path = tmp_wiki / "sources" / sid / "reading.md"
@@ -149,19 +150,17 @@ class TestSeedIngestPerStage:
         assert fm["source_id"] == sid
         assert "reading_status" not in fm
 
-        sidecar = reading_sidecar_mod.read(
-            tmp_home / "pending" / sid / "reading" / "reading.yaml"
-        )
+        sidecar = reading_sidecar_mod.read(pr / "reading.yaml")
         assert sidecar.default_speaker == "DM"
 
         # placeholder must not survive anywhere on disk
         for path in (
             tmp_wiki / "sources" / sid / "info.yaml",
-            tmp_home / "pending" / sid / "reading" / "structure.yaml",
-            tmp_home / "pending" / sid / "reading" / "bullets.yaml",
-            tmp_home / "pending" / sid / "reading" / "reading.yaml",
-            tmp_home / "pending" / sid / "reading" / "segments" / "seg-001.md",
-            tmp_home / "pending" / sid / "reading" / "segments" / "seg-002.md",
+            pr / "structure.yaml",
+            pr / "bullets.yaml",
+            pr / "reading.yaml",
+            pr / "segments" / "seg-001.md",
+            pr / "segments" / "seg-002.md",
             approved_path,
         ):
             assert "__QA_SOURCE_ID__" not in path.read_text(encoding="utf-8")
@@ -179,13 +178,12 @@ class TestSeedIngestPerStage:
         assert rc == 0
         sid = _seeded_sid_from(capsys.readouterr().out)
 
-        seg001 = segment_file_mod.read(
-            tmp_home / "pending" / sid / "reading" / "segments" / "seg-001.md"
-        )
+        from auto_lorebook import wiki_state  # noqa: PLC0415
+
+        pr = wiki_state.pending_reading_dir(tmp_wiki, sid)
+        seg001 = segment_file_mod.read(pr / "segments" / "seg-001.md")
         assert seg001.frontmatter.segment_status == "draft"
-        seg002 = segment_file_mod.read(
-            tmp_home / "pending" / sid / "reading" / "segments" / "seg-002.md"
-        )
+        seg002 = segment_file_mod.read(pr / "segments" / "seg-002.md")
         assert seg002.frontmatter.segment_status == "draft"
 
     def test_explicit_source_id_used_verbatim(

@@ -14,6 +14,7 @@ from importlib import resources
 from typing import TYPE_CHECKING
 
 from auto_lorebook import config as cfg_mod
+from auto_lorebook import wiki_state as wiki_state_mod
 from auto_lorebook._io import atomic_write_text
 
 if TYPE_CHECKING:
@@ -130,8 +131,9 @@ def _mint_source_id(cfg: cfg_mod.Config) -> str:
 
 
 def _source_collides(cfg: cfg_mod.Config, sid: str) -> bool:
-    wiki_src = cfg.resolve_active_wiki(None) / "sources" / sid
-    pending = cfg_mod.config_dir() / "pending" / sid
+    wiki = cfg.resolve_active_wiki(None)
+    wiki_src = wiki / "sources" / sid
+    pending = wiki_state_mod.pending_source_dir(wiki, sid)
     return wiki_src.exists() or pending.exists()
 
 
@@ -141,13 +143,13 @@ def _seed(cfg: cfg_mod.Config, sid: str, at: str, fixture_name: str) -> None:
         msg = (
             f"source {sid!r} already exists under "
             f"{wiki_repo / 'sources' / sid} or "
-            f"{cfg_mod.config_dir() / 'pending' / sid}"
+            f"{wiki_state_mod.pending_source_dir(wiki_repo, sid)}"
         )
         raise SeedIngestError(msg)
 
     fixture_root = _resolve_fixture(fixture_name)
     wiki_src = wiki_repo / "sources" / sid
-    pending_reading = cfg_mod.config_dir() / "pending" / sid / "reading"
+    pending_reading = wiki_state_mod.pending_reading_dir(wiki_repo, sid)
 
     # wiki side first so a half-failed seed leaves only sources/<sid>
     # behind, which `reject-ingest` will tolerate.

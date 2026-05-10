@@ -30,11 +30,21 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return home
 
 
+def _write_config(home: Path, wiki: Path) -> None:
+    (home / "config.yaml").write_text(
+        "schema_version: 2\nactive_wiki: main\nwikis:\n"
+        f"- nickname: main\n  path: {wiki}\n",
+        encoding="utf-8",
+    )
+
+
 def _args(**kwargs: object) -> argparse.Namespace:
     return argparse.Namespace(**kwargs)
 
 
-def _write_plan(home: Path, source_id: str) -> Path:
+def _write_plan(wiki: Path, source_id: str) -> Path:
+    from auto_lorebook import wiki_state  # noqa: PLC0415
+
     plan = Plan(
         source_id=source_id,
         planned_at="2026-04-20T14:58:33Z",
@@ -80,7 +90,7 @@ def _write_plan(home: Path, source_id: str) -> Path:
             )
         ],
     )
-    path = home / "pending" / source_id / "plan.yaml"
+    path = wiki_state.pending_plan_path(wiki, source_id)
     plan_yaml.write(plan, path)
     return path
 
@@ -88,9 +98,11 @@ def _write_plan(home: Path, source_id: str) -> Path:
 class TestPlansList:
     def test_empty(
         self,
-        tmp_home: Path,  # noqa: ARG002
+        tmp_home: Path,
+        tmp_wiki: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        _write_config(tmp_home, tmp_wiki)
         rc = plans_cmd.run(_args(plans_action="list"))
         assert rc == 0
         out = capsys.readouterr().out
@@ -99,10 +111,12 @@ class TestPlansList:
     def test_lists_pending(
         self,
         tmp_home: Path,
+        tmp_wiki: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        _write_plan(tmp_home, "yt-aaa")
-        _write_plan(tmp_home, "yt-bbb")
+        _write_config(tmp_home, tmp_wiki)
+        _write_plan(tmp_wiki, "yt-aaa")
+        _write_plan(tmp_wiki, "yt-bbb")
         rc = plans_cmd.run(_args(plans_action="list"))
         assert rc == 0
         out = capsys.readouterr().out
@@ -113,10 +127,14 @@ class TestPlansList:
     def test_skips_non_plan_dirs(
         self,
         tmp_home: Path,
+        tmp_wiki: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        from auto_lorebook import wiki_state  # noqa: PLC0415
+
+        _write_config(tmp_home, tmp_wiki)
         # An ingest dir without plan.yaml should be ignored
-        (tmp_home / "pending" / "yt-no-plan").mkdir(parents=True)
+        wiki_state.pending_source_dir(tmp_wiki, "yt-no-plan").mkdir(parents=True)
         rc = plans_cmd.run(_args(plans_action="list"))
         assert rc == 0
         out = capsys.readouterr().out
@@ -127,9 +145,11 @@ class TestPlansShow:
     def test_renders_summary(
         self,
         tmp_home: Path,
+        tmp_wiki: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        _write_plan(tmp_home, "yt-aaa")
+        _write_config(tmp_home, tmp_wiki)
+        _write_plan(tmp_wiki, "yt-aaa")
         rc = plans_cmd.run(_args(plans_action="show", source_id="yt-aaa"))
         assert rc == 0
         out = capsys.readouterr().out
@@ -142,9 +162,11 @@ class TestPlansShow:
 
     def test_unknown_id_returns_1(
         self,
-        tmp_home: Path,  # noqa: ARG002
+        tmp_home: Path,
+        tmp_wiki: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        _write_config(tmp_home, tmp_wiki)
         rc = plans_cmd.run(_args(plans_action="show", source_id="yt-missing"))
         assert rc == 1
         out = capsys.readouterr().out
