@@ -363,7 +363,9 @@ class TestAutoApprove:
         assert len(e.facts) == 1
         assert e.facts[0]["id"] == "aldara-f001"
         # Proposals dir is empty
-        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        proposals_dir = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
+        )
         assert list(proposals_dir.glob("*.yaml")) == []
         out = capsys.readouterr().out
         assert "approved=1" in out
@@ -485,7 +487,9 @@ class TestMultiTargetBundle:
             assert e.facts[0]["claim_group_id"] == "cg-001"
 
         # Proposals dir is empty — all three consumed.
-        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        proposals_dir = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
+        )
         assert list(proposals_dir.glob("*.yaml")) == []
 
         # Count: approved=3 (one bundle, three routes).
@@ -534,7 +538,9 @@ class TestMultiTargetBundle:
         assert result.rejected == 1
 
         # All proposal files consumed.
-        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        proposals_dir = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
+        )
         assert list(proposals_dir.glob("*.yaml")) == []
         capsys.readouterr()
 
@@ -573,7 +579,9 @@ class TestMultiTargetBundle:
         assert not (ingested_wiki / "locations" / "aldara.yaml").exists()
         assert not (ingested_wiki / "characters" / "theron.yaml").exists()
         assert not (ingested_wiki / "events" / "second-age.yaml").exists()
-        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        proposals_dir = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
+        )
         assert list(proposals_dir.glob("*.yaml")) == []
         capsys.readouterr()
 
@@ -801,7 +809,9 @@ class TestInteractiveReviewerUndoIntegration:
             assert e.facts[0]["text_source"] is None
             assert e.facts[0]["edited_by_human"] is False
 
-        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        proposals_dir = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
+        )
         assert list(proposals_dir.glob("*.yaml")) == []
         out = capsys.readouterr().out
         assert "approved=3" in out
@@ -851,7 +861,9 @@ class TestInteractiveReviewerUndoIntegration:
         ):
             assert not (ingested_wiki / cat / f"{slug}.yaml").exists()
 
-        proposals_dir = tmp_home / "pending" / "yt-abc12345678" / "proposals"
+        proposals_dir = (
+            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
+        )
         assert list(proposals_dir.glob("*.yaml")) == []
         out = capsys.readouterr().out
         assert "rejected=3" in out

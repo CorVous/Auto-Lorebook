@@ -26,7 +26,7 @@ def add_parser(
         description=(
             "Run Stage 1a (structure) and Stage 1b (summarize) on an "
             "already-ingested source, producing a draft reading.md under "
-            "~/.auto-lorebook/pending/<source_id>/reading/ for human review."
+            "<wiki>/.wiki-state/pending/<source_id>/reading/ for human review."
         ),
     )
     parser.add_argument(

@@ -3,8 +3,10 @@
 import re
 import subprocess  # noqa: S404
 import sys
+from pathlib import Path
 
 import pytest
+import yaml
 
 # Get package name dynamically - import from the actual package
 import auto_lorebook
@@ -154,6 +156,52 @@ print("SUCCESS")
     )
     assert result.returncode == 0
     assert "SUCCESS" in result.stdout
+
+
+def test_pending_state_lives_under_wiki(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pending artifacts and .gitignore land under <wiki>/.wiki-state/, not home."""
+    from auto_lorebook import wiki_bootstrap, wiki_state  # noqa: PLC0415
+    from auto_lorebook.commands import seed_ingest_cmd  # noqa: PLC0415
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
+
+    wiki = tmp_path / "wiki"
+    wiki_bootstrap.bootstrap(wiki)
+
+    (home / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 2,
+                "active_wiki": "main",
+                "wikis": [{"nickname": "main", "path": str(wiki)}],
+                "openrouter": {"api_key_env": "FAKE_OR_KEY"},
+                "models": {"primary": "anthropic/claude-sonnet-4-5"},
+            },
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    import argparse  # noqa: PLC0415
+
+    args = argparse.Namespace(at="plan", fixture="tiny-aldara", source_id="qa-inttest")
+    rc = seed_ingest_cmd.run(args)
+    assert rc == 0
+
+    sid = "qa-inttest"
+    # reading/structure.yaml lives under <wiki>/.wiki-state/pending/
+    assert (wiki_state.pending_reading_dir(wiki, sid) / "structure.yaml").exists()
+    # .gitignore exists and contains pending/
+    gi = wiki_state.gitignore_path(wiki)
+    assert gi.exists()
+    assert "pending/" in gi.read_text(encoding="utf-8")
+    # nothing under home/pending/
+    assert not (home / "pending").exists()
 
 
 @pytest.mark.skip(reason="Example command not registered - template only")

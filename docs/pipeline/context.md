@@ -206,7 +206,7 @@ The tool does not silently truncate.
 
 After fetching the source, the tool prompts interactively. Every field
 is skippable (Enter to skip). Defaults pre-fill from flags, then
-`.wiki-context.yaml`, then `~/.auto-lorebook/last-context.yaml`
+`.wiki-context.yaml`, then `<wiki>/.wiki-state/last-context.yaml`
 (perspective and source_nature from the most recent ingest).
 
 ```

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from auto_lorebook import config as cfg_mod
+from auto_lorebook import wiki_bootstrap as wiki_bootstrap_mod
 from auto_lorebook.config import save_config
 from auto_lorebook.wiki_registry import WikiEntry, WikiRegistry, WikiRegistryError
 
@@ -217,7 +218,7 @@ def _run_use(args: argparse.Namespace, home: Path | None) -> int:
 
     # bootstrap + register + switch
     try:
-        cfg_mod._bootstrap_wiki(candidate)  # noqa: SLF001
+        wiki_bootstrap_mod.bootstrap(candidate)
         reg.add(WikiEntry(nick, candidate))
         reg.set_active(nick)
     except WikiRegistryError as e:

@@ -257,6 +257,7 @@ def test_interactive_setup_writes_config_and_skeleton(
     assert (wiki / "concepts").is_dir()
     assert (wiki / ".wiki-context.yaml").exists()
     assert (wiki / ".transcription-corrections.yaml").exists()
+    assert (wiki / ".wiki-state" / ".gitignore").exists()
 
 
 def test_interactive_setup_custom_model(
@@ -412,6 +413,52 @@ def test_save_last_context_atomic(tmp_path: Path) -> None:
     assert path.exists()
     raw = yaml.safe_load(path.read_text())
     assert raw["perspective"] == "x"
+
+
+# ---------------------------------------------------------------------------
+# last-context.yaml — per-wiki location (wiki_root param)
+# ---------------------------------------------------------------------------
+
+
+def test_save_last_context_creates_wiki_state_dir(tmp_path: Path) -> None:
+    """save_last_context(wiki_root=…) creates .wiki-state/ if needed."""
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    lc = LastContext(perspective="p", source_nature="actual-play")
+    save_last_context(lc, wiki_root=wiki)
+    from auto_lorebook import wiki_state  # noqa: PLC0415
+
+    assert wiki_state.last_context_path(wiki).exists()
+
+
+def test_load_last_context_per_wiki_isolation(tmp_path: Path) -> None:
+    """Two wikis store independent last-context.yaml files."""
+    wiki_a = tmp_path / "wiki_a"
+    wiki_b = tmp_path / "wiki_b"
+    wiki_a.mkdir()
+    wiki_b.mkdir()
+    save_last_context(
+        LastContext(perspective="Cor playing Kiki", source_nature="actual-play"),
+        wiki_root=wiki_a,
+    )
+    save_last_context(
+        LastContext(perspective="narrator", source_nature="notes"),
+        wiki_root=wiki_b,
+    )
+    lc_a = load_last_context(wiki_root=wiki_a)
+    lc_b = load_last_context(wiki_root=wiki_b)
+    assert lc_a.perspective == "Cor playing Kiki"
+    assert lc_b.perspective == "narrator"
+    assert lc_a.source_nature != lc_b.source_nature
+
+
+def test_load_last_context_wiki_root_missing_returns_empty(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    # no .wiki-state/ → missing file → empty context
+    lc = load_last_context(wiki_root=wiki)
+    assert lc.perspective is None
+    assert lc.source_nature is None
 
 
 # ---------------------------------------------------------------------------

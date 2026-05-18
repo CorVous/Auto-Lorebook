@@ -36,6 +36,7 @@ from auto_lorebook import stage3 as stage3_mod
 from auto_lorebook import structure as structure_mod
 from auto_lorebook import transcript as transcript_mod
 from auto_lorebook import wiki_context as wiki_context_mod
+from auto_lorebook import wiki_state as wiki_state_mod
 from auto_lorebook.openrouter import OpenRouterClient, OpenRouterError
 
 if TYPE_CHECKING:
@@ -271,9 +272,14 @@ def assemble_draft(
     return reading_assembly_mod.assemble(segments=segments, sidecar=sc, info=info)
 
 
+def _active_wiki_root() -> Path:
+    """Resolve active wiki from loaded config."""
+    return cfg_mod.load_config().resolve_active_wiki(None)
+
+
 def pending_dir(source_id: str) -> Path:
-    """Return the pending directory for a source."""
-    return cfg_mod.config_dir() / "pending" / source_id / "reading"
+    """Return the reading pending dir for a source under the active wiki."""
+    return wiki_state_mod.pending_reading_dir(_active_wiki_root(), source_id)
 
 
 def pending_sidecar_path(source_id: str) -> Path:
@@ -297,13 +303,13 @@ def pending_bullets_path(source_id: str) -> Path:
 
 
 def pending_plan_path(source_id: str) -> Path:
-    """Plan artifact path. Sibling to the `reading/` subdir."""
-    return cfg_mod.config_dir() / "pending" / source_id / "plan.yaml"
+    """Plan artifact path under the active wiki's .wiki-state/."""
+    return wiki_state_mod.pending_plan_path(_active_wiki_root(), source_id)
 
 
 def pending_proposals_dir(source_id: str) -> Path:
-    """Stage 3 proposal directory. Sibling to `plan.yaml`."""
-    return cfg_mod.config_dir() / "pending" / source_id / "proposals"
+    """Stage 3 proposal directory under the active wiki's .wiki-state/."""
+    return wiki_state_mod.pending_proposals_dir(_active_wiki_root(), source_id)
 
 
 def pending_proposal_path(source_id: str, proposal_id: str) -> Path:

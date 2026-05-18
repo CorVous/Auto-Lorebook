@@ -29,6 +29,11 @@ def cfg(
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
+    (home / "config.yaml").write_text(
+        "schema_version: 2\nactive_wiki: test\nwikis:\n"
+        f"- nickname: test\n  path: {tmp_wiki}\n",
+        encoding="utf-8",
+    )
     return cfg_mod.Config(wikis=[WikiEntry("test", tmp_wiki)], active_wiki="test")
 
 
@@ -82,12 +87,13 @@ def _write_entity(
     return path
 
 
-def _write_pending(home: Path, source_id: str) -> tuple[Path, Path, Path]:
-    """Materialise plan.yaml, proposals/, and reading/ for a source."""
-    pending_root = home / "pending" / source_id
-    plan_path = pending_root / "plan.yaml"
-    proposals_dir = pending_root / "proposals"
-    reading_dir = pending_root / "reading"
+def _write_pending(wiki: Path, source_id: str) -> tuple[Path, Path, Path]:
+    """Materialise plan.yaml, proposals/, and reading/ under <wiki>/.wiki-state/."""
+    from auto_lorebook import wiki_state  # noqa: PLC0415
+
+    plan_path = wiki_state.pending_plan_path(wiki, source_id)
+    proposals_dir = wiki_state.pending_proposals_dir(wiki, source_id)
+    reading_dir = wiki_state.pending_reading_dir(wiki, source_id)
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(
         yaml.safe_dump({
@@ -320,8 +326,8 @@ class TestHandEdited:
 
 class TestPendingCleanup:
     def test_drops_plan_and_proposals_keeps_reading(self, cfg: cfg_mod.Config) -> None:
-        home = cfg_mod.config_dir()
-        plan_path, proposals_dir, reading_dir = _write_pending(home, "yt-x")
+        wiki = cfg.resolve_active_wiki(None)
+        plan_path, proposals_dir, reading_dir = _write_pending(wiki, "yt-x")
         reject_ingest(cfg, "yt-x")
         assert not plan_path.exists()
         assert not proposals_dir.exists()

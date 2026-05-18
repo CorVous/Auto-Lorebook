@@ -360,3 +360,62 @@ class TestRejectIngest:
                     assert f.get("created_by_ingest") != SOURCE_ID
                 for a in e.aliases:
                     assert a.added_by_ingest != SOURCE_ID
+
+
+class TestRejectIngestIsolation:
+    """Pending state for each wiki is isolated under its own .wiki-state/."""
+
+    def test_reject_ingest_isolated_per_wiki(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Reject in wiki_a leaves wiki_b's pending artifacts intact."""
+        from auto_lorebook import wiki_bootstrap, wiki_state  # noqa: PLC0415
+        from auto_lorebook.config import Config  # noqa: PLC0415
+        from auto_lorebook.ingest_cleanup import reject_ingest  # noqa: PLC0415
+        from auto_lorebook.wiki_registry import WikiEntry  # noqa: PLC0415
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
+
+        wiki_a = tmp_path / "wiki_a"
+        wiki_b = tmp_path / "wiki_b"
+        wiki_bootstrap.bootstrap(wiki_a)
+        wiki_bootstrap.bootstrap(wiki_b)
+
+        source_id = "yt-shared-sid"
+
+        # Write a plan.yaml under each wiki's .wiki-state/
+        import yaml as _yaml  # noqa: PLC0415
+
+        plan_stub = _yaml.safe_dump({
+            "schema_version": 1,
+            "source_id": source_id,
+            "planned_at": "2026-04-20T00:00:00Z",
+            "entity_resolutions": [],
+            "new_entities": [],
+            "planned_claims": [],
+            "unresolved": [],
+        })
+        plan_a = wiki_state.pending_plan_path(wiki_a, source_id)
+        plan_b = wiki_state.pending_plan_path(wiki_b, source_id)
+        plan_a.parent.mkdir(parents=True, exist_ok=True)
+        plan_b.parent.mkdir(parents=True, exist_ok=True)
+        plan_a.write_text(plan_stub, encoding="utf-8")
+        plan_b.write_text(plan_stub, encoding="utf-8")
+
+        # Config pointing at wiki_a; write config.yaml so load_config() works
+        (home / "config.yaml").write_text(
+            "schema_version: 2\nactive_wiki: a\nwikis:\n"
+            f"- nickname: a\n  path: {wiki_a}\n",
+            encoding="utf-8",
+        )
+        cfg_a = Config(wikis=[WikiEntry("a", wiki_a)], active_wiki="a")
+
+        reject_ingest(cfg_a, source_id)
+
+        # wiki_a's plan removed; wiki_b's plan untouched
+        assert not plan_a.exists(), "plan_a should have been removed"
+        assert plan_b.exists(), "plan_b must not be touched"

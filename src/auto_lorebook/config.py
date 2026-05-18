@@ -1,4 +1,4 @@
-"""Config loader for ~/.auto-lorebook/config.yaml + last-context.yaml."""
+"""Config loader: ~/.auto-lorebook/config.yaml + <wiki>/.wiki-state/last-context."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 
+from auto_lorebook import wiki_bootstrap as wiki_bootstrap_mod
+from auto_lorebook import wiki_state as wiki_state_mod
 from auto_lorebook._io import atomic_write_text
 from auto_lorebook.schema import SchemaVersionError, read_schema_version
 from auto_lorebook.wiki_registry import WikiEntry
@@ -185,9 +187,19 @@ def load_config(home: Path | None = None) -> Config:
     )
 
 
-def load_last_context(home: Path | None = None) -> LastContext:
-    """Load ~/.auto-lorebook/last-context.yaml; missing/corrupt → empty."""
-    path = config_dir(home) / "last-context.yaml"
+def load_last_context(
+    home: Path | None = None,
+    wiki_root: Path | None = None,
+) -> LastContext:
+    """Load last-context.yaml; missing/corrupt → empty.
+
+    If `wiki_root` is given, reads from `<wiki>/.wiki-state/last-context.yaml`.
+    Otherwise falls back to `<config_dir>/last-context.yaml` (legacy).
+    """
+    if wiki_root is not None:
+        path = wiki_state_mod.last_context_path(wiki_root)
+    else:
+        path = config_dir(home) / "last-context.yaml"
     if not path.exists():
         return LastContext()
     try:
@@ -203,11 +215,24 @@ def load_last_context(home: Path | None = None) -> LastContext:
         return LastContext()
 
 
-def save_last_context(last: LastContext, home: Path | None = None) -> None:
-    """Atomically write perspective and source_nature to last-context.yaml."""
-    cfg_dir = config_dir(home)
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    path = cfg_dir / "last-context.yaml"
+def save_last_context(
+    last: LastContext,
+    home: Path | None = None,
+    wiki_root: Path | None = None,
+) -> None:
+    """Atomically write perspective and source_nature to last-context.yaml.
+
+    If `wiki_root` is given, writes to `<wiki>/.wiki-state/last-context.yaml`
+    (creating `.wiki-state/` if needed). Otherwise writes to `<config_dir>/`.
+    """
+    if wiki_root is not None:
+        state_dir = wiki_state_mod.wiki_state_dir(wiki_root)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        path = wiki_state_mod.last_context_path(wiki_root)
+    else:
+        cfg_dir = config_dir(home)
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        path = cfg_dir / "last-context.yaml"
     data: dict[str, Any] = {}
     if last.perspective is not None:
         data["perspective"] = last.perspective
@@ -218,7 +243,6 @@ def save_last_context(last: LastContext, home: Path | None = None) -> None:
 
 _DEFAULT_API_KEY_ENV = "OPENROUTER_API_KEY"
 _DEFAULT_MODEL = "anthropic/claude-sonnet-4-5"
-_WIKI_SUBDIRS = ("characters", "locations", "factions", "events", "items", "concepts")
 _CREDENTIALS_FILE = "credentials"
 
 
@@ -311,7 +335,7 @@ def interactive_setup(home: Path | None = None) -> Config:
     if api_key:
         cred_path = _write_credentials(api_key, home=home)
 
-    _bootstrap_wiki(wiki)
+    wiki_bootstrap_mod.bootstrap(wiki)
 
     print()  # noqa: T201
     print(f"Wrote {cfg_path}")  # noqa: T201
@@ -353,14 +377,3 @@ def save_config(cfg: Config, home: Path | None = None) -> None:
     atomic_write_text(
         cfg_path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
     )
-
-
-def _bootstrap_wiki(wiki: Path) -> None:
-    """Create the wiki entity dirs and tolerant-yaml stubs if absent."""
-    wiki.mkdir(parents=True, exist_ok=True)
-    for sub in _WIKI_SUBDIRS:
-        (wiki / sub).mkdir(exist_ok=True)
-    for fname in (".wiki-context.yaml", ".transcription-corrections.yaml"):
-        path = wiki / fname
-        if not path.exists():
-            atomic_write_text(path, "schema_version: 1\n")

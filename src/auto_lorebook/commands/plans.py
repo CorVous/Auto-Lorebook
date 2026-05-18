@@ -2,7 +2,7 @@
 
 Inspection-only commands. Mirrors `entities` shape: nested subparser
 with action dispatch on `args.plans_action`. Plans are intermediate
-artifacts in `~/.auto-lorebook/pending/<source_id>/plan.yaml` — there
+artifacts in `<wiki>/.wiki-state/pending/<source_id>/plan.yaml` — there
 is no approval gate at this stage.
 """
 
@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from auto_lorebook import config as cfg_mod
 from auto_lorebook import plan_yaml
+from auto_lorebook import wiki_state as wiki_state_mod
 
 if TYPE_CHECKING:
     import argparse
@@ -72,7 +73,8 @@ def run(args: argparse.Namespace) -> int:
 
 
 def _pending_root() -> Path:
-    return cfg_mod.config_dir() / "pending"
+    wiki = cfg_mod.load_config().resolve_active_wiki(None)
+    return wiki_state_mod.pending_dir(wiki)
 
 
 def _run_list() -> int:
@@ -111,7 +113,8 @@ def _run_list() -> int:
 
 
 def _run_show(source_id: str) -> int:
-    plan_path = _pending_root() / source_id / "plan.yaml"
+    wiki = cfg_mod.load_config().resolve_active_wiki(None)
+    plan_path = wiki_state_mod.pending_plan_path(wiki, source_id)
     if not plan_path.is_file():
         print(f"No plan for {source_id!r}")  # noqa: T201
         return 1

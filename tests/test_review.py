@@ -44,6 +44,11 @@ def cfg(
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
+    (home / "config.yaml").write_text(
+        "schema_version: 2\nactive_wiki: test\nwikis:\n"
+        f"- nickname: test\n  path: {tmp_wiki}\n",
+        encoding="utf-8",
+    )
     return cfg_mod.Config(wikis=[WikiEntry("test", tmp_wiki)], active_wiki="test")
 
 

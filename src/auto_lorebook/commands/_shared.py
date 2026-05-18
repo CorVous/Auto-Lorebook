@@ -57,7 +57,7 @@ def finalize_context(
     wiki_repo = resolve_wiki(cfg, args)
     wc = wiki_context.read(wiki_repo / ".wiki-context.yaml")
     cors = corrections.read(wiki_repo / ".transcription-corrections.yaml")
-    last_ctx = cfg_mod.load_last_context()
+    last_ctx = cfg_mod.load_last_context(wiki_root=wiki_repo)
 
     flags = {
         "session_date": args.session_date,
@@ -85,7 +85,8 @@ def finalize_context(
         cfg_mod.LastContext(
             perspective=info.context.perspective,
             source_nature=info.context.source_nature,
-        )
+        ),
+        wiki_root=wiki_repo,
     )
 
     idx = entity_index.build(wiki_repo)
