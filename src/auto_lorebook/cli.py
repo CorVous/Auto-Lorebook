@@ -25,6 +25,7 @@ from auto_lorebook.commands import (
     review_cmd,
     seed_ingest_cmd,
     version_cmd,
+    wiki_cmd,
 )
 
 # Get package name dynamically from installed metadata
@@ -90,6 +91,15 @@ def create_parser() -> argparse.ArgumentParser:
         default=0,
         help="Increase verbosity (can be repeated: -v, -vv, -vvv)",
     )
+    parser.add_argument(
+        "--wiki",
+        default=None,
+        metavar="NICKNAME",
+        help=(
+            "Override the active wiki for this invocation (accepts nicknames only; "
+            "never mutates the registry). See `wiki list`."
+        ),
+    )
 
     # Common arguments shared across all subcommands (empty for now, but available)
     common_parser = argparse.ArgumentParser(add_help=False)
@@ -116,6 +126,7 @@ def create_parser() -> argparse.ArgumentParser:
     replan_cmd.add_parser(subparsers, common_parser)
     reject_ingest_cmd.add_parser(subparsers, common_parser)
     seed_ingest_cmd.add_parser(subparsers, common_parser)
+    wiki_cmd.add_parser(subparsers, common_parser)
 
     return parser
 

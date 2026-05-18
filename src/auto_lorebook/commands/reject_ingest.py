@@ -61,14 +61,18 @@ def run(args: argparse.Namespace) -> int:
         _logger.error("Refusing to reject-ingest non-interactively without --yes.")
         return 1
 
-    previewed = ingest_cleanup.preview(cfg, args.source_id)
+    wiki_override: str | None = getattr(args, "wiki", None)
+
+    previewed = ingest_cleanup.preview(cfg, args.source_id, wiki_override=wiki_override)
     if (
         previewed.facts_removed == 0
         and previewed.aliases_removed == 0
         and previewed.stubs_deleted == 0
     ):
         # Still clean pending/ if it exists; otherwise nothing to do.
-        actual = ingest_cleanup.reject_ingest(cfg, args.source_id)
+        actual = ingest_cleanup.reject_ingest(
+            cfg, args.source_id, wiki_override=wiki_override
+        )
         print(  # noqa: T201
             f"Nothing to reject for {args.source_id!r}; "
             "no facts, aliases, or stubs match."
@@ -92,7 +96,9 @@ def run(args: argparse.Namespace) -> int:
             print("Cancelled; no changes made.")  # noqa: T201
             return 0
 
-    result = ingest_cleanup.reject_ingest(cfg, args.source_id)
+    result = ingest_cleanup.reject_ingest(
+        cfg, args.source_id, wiki_override=wiki_override
+    )
     print(  # noqa: T201
         f"Rejected ingest {args.source_id!r}: "
         f"removed {result.facts_removed} facts, "

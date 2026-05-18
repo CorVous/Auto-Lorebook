@@ -105,9 +105,11 @@ def run(args: argparse.Namespace) -> int:
         _logger.error("%s", e)
         return 1
 
+    wiki_override: str | None = getattr(args, "wiki", None)
+
     try:
-        sid = args.source_id or _mint_source_id(cfg)
-        _seed(cfg, sid, args.at, args.fixture)
+        sid = args.source_id or _mint_source_id(cfg, wiki_override=wiki_override)
+        _seed(cfg, sid, args.at, args.fixture, wiki_override=wiki_override)
     except SeedIngestError as e:
         _logger.error("%s", e)
         return 1
@@ -120,24 +122,37 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _mint_source_id(cfg: cfg_mod.Config) -> str:
+def _mint_source_id(
+    cfg: cfg_mod.Config,
+    wiki_override: str | None = None,
+) -> str:
     for _ in range(_MINT_RETRY):
         candidate = f"qa-{secrets.token_hex(_SOURCE_ID_BYTES)}"
-        if not _source_collides(cfg, candidate):
+        if not _source_collides(cfg, candidate, wiki_override=wiki_override):
             return candidate
     msg = f"could not mint a unique source_id after {_MINT_RETRY} attempts"
     raise SeedIngestError(msg)
 
 
-def _source_collides(cfg: cfg_mod.Config, sid: str) -> bool:
-    wiki_src = cfg.resolve_active_wiki(None) / "sources" / sid
+def _source_collides(
+    cfg: cfg_mod.Config,
+    sid: str,
+    wiki_override: str | None = None,
+) -> bool:
+    wiki_src = cfg.resolve_active_wiki(wiki_override) / "sources" / sid
     pending = cfg_mod.config_dir() / "pending" / sid
     return wiki_src.exists() or pending.exists()
 
 
-def _seed(cfg: cfg_mod.Config, sid: str, at: str, fixture_name: str) -> None:
-    wiki_repo = cfg.resolve_active_wiki(None)
-    if _source_collides(cfg, sid):
+def _seed(
+    cfg: cfg_mod.Config,
+    sid: str,
+    at: str,
+    fixture_name: str,
+    wiki_override: str | None = None,
+) -> None:
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
+    if _source_collides(cfg, sid, wiki_override=wiki_override):
         msg = (
             f"source {sid!r} already exists under "
             f"{wiki_repo / 'sources' / sid} or "

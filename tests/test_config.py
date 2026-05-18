@@ -12,9 +12,13 @@ from auto_lorebook.config import (
     ConfigError,
     LastContext,
     MissingConfigError,
+    ModelsConfig,
+    OpenRouterConfig,
+    PreambleConfig,
     interactive_setup,
     load_config,
     load_last_context,
+    save_config,
     save_last_context,
 )
 from auto_lorebook.wiki_registry import WikiEntry
@@ -408,3 +412,54 @@ def test_save_last_context_atomic(tmp_path: Path) -> None:
     assert path.exists()
     raw = yaml.safe_load(path.read_text())
     assert raw["perspective"] == "x"
+
+
+# ---------------------------------------------------------------------------
+# save_config
+# ---------------------------------------------------------------------------
+
+
+def test_save_config_roundtrip(tmp_path: Path) -> None:
+    """save_config writes valid config.yaml; reload preserves all fields."""
+    wiki = tmp_path / "mywiki"
+    wiki.mkdir()
+    cfg = Config(
+        wikis=[
+            WikiEntry("main", wiki),
+            WikiEntry("alt", tmp_path / "alt"),
+        ],
+        active_wiki="main",
+        openrouter=OpenRouterConfig(api_key_env="MY_KEY"),
+        models=ModelsConfig(
+            primary="anthropic/claude-opus-4-7",
+            primary_context_window=100_000,
+            extractor="anthropic/claude-haiku-4-5",
+            planner="anthropic/claude-sonnet-4-5",
+        ),
+        preamble=PreambleConfig(budget_fraction=0.6),
+    )
+    save_config(cfg, home=tmp_path)
+
+    raw = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 2
+    assert raw["active_wiki"] == "main"
+    assert raw["wikis"] == [
+        {"nickname": "main", "path": str(wiki)},
+        {"nickname": "alt", "path": str(tmp_path / "alt")},
+    ]
+    assert raw["openrouter"]["api_key_env"] == "MY_KEY"
+    assert raw["models"]["primary"] == "anthropic/claude-opus-4-7"
+    assert raw["models"]["primary_context_window"] == 100_000
+    assert raw["models"]["extractor"] == "anthropic/claude-haiku-4-5"
+    assert raw["models"]["planner"] == "anthropic/claude-sonnet-4-5"
+    assert raw["preamble"]["budget_fraction"] == pytest.approx(0.6)
+
+    # confirm load_config can reload it (skip path-exist check for alt)
+    wiki2 = tmp_path / "alt"
+    wiki2.mkdir()
+    reloaded = load_config(home=tmp_path)
+    assert reloaded.active_wiki == "main"
+    assert len(reloaded.wikis) == 2
+    assert reloaded.openrouter.api_key_env == "MY_KEY"
+    assert reloaded.models.primary == "anthropic/claude-opus-4-7"
+    assert reloaded.preamble.budget_fraction == pytest.approx(0.6)

@@ -143,16 +143,22 @@ def run(args: argparse.Namespace) -> int:
         _logger.error("Refusing to approve-reading non-interactively without --yes.")
         return 1
 
+    wiki_override: str | None = getattr(args, "wiki", None)
+
     if args.yes:
-        return _approve_only(cfg, args.source_id)
+        return _approve_only(cfg, args.source_id, wiki_override=wiki_override)
 
-    return _interactive_session(cfg, args.source_id)
+    return _interactive_session(cfg, args.source_id, wiki_override=wiki_override)
 
 
-def _approve_only(cfg: cfg_mod.Config, source_id: str) -> int:
+def _approve_only(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> int:
     """Approve reading: assemble + copy to wiki."""
     try:
-        approved = pipeline.approve(cfg, source_id)
+        approved = pipeline.approve(cfg, source_id, wiki_override=wiki_override)
     except pipeline.ReadingPipelineError as e:
         _logger.error("%s", e)
         return 1
@@ -330,6 +336,7 @@ def _commit_and_exit(
     cfg: cfg_mod.Config,
     source_id: str,
     pending_marks: _PendingMarks,
+    wiki_override: str | None = None,
 ) -> int:
     from auto_lorebook import reading_review as reading_review_mod  # noqa: PLC0415
 
@@ -338,6 +345,7 @@ def _commit_and_exit(
             cfg=cfg,
             source_id=source_id,
             reviewer=_ReplayReviewer(pending_marks),
+            wiki_override=wiki_override,
         )
     except reading_review_mod.ReadingReviewError as e:
         _logger.error("%s", e)
@@ -352,7 +360,9 @@ def _commit_and_exit(
         n = len(result.regen_batch.regen_segment_ids)
         print(f"Regenerating {n} segment(s)...")  # noqa: T201
         try:
-            pipeline.regenerate_after_review(cfg, result.regen_batch)
+            pipeline.regenerate_after_review(
+                cfg, result.regen_batch, wiki_override=wiki_override
+            )
         except pipeline.ReadingPipelineError as e:
             _logger.error("%s", e)
             return 1
@@ -366,7 +376,11 @@ def _commit_and_exit(
     return 0
 
 
-def _interactive_session(cfg: cfg_mod.Config, source_id: str) -> int:
+def _interactive_session(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> int:
     sidecar_path = pipeline.pending_sidecar_path(source_id)
     if not sidecar_path.exists():
         _logger.error(
@@ -377,7 +391,8 @@ def _interactive_session(cfg: cfg_mod.Config, source_id: str) -> int:
     # load source title for header
     source_title: str | None = None
     try:
-        info_path = cfg.resolve_active_wiki(None) / "sources" / source_id / "info.yaml"
+        wiki_repo = cfg.resolve_active_wiki(wiki_override)
+        info_path = wiki_repo / "sources" / source_id / "info.yaml"
         info = info_yaml_mod.read(info_path)
         source_title = info.title
     except info_yaml_mod.InfoError:
@@ -429,5 +444,7 @@ def _interactive_session(cfg: cfg_mod.Config, source_id: str) -> int:
         elif choice == "m":
             _open_meta(source_id)
         elif choice == "q":
-            return _commit_and_exit(cfg, source_id, pending_marks)
+            return _commit_and_exit(
+                cfg, source_id, pending_marks, wiki_override=wiki_override
+            )
         # unrecognized → re-prompt

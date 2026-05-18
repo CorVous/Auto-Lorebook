@@ -67,6 +67,7 @@ def run(args: argparse.Namespace) -> int:
             args.source_id,
             from_stage=args.from_stage,
             segment_ids=segment_ids,
+            wiki_override=getattr(args, "wiki", None),
         )
     except pipeline.ReadingPipelineError as e:
         _logger.error("%s", e)

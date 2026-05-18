@@ -1,4 +1,4 @@
-"""Shared context-finalize pipeline for ingest and configure-context."""
+"""Shared helpers: context-finalize pipeline and wiki resolution."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from auto_lorebook import (
     wiki_context,
 )
 from auto_lorebook import preamble as preamble_mod
+from auto_lorebook.config import ConfigError
 
 if TYPE_CHECKING:
     import argparse
@@ -22,6 +23,24 @@ if TYPE_CHECKING:
     from auto_lorebook.info_yaml import Info
 
 _logger = logging.getLogger(__name__)
+
+
+def resolve_wiki(cfg: cfg_mod.Config, args: argparse.Namespace) -> Path:
+    """Resolve active wiki path, applying `args.wiki` override if set.
+
+    Accepts nicknames only — rejects path-shaped strings (containing `/`,
+    starting with `~` or `.`). Does not mutate the registry.
+
+    :raises ConfigError: invalid override or unknown nickname
+    """
+    override: str | None = getattr(args, "wiki", None)
+    if override is not None and ("/" in override or override.startswith(("~", "."))):
+        msg = (
+            f"--wiki takes a nickname, not a path: {override!r}. "
+            "Use `wiki list` to see registered nicknames."
+        )
+        raise ConfigError(msg)
+    return cfg.resolve_active_wiki(override)
 
 
 def finalize_context(
@@ -35,7 +54,7 @@ def finalize_context(
     Shared tail for `ingest` and `configure-context` commands.
     Returns the CLI exit code.
     """
-    wiki_repo = cfg.resolve_active_wiki(None)
+    wiki_repo = resolve_wiki(cfg, args)
     wc = wiki_context.read(wiki_repo / ".wiki-context.yaml")
     cors = corrections.read(wiki_repo / ".transcription-corrections.yaml")
     last_ctx = cfg_mod.load_last_context()

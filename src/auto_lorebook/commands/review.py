@@ -83,7 +83,12 @@ def run(args: argparse.Namespace) -> int:
     )
 
     try:
-        result = review_mod.run(cfg=cfg, source_id=args.source_id, reviewer=reviewer)
+        result = review_mod.run(
+            cfg=cfg,
+            source_id=args.source_id,
+            reviewer=reviewer,
+            wiki_override=getattr(args, "wiki", None),
+        )
     except review_mod.ReviewError as e:
         _logger.error("%s", e)
         return 1

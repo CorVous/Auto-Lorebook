@@ -92,10 +92,14 @@ def _walk_entity_paths(wiki_repo: Path) -> list[Path]:
     return paths
 
 
-def preview(cfg: Config, source_id: str) -> RejectResult:
+def preview(
+    cfg: Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> RejectResult:
     """Read-only count of what `reject_ingest` would change."""
     result = RejectResult()
-    for path in _walk_entity_paths(cfg.resolve_active_wiki(None)):
+    for path in _walk_entity_paths(cfg.resolve_active_wiki(wiki_override)):
         try:
             entity = entity_yaml.read(path)
         except entity_yaml.EntityError:
@@ -110,10 +114,14 @@ def preview(cfg: Config, source_id: str) -> RejectResult:
     return result
 
 
-def reject_ingest(cfg: Config, source_id: str) -> RejectResult:
+def reject_ingest(
+    cfg: Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> RejectResult:
     """Remove `source_id`'s contributions from every entity; clean pending."""
     result = RejectResult()
-    for path in _walk_entity_paths(cfg.resolve_active_wiki(None)):
+    for path in _walk_entity_paths(cfg.resolve_active_wiki(wiki_override)):
         try:
             entity = entity_yaml.read(path)
         except entity_yaml.EntityError:

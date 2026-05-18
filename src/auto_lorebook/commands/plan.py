@@ -48,7 +48,9 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        plan_result = pipeline.plan(cfg, args.source_id)
+        plan_result = pipeline.plan(
+            cfg, args.source_id, wiki_override=getattr(args, "wiki", None)
+        )
     except pipeline.ReadingPipelineError as e:
         _logger.error("planner failed: %s", e)
         return 1

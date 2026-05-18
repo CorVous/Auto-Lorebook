@@ -326,6 +326,35 @@ def interactive_setup(home: Path | None = None) -> Config:
     return load_config(home=home)
 
 
+def save_config(cfg: Config, home: Path | None = None) -> None:
+    """Atomically write cfg back to config.yaml.
+
+    Preserves schema_version=2 and all sections. Does not write
+    the credentials file (managed separately).
+    """
+    cfg_dir = config_dir(home)
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    cfg_path = cfg_dir / "config.yaml"
+    data: dict[str, Any] = {
+        "schema_version": 2,
+        "active_wiki": cfg.active_wiki,
+        "wikis": [{"nickname": e.nickname, "path": str(e.path)} for e in cfg.wikis],
+        "openrouter": {"api_key_env": cfg.openrouter.api_key_env},
+        "models": {
+            "primary": cfg.models.primary,
+            "primary_context_window": cfg.models.primary_context_window,
+        },
+        "preamble": {"budget_fraction": cfg.preamble.budget_fraction},
+    }
+    if cfg.models.extractor is not None:
+        data["models"]["extractor"] = cfg.models.extractor
+    if cfg.models.planner is not None:
+        data["models"]["planner"] = cfg.models.planner
+    atomic_write_text(
+        cfg_path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+    )
+
+
 def _bootstrap_wiki(wiki: Path) -> None:
     """Create the wiki entity dirs and tolerant-yaml stubs if absent."""
     wiki.mkdir(parents=True, exist_ok=True)
