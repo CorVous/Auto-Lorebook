@@ -46,7 +46,9 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        result = pipeline.generate(cfg, args.source_id)
+        result = pipeline.generate(
+            cfg, args.source_id, wiki_override=getattr(args, "wiki", None)
+        )
     except pipeline.ReadingPipelineError as e:
         _logger.error("%s", e)
         return 1

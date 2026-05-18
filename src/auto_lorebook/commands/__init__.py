@@ -19,6 +19,7 @@ from auto_lorebook.commands import replan as replan_cmd
 from auto_lorebook.commands import review as review_cmd
 from auto_lorebook.commands import seed_ingest as seed_ingest_cmd
 from auto_lorebook.commands import version as version_cmd
+from auto_lorebook.commands import wiki as wiki_cmd
 
 __all__ = [
     "approve_reading_cmd",
@@ -35,4 +36,5 @@ __all__ = [
     "review_cmd",
     "seed_ingest_cmd",
     "version_cmd",
+    "wiki_cmd",
 ]
