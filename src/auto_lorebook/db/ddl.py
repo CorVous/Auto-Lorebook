@@ -267,8 +267,21 @@ CREATE TABLE proposals (
     extractor_flagged           INTEGER NOT NULL DEFAULT 0,
     hint_widened                INTEGER NOT NULL DEFAULT 0,
     inputs_json                 TEXT,
+    flag_reason                 TEXT,
     FOREIGN KEY (ingest_id) REFERENCES ingests(ingest_id) ON DELETE CASCADE,
     FOREIGN KEY (plan_route_id) REFERENCES plan_routes(id) ON DELETE CASCADE
+)
+"""
+
+PLAN_METADATA = """
+CREATE TABLE plan_metadata (
+    ingest_id                TEXT PRIMARY KEY,
+    planned_at               TEXT NOT NULL,
+    source_id                TEXT NOT NULL,
+    entity_resolutions_json  TEXT NOT NULL DEFAULT '[]',
+    new_entities_json        TEXT NOT NULL DEFAULT '[]',
+    unresolved_json          TEXT NOT NULL DEFAULT '[]',
+    FOREIGN KEY (ingest_id) REFERENCES ingests(ingest_id) ON DELETE CASCADE
 )
 """
 

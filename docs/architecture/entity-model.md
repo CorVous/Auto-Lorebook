@@ -93,14 +93,13 @@ reads on the same connection within the session. The review loop
 exploits this: after approving a new entity, `lookup_by_planner_name`
 finds it on the next proposal without reopening the DB.
 
-## Transitional dual-write (issues #71–#74)
+## Summary regeneration
 
-During this window YAML files and the DB are both written on entity
-creation and alias confirmation. The DB is the live source of truth for
-preamble generation and entity lookup. YAMLs are still written because
-the facts module and Stage 4 summary regen still read them. Issue #74
-will cut the YAML write path and make the DB the sole store for entity
-identity data. ADR-0004 is the long arc.
+After each fact approval, `summary_regen.regenerate_entity` renders the
+entity's facts from the DB and writes `<category>/<slug>.md`
+atomically. The `.md` is a derived view — it is always regenerated from
+the DB and may be safely deleted and recreated by running
+`summary_regen.regenerate_all`.
 
 ## Global transcription corrections
 

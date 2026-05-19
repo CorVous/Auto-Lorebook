@@ -36,8 +36,7 @@ Any directory you point the tool at, registered with a nickname:
       info.yaml                     # url, title, duration, caption_type, context (legacy; lazy-backfills wiki.db)
       reading.md                    # corrected reading (after approval)
   characters/
-    <slug>.yaml                     # canonical name, slug, aliases, facts
-    <slug>.md                       # summary (regenerated view)
+    <slug>.md                       # summary (regenerated from DB after each approval)
   locations/
   factions/
   events/
@@ -46,9 +45,9 @@ Any directory you point the tool at, registered with a nickname:
   index.md                          # auto-generated table of contents
 ```
 
-Entity identity lives entirely in entity YAMLs. An entity exists iff
-`<category>/<slug>.yaml` exists. No separate registry file — see
-[entity model](entity-model.md).
+Entity identity lives in the `entities` and `aliases` tables of
+`wiki.db`. An entity exists iff a row is present in `entities`. The
+`.md` files are regenerated views — see [entity model](entity-model.md).
 
 Visible-vs-hidden line: hand-edited canon and source material stay at
 the wiki root (browsable, diffable, hand-editable). Tool-managed
@@ -146,10 +145,10 @@ YAMLs whose history matters.
 - **Planning + extraction.** Produces
   `<wiki>/.wiki-state/pending/<source_id>/plan.yaml` and one YAML per
   proposed fact under `<wiki>/.wiki-state/pending/<source_id>/proposals/`.
-- **Fact review.** Approvals append to (or create) entity YAMLs
-  under `<category>/<slug>.yaml`. Rejected proposals are discarded.
-  If every proposal for a new entity is rejected, no stub is ever
-  written.
+- **Fact review.** Approvals write fact rows into `wiki.db` and
+  regenerate `<category>/<slug>.md`. Rejected proposals are discarded.
+  If every proposal for a new entity is rejected, no entity row or `.md`
+  is ever created.
 - **Ingest complete.** When all proposals are decided, the ingest's
   pending directory is discarded. The audit trail lives on in
   `created_by_ingest` and `approved_at` fields on the resulting

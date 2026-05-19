@@ -32,6 +32,7 @@ _EXPECTED_TABLES = frozenset({
     "segment_bullets",
     "plan_routes",
     "proposals",
+    "plan_metadata",
 })
 
 
@@ -305,3 +306,78 @@ def test_migration_003_preserves_existing_rows(tmp_path: Path) -> None:
     assert row[0] == "seg-001"
     assert row[1] == "draft"
     assert row[2] == "[]"
+
+
+# ---------------------------------------------------------------------------
+# Migration 004 specific tests
+# ---------------------------------------------------------------------------
+
+
+def test_migration_004_plan_metadata_exists() -> None:
+    """plan_metadata table present with expected columns after full migration."""
+    conn = db.open(":memory:")
+    cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(plan_metadata)").fetchall()
+    }
+    conn.close()
+    assert "ingest_id" in cols
+    assert "planned_at" in cols
+    assert "source_id" in cols
+    assert "entity_resolutions_json" in cols
+    assert "new_entities_json" in cols
+    assert "unresolved_json" in cols
+
+
+def test_migration_004_proposals_has_flag_reason() -> None:
+    """proposals.flag_reason column present after full migration."""
+    conn = db.open(":memory:")
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(proposals)").fetchall()}
+    conn.close()
+    assert "flag_reason" in cols
+
+
+def test_migration_004_preserves_existing_rows(tmp_path: Path) -> None:
+    """Rows from v3 survive migration 004; flag_reason is NULL on legacy proposals."""
+    from auto_lorebook.db.migrations import (  # noqa: PLC0415
+        _migration_001_initial,  # noqa: PLC2701
+        _migration_002_widen_source_type,  # noqa: PLC2701
+        _migration_003_fix_segment_status_and_add_flags_json,  # noqa: PLC2701
+    )
+
+    db_path = tmp_path / "wiki.db"
+    raw = sqlite3.connect(str(db_path))
+    raw.execute("PRAGMA foreign_keys=ON")
+    _migration_001_initial(raw)
+    _migration_002_widen_source_type(raw)
+    _migration_003_fix_segment_status_and_add_flags_json(raw)
+    raw.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at)"
+        " VALUES ('s1', 'srt', '2026-01-01T00:00:00+00:00')"
+    )
+    raw.execute(
+        "INSERT INTO ingests(ingest_id, source_id, started_at, state)"
+        " VALUES ('i1', 's1', '2026-01-01T00:00:00+00:00', 'reading')"
+    )
+    raw.execute(
+        "INSERT INTO segments(ingest_id, segment_id, start, end, title,"
+        " segment_status) VALUES"
+        " ('i1', 'seg-001', '0:00:00', '0:01:00', 'pre-v4', 'draft')"
+    )
+    raw.execute("DELETE FROM schema_version")
+    raw.execute("INSERT INTO schema_version(version) VALUES (3)")
+    raw.commit()
+    raw.close()
+
+    conn = db.open(db_path)
+    version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    seg_row = conn.execute(
+        "SELECT segment_id FROM segments WHERE ingest_id='i1'"
+    ).fetchone()
+    # plan_metadata table should exist (empty)
+    pm_count = conn.execute("SELECT COUNT(*) FROM plan_metadata").fetchone()[0]
+    conn.close()
+
+    assert version == CURRENT_SCHEMA_VERSION
+    assert seg_row is not None
+    assert seg_row[0] == "seg-001"
+    assert pm_count == 0

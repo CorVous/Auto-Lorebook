@@ -16,8 +16,12 @@ import pytest
 import yaml
 
 from auto_lorebook import config as cfg_mod
-from auto_lorebook import entity_yaml, proposal_yaml
+from auto_lorebook import db as db_mod
+from auto_lorebook import entities as entities_mod
+from auto_lorebook import facts as facts_mod
+from auto_lorebook import proposal_yaml
 from auto_lorebook import review as review_mod
+from auto_lorebook import wiki_state as wiki_state_mod
 from auto_lorebook.commands import (
     approve_reading_cmd,
     extract_cmd,
@@ -36,7 +40,36 @@ from auto_lorebook.review import (
 )
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
+
+
+def _open_db(wiki: Path) -> sqlite3.Connection:
+    return db_mod.open(wiki_state_mod.wiki_db_path(wiki))
+
+
+def _db_facts(wiki: Path, category: str, slug: str) -> list[facts_mod.FactRow]:
+    conn = _open_db(wiki)
+    try:
+        return facts_mod.list_facts_by_entity(conn, category, slug)
+    finally:
+        conn.close()
+
+
+def _db_entity(wiki: Path, category: str, slug: str) -> entities_mod.EntityRow | None:
+    conn = _open_db(wiki)
+    try:
+        return entities_mod.get_entity(conn, category, slug)
+    finally:
+        conn.close()
+
+
+def _db_proposal_count(wiki: Path, source_id: str) -> int:
+    conn = _open_db(wiki)
+    try:
+        return proposal_yaml.count_proposals(conn, source_id)
+    finally:
+        conn.close()
 
 
 _SRT = (
@@ -354,19 +387,17 @@ class TestAutoApprove:
             extract_cmd.run(_args(source_id="yt-abc12345678"))
             rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=True))
         assert rc == 0
-        # Stub created
-        aldara_path = ingested_wiki / "locations" / "aldara.yaml"
-        assert aldara_path.exists()
-        e = entity_yaml.read(aldara_path)
-        assert e.entity == "Aldara"
-        assert e.created_by_ingest == "yt-abc12345678"
-        assert len(e.facts) == 1
-        assert e.facts[0]["id"] == "aldara-f001"
-        # Proposals dir is empty
-        proposals_dir = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
-        )
-        assert list(proposals_dir.glob("*.yaml")) == []
+        # Stub created — DB has entity + .md written
+        ent = _db_entity(ingested_wiki, "locations", "aldara")
+        assert ent is not None
+        assert ent.canonical_name == "Aldara"
+        assert ent.created_by_ingest == "yt-abc12345678"
+        db_facts = _db_facts(ingested_wiki, "locations", "aldara")
+        assert len(db_facts) == 1
+        assert db_facts[0].id == "aldara-f001"
+        assert (ingested_wiki / "locations" / "aldara.md").exists()
+        # No proposals remain in DB
+        assert _db_proposal_count(ingested_wiki, "yt-abc12345678") == 0
         out = capsys.readouterr().out
         assert "approved=1" in out
 
@@ -472,25 +503,21 @@ class TestMultiTargetBundle:
             rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=True))
         assert rc == 0
 
-        # All three stubs created.
-        aldara_path = ingested_wiki / "locations" / "aldara.yaml"
-        theron_path = ingested_wiki / "characters" / "theron.yaml"
-        second_age_path = ingested_wiki / "events" / "second-age.yaml"
-        assert aldara_path.exists(), "Aldara stub missing"
-        assert theron_path.exists(), "Theron stub missing"
-        assert second_age_path.exists(), "Second Age stub missing"
+        # All three stubs created in DB + .md written.
+        for slug, cat in (
+            ("aldara", "locations"),
+            ("theron", "characters"),
+            ("second-age", "events"),
+        ):
+            ent = _db_entity(ingested_wiki, cat, slug)
+            assert ent is not None, f"{slug} entity missing from DB"
+            assert ent.created_by_ingest == "yt-abc12345678"
+            assert (ingested_wiki / cat / f"{slug}.md").exists(), f"{slug}.md missing"
+            db_facts = _db_facts(ingested_wiki, cat, slug)
+            assert len(db_facts) == 1
 
-        for path in (aldara_path, theron_path, second_age_path):
-            e = entity_yaml.read(path)
-            assert len(e.facts) == 1
-            assert e.created_by_ingest == "yt-abc12345678"
-            assert e.facts[0]["claim_group_id"] == "cg-001"
-
-        # Proposals dir is empty — all three consumed.
-        proposals_dir = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
-        )
-        assert list(proposals_dir.glob("*.yaml")) == []
+        # No proposals remain in DB.
+        assert _db_proposal_count(ingested_wiki, "yt-abc12345678") == 0
 
         # Count: approved=3 (one bundle, three routes).
         out = capsys.readouterr().out
@@ -527,21 +554,22 @@ class TestMultiTargetBundle:
         )
 
         # Theron and Second Age stubs exist; Aldara's proposal was dropped.
-        aldara_path = ingested_wiki / "locations" / "aldara.yaml"
-        theron_path = ingested_wiki / "characters" / "theron.yaml"
-        second_age_path = ingested_wiki / "events" / "second-age.yaml"
-        assert not aldara_path.exists(), "Aldara should not have been created"
-        assert theron_path.exists(), "Theron stub missing"
-        assert second_age_path.exists(), "Second Age stub missing"
+        assert _db_entity(ingested_wiki, "locations", "aldara") is None, (
+            "Aldara should not have been created"
+        )
+        assert not (ingested_wiki / "locations" / "aldara.md").exists()
+        assert _db_entity(ingested_wiki, "characters", "theron") is not None, (
+            "Theron stub missing"
+        )
+        assert _db_entity(ingested_wiki, "events", "second-age") is not None, (
+            "Second Age stub missing"
+        )
 
         assert result.approved == 2
         assert result.rejected == 1
 
-        # All proposal files consumed.
-        proposals_dir = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
-        )
-        assert list(proposals_dir.glob("*.yaml")) == []
+        # No proposals remain in DB.
+        assert _db_proposal_count(ingested_wiki, "yt-abc12345678") == 0
         capsys.readouterr()
 
     def test_reject_whole_bundle_leaves_no_stubs(
@@ -576,13 +604,14 @@ class TestMultiTargetBundle:
 
         assert result.rejected == 3
         assert result.approved == 0
-        assert not (ingested_wiki / "locations" / "aldara.yaml").exists()
-        assert not (ingested_wiki / "characters" / "theron.yaml").exists()
-        assert not (ingested_wiki / "events" / "second-age.yaml").exists()
-        proposals_dir = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
-        )
-        assert list(proposals_dir.glob("*.yaml")) == []
+        assert _db_entity(ingested_wiki, "locations", "aldara") is None
+        assert _db_entity(ingested_wiki, "characters", "theron") is None
+        assert _db_entity(ingested_wiki, "events", "second-age") is None
+        assert not (ingested_wiki / "locations" / "aldara.md").exists()
+        assert not (ingested_wiki / "characters" / "theron.md").exists()
+        assert not (ingested_wiki / "events" / "second-age.md").exists()
+        # No proposals remain in DB.
+        assert _db_proposal_count(ingested_wiki, "yt-abc12345678") == 0
         capsys.readouterr()
 
 
@@ -800,19 +829,18 @@ class TestInteractiveReviewerUndoIntegration:
             ("theron", "characters"),
             ("second-age", "events"),
         ):
-            path = ingested_wiki / cat / f"{slug}.yaml"
-            assert path.exists(), f"{slug} stub missing; undo didn't re-check route"
-            e = entity_yaml.read(path)
-            assert len(e.facts) == 1
+            ent = _db_entity(ingested_wiki, cat, slug)
+            assert ent is not None, f"{slug} stub missing; undo didn't re-check route"
+            assert (ingested_wiki / cat / f"{slug}.md").exists()
+            db_facts = _db_facts(ingested_wiki, cat, slug)
+            assert len(db_facts) == 1
             # Undo dropped the bundle edit; original text preserved.
-            assert e.facts[0]["text"] == original_text
-            assert e.facts[0]["text_source"] is None
-            assert e.facts[0]["edited_by_human"] is False
+            assert db_facts[0].text == original_text
+            assert db_facts[0].text_source is None
+            assert db_facts[0].edited_by_human is False
 
-        proposals_dir = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
-        )
-        assert list(proposals_dir.glob("*.yaml")) == []
+        # No proposals remain in DB.
+        assert _db_proposal_count(ingested_wiki, "yt-abc12345678") == 0
         out = capsys.readouterr().out
         assert "approved=3" in out
 
@@ -859,11 +887,10 @@ class TestInteractiveReviewerUndoIntegration:
             ("theron", "characters"),
             ("second-age", "events"),
         ):
-            assert not (ingested_wiki / cat / f"{slug}.yaml").exists()
+            assert _db_entity(ingested_wiki, cat, slug) is None
+            assert not (ingested_wiki / cat / f"{slug}.md").exists()
 
-        proposals_dir = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "proposals"
-        )
-        assert list(proposals_dir.glob("*.yaml")) == []
+        # No proposals remain in DB.
+        assert _db_proposal_count(ingested_wiki, "yt-abc12345678") == 0
         out = capsys.readouterr().out
         assert "rejected=3" in out

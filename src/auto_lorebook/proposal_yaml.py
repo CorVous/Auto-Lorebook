@@ -1,17 +1,21 @@
-"""Stage 3 `proposals/<proposal_id>.yaml`: schema, read/write.
+"""Stage 3 proposals: schema, parse helpers, DB I/O, file I/O (legacy).
 
-Mirrors `plan_yaml.py` shape. Each proposal is one file under
-``pending/<source_id>/proposals/`` representing a single fact's worth of
-located transcript span, awaiting human review.
+DB API (conn-first):
+    write_proposal(conn, ingest_id, plan_route_id, p)
+    read_proposal(conn, proposal_id) -> Proposal | None
+    list_proposals(conn, ingest_id) -> list[Proposal]
+    delete_proposal(conn, proposal_id) -> None
+    delete_all_for_ingest(conn, ingest_id) -> None
+    count_proposals(conn, ingest_id) -> int
+    proposals_exist(conn, ingest_id) -> bool
 
-For ``proposal_type == "new_entity_with_facts"`` the ``target_entity``
-field carries the *proposed* (not-yet-canonical) name from the plan;
-the entity stub is created atomically on first approval (Phase 4 review
-loop, future PR).
+File I/O (legacy):
+    read(path), write(proposal, path)
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -21,6 +25,7 @@ from auto_lorebook._io import atomic_write_text
 from auto_lorebook.schema import SchemaVersionError, read_schema_version
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
 
 _MAX_SCHEMA = 1
@@ -258,3 +263,175 @@ def write(proposal: Proposal, path: Path) -> None:
         default_flow_style=False,
     )
     atomic_write_text(path, text)
+
+
+# ------------- DB API -------------------------------------------------------
+
+
+def _proposal_from_row(row: Any, siblings: list[Sibling]) -> Proposal:  # noqa: ANN401
+    corrs_raw = row["corrections_applied_json"]
+    try:
+        corrs_list = json.loads(corrs_raw) if corrs_raw else []
+    except (json.JSONDecodeError, TypeError):
+        corrs_list = []
+    corrections = [
+        Correction(
+            from_=c.get("from", ""),
+            to=c.get("to", ""),
+            source=c.get("source", ""),
+        )
+        for c in corrs_list
+    ]
+    return Proposal(
+        proposal_type=row["proposal_type"],
+        target_entity=row["target_entity_name"],
+        proposed_id=row["proposed_id"],
+        claim_group_id=row["claim_group_id"],
+        text=row["text"],
+        raw_transcript_span=row["raw_transcript_span"],
+        text_corrects_transcript=bool(row["text_corrects_transcript"]),
+        corrections_applied=corrections,
+        source_id=row["source_id"],
+        locator=row["locator"],
+        speaker=row["speaker"] or "",
+        reading_section=row["reading_section"],
+        reading_bullet_index=row["reading_bullet_index"],
+        status=row["status"],
+        status_reason=row["status_reason"],
+        session_date=row["session_date"] or "",
+        section=row["section"],
+        context_before=row["context_before"] or "",
+        context_after=row["context_after"] or "",
+        hint_widened=bool(row["hint_widened"]),
+        extractor_flagged=bool(row["extractor_flagged"]),
+        flag_reason=row["flag_reason"],
+        claim_group_siblings=siblings,
+    )
+
+
+def write_proposal(
+    conn: sqlite3.Connection,
+    ingest_id: str,
+    plan_route_id: int,
+    p: Proposal,
+) -> None:
+    """INSERT proposal row. Caller owns the tx."""
+    corrections_json = json.dumps([
+        {"from": c.from_, "to": c.to, "source": c.source} for c in p.corrections_applied
+    ])
+    conn.execute(
+        """
+        INSERT INTO proposals (
+            proposal_id, ingest_id, plan_route_id, proposal_type,
+            target_entity_name, proposed_id, claim_group_id,
+            text, raw_transcript_span, text_corrects_transcript,
+            corrections_applied_json, source_id, locator, speaker,
+            status, status_reason, session_date, section,
+            reading_section, reading_bullet_index,
+            context_before, context_after,
+            extractor_flagged, hint_widened, inputs_json, flag_reason
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            p.proposed_id,  # proposal_id = proposed_id
+            ingest_id,
+            plan_route_id,
+            p.proposal_type,
+            p.target_entity,
+            p.proposed_id,
+            p.claim_group_id,
+            p.text,
+            p.raw_transcript_span,
+            int(p.text_corrects_transcript),
+            corrections_json,
+            p.source_id,
+            p.locator,
+            p.speaker or None,
+            p.status,
+            p.status_reason,
+            p.session_date or None,
+            p.section,
+            p.reading_section,
+            p.reading_bullet_index,
+            p.context_before or None,
+            p.context_after or None,
+            int(p.extractor_flagged),
+            int(p.hint_widened),
+            None,  # inputs_json
+            p.flag_reason,
+        ),
+    )
+
+
+def _load_siblings(
+    conn: sqlite3.Connection,
+    ingest_id: str,
+    claim_group_id: str,
+    exclude_proposed_id: str,
+) -> list[Sibling]:
+    rows = conn.execute(
+        "SELECT target_entity_name, proposed_id FROM proposals"
+        " WHERE ingest_id=? AND claim_group_id=? AND proposed_id!=?",
+        (ingest_id, claim_group_id, exclude_proposed_id),
+    ).fetchall()
+    return [Sibling(entity=r[0], proposed_id=r[1]) for r in rows]
+
+
+def read_proposal(
+    conn: sqlite3.Connection,
+    proposal_id: str,
+) -> Proposal | None:
+    """Return Proposal or None."""
+    conn.row_factory = __import__("sqlite3").Row
+    row = conn.execute(
+        "SELECT * FROM proposals WHERE proposal_id=?", (proposal_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    siblings = _load_siblings(
+        conn, row["ingest_id"], row["claim_group_id"], row["proposed_id"]
+    )
+    return _proposal_from_row(row, siblings)
+
+
+def list_proposals(
+    conn: sqlite3.Connection,
+    ingest_id: str,
+) -> list[Proposal]:
+    """Return all proposals for ingest_id."""
+    import sqlite3 as _sqlite3  # noqa: PLC0415
+
+    conn.row_factory = _sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM proposals WHERE ingest_id=? ORDER BY rowid",
+        (ingest_id,),
+    ).fetchall()
+    result: list[Proposal] = []
+    for row in rows:
+        siblings = _load_siblings(
+            conn, ingest_id, row["claim_group_id"], row["proposed_id"]
+        )
+        result.append(_proposal_from_row(row, siblings))
+    return result
+
+
+def delete_proposal(conn: sqlite3.Connection, proposal_id: str) -> None:
+    """DELETE proposal by proposal_id; silent if absent."""
+    conn.execute("DELETE FROM proposals WHERE proposal_id=?", (proposal_id,))
+
+
+def delete_all_for_ingest(conn: sqlite3.Connection, ingest_id: str) -> None:
+    """DELETE all proposals for an ingest."""
+    conn.execute("DELETE FROM proposals WHERE ingest_id=?", (ingest_id,))
+
+
+def count_proposals(conn: sqlite3.Connection, ingest_id: str) -> int:
+    """Count remaining proposals for ingest_id."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM proposals WHERE ingest_id=?", (ingest_id,)
+    ).fetchone()[0]
+
+
+def proposals_exist(conn: sqlite3.Connection, ingest_id: str) -> bool:
+    """Return True if any proposals row exists for ingest_id."""
+    return count_proposals(conn, ingest_id) > 0

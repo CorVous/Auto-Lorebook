@@ -43,6 +43,7 @@ def _args(**kwargs: object) -> argparse.Namespace:
 
 
 def _write_plan(wiki: Path, source_id: str) -> Path:
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
     from auto_lorebook import wiki_state  # noqa: PLC0415
 
     plan = Plan(
@@ -90,6 +91,25 @@ def _write_plan(wiki: Path, source_id: str) -> Path:
             )
         ],
     )
+    # write to DB
+    conn = db_mod.open(wiki_state.wiki_db_path(wiki))
+    try:
+        # ensure source + ingest rows exist
+        conn.execute(
+            "INSERT OR IGNORE INTO sources(source_id, source_type, fetched_at,"
+            " context_json) VALUES (?,?,?,?)",
+            (source_id, "youtube", "2026-01-01T00:00:00Z", "{}"),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO ingests(ingest_id, source_id, started_at, state)"
+            " VALUES (?,?,?,?)",
+            (source_id, source_id, "2026-01-01T00:00:00Z", "planned"),
+        )
+        plan_yaml.write_plan_routes(conn, source_id, plan)
+        conn.commit()
+    finally:
+        conn.close()
+    # also write YAML for legacy callers
     path = wiki_state.pending_plan_path(wiki, source_id)
     plan_yaml.write(plan, path)
     return path

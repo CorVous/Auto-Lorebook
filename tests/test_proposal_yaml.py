@@ -1,4 +1,4 @@
-"""Tests for proposal_yaml.py — Stage 3 proposal read/write."""
+"""Tests for proposal_yaml.py — Stage 3 proposal file I/O + DB API."""
 
 from __future__ import annotations
 
@@ -8,16 +8,26 @@ from typing import TYPE_CHECKING, Any
 import pytest
 import yaml
 
+from auto_lorebook import db
 from auto_lorebook.proposal_yaml import (
     Correction,
     Proposal,
     ProposalError,
     Sibling,
+    count_proposals,
+    delete_all_for_ingest,
+    delete_proposal,
+    list_proposals,
+    proposals_exist,
     read,
+    read_proposal,
     write,
+    write_proposal,
 )
 
 if TYPE_CHECKING:
+    import sqlite3
+    from collections.abc import Generator
     from pathlib import Path
 
 
@@ -258,3 +268,151 @@ class TestValidation:
     def test_missing_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(ProposalError, match="file not found"):
             read(tmp_path / "nope.yaml")
+
+
+# ---------------------------------------------------------------------------
+# DB API tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def db_conn() -> Generator[sqlite3.Connection]:
+    """In-memory DB with seed source + ingest + plan_routes rows.
+
+    Yields:
+        open in-memory connection.
+
+    """
+    conn = db.open(":memory:")
+    conn.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at, context_json)"
+        " VALUES ('yt-x', 'youtube', '2026-01-01T00:00:00Z', '{}')"
+    )
+    conn.execute(
+        "INSERT INTO ingests(ingest_id, source_id, started_at, state)"
+        " VALUES ('ing-001', 'yt-x', '2026-01-01T00:00:00Z', 'extracted')"
+    )
+    conn.execute(
+        "INSERT INTO plan_routes(ingest_id, claim_group_id, target_entity_name,"
+        " entity_state, proposed_section, proposed_status, locator, locator_hint,"
+        " reading_section, reading_bullet_index)"
+        " VALUES ('ing-001','cg-001','Aldara','new','founding',"
+        " 'authoritative','0:04:32','0:04:00-0:05:00','[4:30-8:00]',0)"
+    )
+    conn.commit()
+    yield conn
+    conn.close()
+
+
+def _route_id(conn: sqlite3.Connection) -> int:
+    return conn.execute(
+        "SELECT id FROM plan_routes WHERE ingest_id='ing-001'"
+    ).fetchone()[0]
+
+
+def _make_db_proposal(**overrides: Any) -> Proposal:  # noqa: ANN401
+    base: dict[str, Any] = {
+        "proposal_type": "new_entity_with_facts",
+        "target_entity": "Aldara",
+        "proposed_id": "aldara-f001",
+        "claim_group_id": "cg-001",
+        "text": "Aldara was founded in the Second Age.",
+        "raw_transcript_span": "Aldara was founded in the Second Age.",
+        "text_corrects_transcript": False,
+        "source_id": "yt-x",
+        "locator": "0:04:32-0:04:41",
+        "speaker": "DM",
+        "reading_section": "[4:30-8:00] Founding",
+        "reading_bullet_index": 0,
+        "status": "authoritative",
+        "session_date": "2026-01-15",
+        "section": "founding",
+        "context_before": "",
+        "context_after": "",
+    }
+    base.update(overrides)
+    return Proposal(**base)
+
+
+class TestWriteReadProposal:
+    def test_read_returns_none_when_absent(self, db_conn: sqlite3.Connection) -> None:
+        assert read_proposal(db_conn, "no-such") is None
+
+    def test_round_trip(self, db_conn: sqlite3.Connection) -> None:
+        p = _make_db_proposal()
+        write_proposal(db_conn, "ing-001", _route_id(db_conn), p)
+        db_conn.commit()
+        loaded = read_proposal(db_conn, "aldara-f001")
+        assert loaded is not None
+        assert loaded.proposed_id == "aldara-f001"
+        assert loaded.text == "Aldara was founded in the Second Age."
+        assert loaded.status == "authoritative"
+
+    def test_list_proposals_returns_all(self, db_conn: sqlite3.Connection) -> None:
+        p1 = _make_db_proposal(proposed_id="aldara-f001", target_entity="Aldara")
+        write_proposal(db_conn, "ing-001", _route_id(db_conn), p1)
+        db_conn.commit()
+        result = list_proposals(db_conn, "ing-001")
+        assert len(result) == 1
+        assert result[0].proposed_id == "aldara-f001"
+
+    def test_list_proposals_empty_when_none(self, db_conn: sqlite3.Connection) -> None:
+        assert list_proposals(db_conn, "ing-001") == []
+
+    def test_delete_proposal(self, db_conn: sqlite3.Connection) -> None:
+        p = _make_db_proposal()
+        write_proposal(db_conn, "ing-001", _route_id(db_conn), p)
+        db_conn.commit()
+        delete_proposal(db_conn, "aldara-f001")
+        db_conn.commit()
+        assert read_proposal(db_conn, "aldara-f001") is None
+
+    def test_delete_proposal_silent_if_absent(
+        self, db_conn: sqlite3.Connection
+    ) -> None:
+        delete_proposal(db_conn, "no-such-id")  # must not raise
+
+    def test_count_proposals(self, db_conn: sqlite3.Connection) -> None:
+        assert count_proposals(db_conn, "ing-001") == 0
+        p = _make_db_proposal()
+        write_proposal(db_conn, "ing-001", _route_id(db_conn), p)
+        db_conn.commit()
+        assert count_proposals(db_conn, "ing-001") == 1
+
+    def test_proposals_exist(self, db_conn: sqlite3.Connection) -> None:
+        assert not proposals_exist(db_conn, "ing-001")
+        p = _make_db_proposal()
+        write_proposal(db_conn, "ing-001", _route_id(db_conn), p)
+        db_conn.commit()
+        assert proposals_exist(db_conn, "ing-001")
+
+    def test_delete_all_for_ingest(self, db_conn: sqlite3.Connection) -> None:
+        p = _make_db_proposal()
+        write_proposal(db_conn, "ing-001", _route_id(db_conn), p)
+        db_conn.commit()
+        delete_all_for_ingest(db_conn, "ing-001")
+        db_conn.commit()
+        assert count_proposals(db_conn, "ing-001") == 0
+
+    def test_corrections_applied_round_trip(self, db_conn: sqlite3.Connection) -> None:
+        p = _make_db_proposal(
+            corrections_applied=[
+                Correction(
+                    from_="all-dara", to="Aldara", source="reading-name-correction"
+                )
+            ]
+        )
+        write_proposal(db_conn, "ing-001", _route_id(db_conn), p)
+        db_conn.commit()
+        loaded = read_proposal(db_conn, "aldara-f001")
+        assert loaded is not None
+        assert len(loaded.corrections_applied) == 1
+        assert loaded.corrections_applied[0].from_ == "all-dara"
+
+    def test_flag_reason_persisted(self, db_conn: sqlite3.Connection) -> None:
+        p = _make_db_proposal(extractor_flagged=True, flag_reason="suspicious span")
+        write_proposal(db_conn, "ing-001", _route_id(db_conn), p)
+        db_conn.commit()
+        loaded = read_proposal(db_conn, "aldara-f001")
+        assert loaded is not None
+        assert loaded.flag_reason == "suspicious span"

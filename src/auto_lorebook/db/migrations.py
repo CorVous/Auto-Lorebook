@@ -369,10 +369,28 @@ def _migration_003_fix_segment_status_and_add_flags_json(
     conn.execute("UPDATE schema_version SET version = 3")
 
 
+def _migration_004_plan_metadata_and_flag_reason(conn: sqlite3.Connection) -> None:
+    """Add plan_metadata table and proposals.flag_reason column."""
+    conn.execute("""
+CREATE TABLE plan_metadata (
+    ingest_id                TEXT PRIMARY KEY,
+    planned_at               TEXT NOT NULL,
+    source_id                TEXT NOT NULL,
+    entity_resolutions_json  TEXT NOT NULL DEFAULT '[]',
+    new_entities_json        TEXT NOT NULL DEFAULT '[]',
+    unresolved_json          TEXT NOT NULL DEFAULT '[]',
+    FOREIGN KEY (ingest_id) REFERENCES ingests(ingest_id) ON DELETE CASCADE
+)
+""")
+    conn.execute("ALTER TABLE proposals ADD COLUMN flag_reason TEXT")
+    conn.execute("UPDATE schema_version SET version = 4")
+
+
 MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
     _migration_001_initial,
     _migration_002_widen_source_type,
     _migration_003_fix_segment_status_and_add_flags_json,
+    _migration_004_plan_metadata_and_flag_reason,
 )
 
 CURRENT_SCHEMA_VERSION: int = len(MIGRATIONS)

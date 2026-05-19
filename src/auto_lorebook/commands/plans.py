@@ -1,9 +1,8 @@
 """auto-lorebook plans subcommand group.
 
 Inspection-only commands. Mirrors `entities` shape: nested subparser
-with action dispatch on `args.plans_action`. Plans are intermediate
-artifacts in `<wiki>/.wiki-state/pending/<source_id>/plan.yaml` — there
-is no approval gate at this stage.
+with action dispatch on `args.plans_action`. Plans are stored in the
+`plan_metadata` and `plan_routes` DB tables.
 """
 
 from __future__ import annotations
@@ -12,11 +11,13 @@ import logging
 from typing import TYPE_CHECKING
 
 from auto_lorebook import config as cfg_mod
+from auto_lorebook import db as db_mod
 from auto_lorebook import plan_yaml
 from auto_lorebook import wiki_state as wiki_state_mod
 
 if TYPE_CHECKING:
     import argparse
+    import sqlite3
     from pathlib import Path
 
 _logger = logging.getLogger(__name__)
@@ -72,32 +73,17 @@ def run(args: argparse.Namespace) -> int:
     raise ValueError(msg)
 
 
-def _pending_root() -> Path:
+def _open_wiki_db() -> tuple[Path, sqlite3.Connection]:
     wiki = cfg_mod.load_config().resolve_active_wiki(None)
-    return wiki_state_mod.pending_dir(wiki)
+    return wiki, db_mod.open(wiki_state_mod.wiki_db_path(wiki))
 
 
 def _run_list() -> int:
-    root = _pending_root()
-    if not root.is_dir():
-        print("(no plans)")  # noqa: T201
-        return 0
-    rows: list[tuple[str, str, int, int]] = []
-    for sub in sorted(root.iterdir()):
-        plan_path = sub / "plan.yaml"
-        if not plan_path.is_file():
-            continue
-        try:
-            plan = plan_yaml.read(plan_path)
-        except plan_yaml.PlanError:
-            _logger.warning("plans list: could not parse %s; skipping", plan_path)
-            continue
-        rows.append((
-            plan.source_id,
-            plan.planned_at,
-            len(plan.planned_claims),
-            len(plan.new_entities),
-        ))
+    _wiki, conn = _open_wiki_db()
+    try:
+        rows = plan_yaml.list_plans(conn)
+    finally:
+        conn.close()
     if not rows:
         print("(no plans)")  # noqa: T201
         return 0
@@ -113,15 +99,13 @@ def _run_list() -> int:
 
 
 def _run_show(source_id: str) -> int:
-    wiki = cfg_mod.load_config().resolve_active_wiki(None)
-    plan_path = wiki_state_mod.pending_plan_path(wiki, source_id)
-    if not plan_path.is_file():
-        print(f"No plan for {source_id!r}")  # noqa: T201
-        return 1
+    _wiki, conn = _open_wiki_db()
     try:
-        plan = plan_yaml.read(plan_path)
-    except plan_yaml.PlanError as e:
-        print(f"error: {e}")  # noqa: T201
+        plan = plan_yaml.read_plan_routes(conn, source_id)
+    finally:
+        conn.close()
+    if plan is None:
+        print(f"No plan for {source_id!r}")  # noqa: T201
         return 1
 
     print(f"source_id:  {plan.source_id}")  # noqa: T201

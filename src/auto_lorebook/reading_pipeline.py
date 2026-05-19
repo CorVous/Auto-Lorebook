@@ -378,6 +378,13 @@ def plan(
     except stage2_mod.Stage2Error as e:
         raise ReadingPipelineError(str(e)) from e
 
+    # write to DB (primary) and YAML (legacy compat)
+    conn2 = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    try:
+        plan_yaml_mod.write_plan_routes(conn2, source_id, result_plan)
+        conn2.commit()
+    finally:
+        conn2.close()
     plan_path = pending_plan_path(source_id)
     plan_yaml_mod.write(result_plan, plan_path)
     return PlanResult(plan_path=plan_path, plan=result_plan)
@@ -459,6 +466,22 @@ def extract(
         )
     except stage3_mod.Stage3Error as e:
         raise ReadingPipelineError(str(e)) from e
+
+    # write proposals to DB (primary) and YAML files (legacy compat)
+    conn3 = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    try:
+        proposal_yaml_mod.delete_all_for_ingest(conn3, source_id)
+        for proposal in proposals:
+            route_row = conn3.execute(
+                "SELECT id FROM plan_routes"
+                " WHERE ingest_id=? AND claim_group_id=? AND target_entity_name=?",
+                (source_id, proposal.claim_group_id, proposal.target_entity),
+            ).fetchone()
+            route_id = route_row[0] if route_row else 0
+            proposal_yaml_mod.write_proposal(conn3, source_id, route_id, proposal)
+        conn3.commit()
+    finally:
+        conn3.close()
 
     proposals_dir = pending_proposals_dir(source_id)
     if proposals_dir.exists():
