@@ -699,40 +699,43 @@ def run(
     from auto_lorebook import wiki_state as wiki_state_mod  # noqa: PLC0415
 
     conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
-    info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
-    # backfill DB from YAMLs on first run (idempotent)
-    entities_mod.list_entities(conn, wiki_repo=wiki_repo)
-    ctx = _ApprovalContext(
-        cfg=cfg,
-        wiki_repo=wiki_repo,
-        source_id=source_id,
-        info=info,
-        plan=plan,
-        conn=conn,
-    )
-    _seed_merged_aliases_from_disk(ctx)
+    try:
+        info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
+        # backfill DB from YAMLs on first run (idempotent)
+        entities_mod.list_entities(conn, wiki_repo=wiki_repo)
+        ctx = _ApprovalContext(
+            cfg=cfg,
+            wiki_repo=wiki_repo,
+            source_id=source_id,
+            info=info,
+            plan=plan,
+            conn=conn,
+        )
+        _seed_merged_aliases_from_disk(ctx)
 
-    ordered = sorted_proposals(plan, source_id)
-    if not ordered:
-        return ReviewResult()
-    bundles = _bundle_proposals(ordered)
-    bundle_total = len(bundles)
+        ordered = sorted_proposals(plan, source_id)
+        if not ordered:
+            return ReviewResult()
+        bundles = _bundle_proposals(ordered)
+        bundle_total = len(bundles)
 
-    result = ReviewResult()
-    for bundle_idx, bundle in enumerate(bundles, start=1):
-        try:
-            _process_bundle(
-                ctx,
-                bundle,
-                reviewer=reviewer,
-                bundle_index=bundle_idx,
-                bundle_total=bundle_total,
-                result=result,
-            )
-        except KeyboardInterrupt:
-            result.remaining = _count_remaining(source_id)
-            raise
-    return result
+        result = ReviewResult()
+        for bundle_idx, bundle in enumerate(bundles, start=1):
+            try:
+                _process_bundle(
+                    ctx,
+                    bundle,
+                    reviewer=reviewer,
+                    bundle_index=bundle_idx,
+                    bundle_total=bundle_total,
+                    result=result,
+                )
+            except KeyboardInterrupt:
+                result.remaining = _count_remaining(source_id)
+                raise
+        return result
+    finally:
+        conn.close()
 
 
 def _process_bundle(

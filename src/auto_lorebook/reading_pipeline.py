@@ -359,13 +359,15 @@ def plan(
 
     conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
     try:
-        info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
-    except info_yaml_mod.InfoError as e:
-        raise ReadingPipelineError(str(e)) from e
-    wc = wiki_context_mod.read(conn, wiki_repo=wiki_repo)
-    cors = corrections_mod.read(conn, wiki_repo=wiki_repo)
-    entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
-    conn.close()
+        try:
+            info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
+        except info_yaml_mod.InfoError as e:
+            raise ReadingPipelineError(str(e)) from e
+        wc = wiki_context_mod.read(conn, wiki_repo=wiki_repo)
+        cors = corrections_mod.read(conn, wiki_repo=wiki_repo)
+        entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
+    finally:
+        conn.close()
     p = preamble_mod.assemble(info, wc, cors, entity_snippet, reduced=False)
     try:
         p.check_budget(
@@ -431,31 +433,32 @@ def extract(
 
     conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
     try:
-        info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
-    except info_yaml_mod.InfoError as e:
-        conn.close()
-        raise ReadingPipelineError(str(e)) from e
-    cors = corrections_mod.read(conn, wiki_repo=wiki_repo)
-    wc = wiki_context_mod.read(conn, wiki_repo=wiki_repo)
-    entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
-    try:
-        loaded = transcript_mod.load(wiki_repo, info, cors)
-    except transcript_mod.TranscriptError as e:
-        raise ReadingPipelineError(str(e)) from e
+        try:
+            info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
+        except info_yaml_mod.InfoError as e:
+            raise ReadingPipelineError(str(e)) from e
+        cors = corrections_mod.read(conn, wiki_repo=wiki_repo)
+        wc = wiki_context_mod.read(conn, wiki_repo=wiki_repo)
+        entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
+        try:
+            loaded = transcript_mod.load(wiki_repo, info, cors)
+        except transcript_mod.TranscriptError as e:
+            raise ReadingPipelineError(str(e)) from e
 
-    p = preamble_mod.assemble(info, wc, cors, entity_snippet, reduced=True)
-    try:
-        p.check_budget(
-            context_window=cfg.models.primary_context_window,
-            budget_fraction=cfg.preamble.budget_fraction,
+        p = preamble_mod.assemble(info, wc, cors, entity_snippet, reduced=True)
+        try:
+            p.check_budget(
+                context_window=cfg.models.primary_context_window,
+                budget_fraction=cfg.preamble.budget_fraction,
+            )
+        except preamble_mod.PreambleTooLargeError as e:
+            raise ReadingPipelineError(str(e)) from e
+
+        existing_fact_counts, existing_slugs = _collect_existing_target_metadata(
+            wiki_repo, plan_obj, conn
         )
-    except preamble_mod.PreambleTooLargeError as e:
-        raise ReadingPipelineError(str(e)) from e
-
-    existing_fact_counts, existing_slugs = _collect_existing_target_metadata(
-        wiki_repo, plan_obj, conn
-    )
-    conn.close()
+    finally:
+        conn.close()
 
     client = _build_client(cfg)
     model = cfg.models.extractor or cfg.models.primary
@@ -715,14 +718,15 @@ def _load_context(
     wiki_repo = cfg.resolve_active_wiki(wiki_override)
     conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
     try:
-        info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
-    except info_yaml_mod.InfoError as e:
+        try:
+            info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
+        except info_yaml_mod.InfoError as e:
+            raise ReadingPipelineError(str(e)) from e
+        wc = wiki_context_mod.read(conn, wiki_repo=wiki_repo)
+        cors = corrections_mod.read(conn, wiki_repo=wiki_repo)
+        entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
+    finally:
         conn.close()
-        raise ReadingPipelineError(str(e)) from e
-    wc = wiki_context_mod.read(conn, wiki_repo=wiki_repo)
-    cors = corrections_mod.read(conn, wiki_repo=wiki_repo)
-    entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
-    conn.close()
 
     try:
         loaded = transcript_mod.load(wiki_repo, info, cors)
