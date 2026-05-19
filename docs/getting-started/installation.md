@@ -105,4 +105,10 @@ the registry.
 
 ## Next
 
-Run your first ingest: [first ingest walkthrough](first-ingest.md).
+Run your first ingest with the primary entry point:
+
+```bash
+auto-lorebook run https://youtube.com/watch?v=abc123
+```
+
+Full walkthrough: [first ingest](first-ingest.md).

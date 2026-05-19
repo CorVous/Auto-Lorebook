@@ -17,6 +17,7 @@ from auto_lorebook.commands import regenerate_reading as regenerate_reading_cmd
 from auto_lorebook.commands import reject_ingest as reject_ingest_cmd
 from auto_lorebook.commands import replan as replan_cmd
 from auto_lorebook.commands import review as review_cmd
+from auto_lorebook.commands import run as run_cmd
 from auto_lorebook.commands import seed_ingest as seed_ingest_cmd
 from auto_lorebook.commands import version as version_cmd
 from auto_lorebook.commands import wiki as wiki_cmd
@@ -34,6 +35,7 @@ __all__ = [
     "reject_ingest_cmd",
     "replan_cmd",
     "review_cmd",
+    "run_cmd",
     "seed_ingest_cmd",
     "version_cmd",
     "wiki_cmd",

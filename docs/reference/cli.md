@@ -3,6 +3,23 @@
 All commands are invoked as `auto-lorebook <command>`. Each command
 links to the page that explains its semantics.
 
+## Run (primary entry point)
+
+```bash
+auto-lorebook run <url-or-source-id> \
+  [--yes] \
+  [--auto-approve]
+```
+
+Drive a source through the full pipeline from its current state to
+completion. Skips stages already done; stops at each human gate. Accepts
+a YouTube URL (ingest included if not done) or an existing source ID.
+
+`--yes` forwards to the reading-review gate (auto-approves all reading
+segments). `--auto-approve` forwards to the fact-review gate
+(auto-approves all proposals). Both flags are required in a
+non-interactive shell. See [first ingest](../getting-started/first-ingest.md).
+
 ## Ingest
 
 ```bash

@@ -3,59 +3,42 @@
 This walkthrough takes a YouTube URL from raw source to approved entity
 facts.
 
-## 1. Ingest the source
+## Quickstart: single command
 
 ```bash
-auto-lorebook ingest https://youtube.com/watch?v=abc123
+auto-lorebook run https://youtube.com/watch?v=abc123
 ```
 
-The tool fetches the transcript via `yt-dlp`, stores it under
-`sources/yt-abc123/`, and prints what it captured:
+`run` detects where the source is in the pipeline and drives it forward
+to completion — ingest, reading generation, reading approval, planning,
+extraction, and fact review — stopping at each human gate.
 
-```
-✓ Manual subtitles available (English)
-Source stored as yt-abc123.
-  Title: Aether Chronicles S3E14
-  Duration: 2:20:32
-  Captions: manual (English)
-```
-
-If only auto-generated captions are available, the tool warns that
-proper-noun mishearings are likely and suggests adding name corrections
-during reading review.
-
-## 2. Fill in context
-
-The tool prompts interactively. Every field is skippable; defaults come
-from flags, then `.wiki-context.yaml`, then your last ingest.
-
-```
-Session date (YYYY-MM-DD): 2026-01-15
-Perspective (e.g. "Cor playing Kiki"): Cor playing Kiki in Aether Chronicles
-Source nature [actual-play/dm-lore/worldbuilding-video/interview/notes/other]: actual-play
-Setting [Aether Chronicles]:
-Any notes? (one line, or Enter to skip): Picks up mid-session after a long rest.
-
-Context saved to sources/yt-abc123/info.yaml.
-
-Generate reading now? [Y/n]: y
-```
-
-Context fields are optional — blank is allowed. Unfilled fields reduce
-LLM quality but don't block the pipeline. See
-[context pipeline](../pipeline/context.md) for schema details.
-
-## 3. Review the reading
-
-After Stage 1a (structure) and Stage 1b (summarize) run, you get a
-draft: sidecar at `pending/yt-abc123/reading/reading.yaml` and one
-`segments/seg-NNN.md` per segment. Open the interactive review:
+For unattended or CI runs, pass both gate flags to skip the interactive
+prompts:
 
 ```bash
-auto-lorebook approve-reading yt-abc123
+auto-lorebook run https://youtube.com/watch?v=abc123 --yes --auto-approve
 ```
 
-The session prints the draft and prompts:
+`--yes` auto-approves the reading review; `--auto-approve` auto-approves
+all fact proposals. In a non-interactive shell, `run` refuses to proceed
+past a gate unless the matching flag is supplied.
+
+You can also resume a partially completed ingest by passing the source ID
+instead of the URL:
+
+```bash
+auto-lorebook run yt-abc123
+```
+
+`run` skips any stages already complete and continues from where it left off.
+
+## What happens at each gate
+
+### Reading review (Stage 1 output)
+
+After Stage 1a (structure) and Stage 1b (summarize) run, `run` opens the
+interactive reading review. The session prints the draft and prompts:
 
 - `a` — approve (flips status, copies to wiki).
 - `e` — preview assembled draft in `$EDITOR` (read-only; edits are
@@ -66,34 +49,12 @@ The session prints the draft and prompts:
 - `q` — quit; commits a queued reject (after a `y/N` confirm) or
   exits cleanly.
 
-Pass `--yes` to skip the loop and auto-approve (required for
-scripted/CI runs). See [reading stage](../pipeline/reading.md) for
-deeper treatment.
+Pass `--yes` to skip this loop and auto-approve. See
+[reading stage](../pipeline/reading.md) for deeper treatment.
 
-## 4. Plan and extract
+### Fact review (Stage 3 output)
 
-After approving the reading, run Stage 2 (planner) and Stage 3
-(extractor) explicitly:
-
-```bash
-auto-lorebook plan yt-abc123
-auto-lorebook extract yt-abc123
-```
-
-`plan` routes claim bullets to entities and writes
-`pending/yt-abc123/plan.yaml`; it refuses if the wiki-side `reading.md`
-is missing. `extract` locates verbatim transcript spans for each
-planned claim and writes proposal YAMLs under
-`pending/yt-abc123/proposals/`; it refuses if `plan.yaml` is missing.
-
-## 5. Review facts
-
-To walk through proposed facts:
-
-```bash
-auto-lorebook review ingest-2026-04-20-a
-```
-
+After the planner and extractor run, `run` opens the fact review loop.
 Each proposal shows the claim text, the raw transcript span it came
 from, corrections applied, source locator, and routing rationale.
 Decide per proposal: **approve**, **edit**, **reject**, or **play**
@@ -105,7 +66,9 @@ stub atomically. If review reveals systematic routing errors, bail out
 with `auto-lorebook replan <ingest_id>` instead of fighting proposal by
 proposal. See [fact review](../pipeline/review.md).
 
-## 6. View the wiki
+Pass `--auto-approve` to skip this loop and approve all proposals.
+
+## View the wiki
 
 Approved facts land in `<category>/<slug>.yaml`; the summarizer
 regenerates `<category>/<slug>.md` with citation-backed prose. Browse
@@ -118,3 +81,55 @@ auto-lorebook wiki list --category locations
 
 See [summarizer stage](../pipeline/summarizer.md) for how YAML facts
 become readable prose.
+
+## Running stages individually
+
+If you need fine-grained control, you can run each stage as a separate
+command. This is useful when resuming after an error, inspecting
+intermediate artifacts, or running only part of the pipeline.
+
+### 1. Ingest the source
+
+```bash
+auto-lorebook ingest https://youtube.com/watch?v=abc123
+```
+
+Fetches the transcript via `yt-dlp`, stores it under
+`sources/yt-abc123/`, and prints what it captured. Then prompts for
+context (session date, perspective, source nature, setting, notes) —
+every field is skippable.
+
+If only auto-generated captions are available, the tool warns that
+proper-noun mishearings are likely and suggests adding name corrections
+during reading review.
+
+### 2. Generate and review the reading
+
+```bash
+auto-lorebook generate-reading yt-abc123
+auto-lorebook approve-reading yt-abc123
+```
+
+`generate-reading` runs Stage 1a → 1b and writes a draft reading.
+`approve-reading` opens the interactive review loop described above.
+
+### 3. Plan and extract
+
+```bash
+auto-lorebook plan yt-abc123
+auto-lorebook extract yt-abc123
+```
+
+`plan` routes claim bullets to entities and writes
+`pending/yt-abc123/plan.yaml`; it refuses if the wiki-side `reading.md`
+is missing. `extract` locates verbatim transcript spans for each
+planned claim and writes proposal YAMLs under
+`pending/yt-abc123/proposals/`; it refuses if `plan.yaml` is missing.
+
+### 4. Review facts
+
+```bash
+auto-lorebook review ingest-2026-04-20-a
+```
+
+Opens the fact review loop described above.
