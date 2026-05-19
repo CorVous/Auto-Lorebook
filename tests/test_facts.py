@@ -12,6 +12,7 @@ from auto_lorebook.facts import (
     FactError,
     FactRow,
     create_fact_with_target,
+    create_fact_with_targets,
     get_fact,
     list_facts_by_entity,
     update_status,
@@ -187,6 +188,74 @@ class TestUpdateStatus:
     def test_missing_fact_raises(self, conn: sqlite3.Connection) -> None:
         with pytest.raises(FactError, match="fact not found"):
             update_status(conn, "no-such", "authoritative", by="reviewer")
+
+
+class TestCreateFactWithTargets:
+    def test_inserts_one_fact_and_n_fact_targets(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        # seed two extra entities for multi-target
+        conn.execute(
+            "INSERT INTO entities(category, slug, canonical_name, created_at,"
+            " created_by_ingest, updated_at)"
+            " VALUES ('locations', 'aldara', 'Aldara',"
+            " '2026-01-01T00:00:00Z', 'ing-001', '2026-01-01T00:00:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO entities(category, slug, canonical_name, created_at,"
+            " created_by_ingest, updated_at)"
+            " VALUES ('events', 'second-age', 'Second Age',"
+            " '2026-01-01T00:00:00Z', 'ing-001', '2026-01-01T00:00:00Z')"
+        )
+        targets = [
+            ("characters", "theron", "biography"),
+            ("locations", "aldara", "founding"),
+            ("events", "second-age", "events-in-era"),
+        ]
+        row = create_fact_with_targets(
+            conn,
+            fact_id="multi-f001",
+            text="Multi-target claim.",
+            raw_transcript_span="Multi-target claim.",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:01:00",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            targets=targets,
+            by="test-user",
+        )
+        assert isinstance(row, FactRow)
+        assert row.id == "multi-f001"
+        # 1 fact row
+        fact_count = conn.execute(
+            "SELECT COUNT(*) FROM facts WHERE id='multi-f001'"
+        ).fetchone()[0]
+        assert fact_count == 1
+        # 3 fact_targets rows
+        ft_rows = conn.execute(
+            "SELECT entity_category, entity_slug, section FROM fact_targets"
+            " WHERE fact_id='multi-f001' ORDER BY entity_category"
+        ).fetchall()
+        assert len(ft_rows) == 3
+
+    def test_zero_targets_raises(self, conn: sqlite3.Connection) -> None:
+        with pytest.raises(FactError, match="at least one target required"):
+            create_fact_with_targets(
+                conn,
+                fact_id="bad-f001",
+                text="x",
+                raw_transcript_span="x",
+                text_corrects_transcript=False,
+                source_id="src-001",
+                locator="0:00:00",
+                status="authoritative",
+                approved_at="2026-01-01T00:00:00Z",
+                created_by_ingest="ing-001",
+                targets=[],
+                by="tester",
+            )
 
 
 class TestValidStatuses:

@@ -3,7 +3,8 @@
 Public API (conn first):
     FactRow, FactTargetRow, FactError
     VALID_STATUSES
-    create_fact_with_target, get_fact, list_facts_by_entity, update_status
+    create_fact_with_target, create_fact_with_targets,
+    get_fact, list_facts_by_entity, update_status
 """
 
 from __future__ import annotations
@@ -180,6 +181,102 @@ def create_fact_with_target(
     if row is None:  # pragma: no cover
         msg = (
             f"create_fact_with_target: get after insert returned nothing for {fact_id}"
+        )
+        raise FactError(msg)
+    return _fact_from_row(row)
+
+
+def create_fact_with_targets(
+    conn: sqlite3.Connection,
+    *,
+    fact_id: str,
+    text: str,
+    raw_transcript_span: str,
+    text_corrects_transcript: bool,
+    source_id: str,
+    locator: str,
+    status: str,
+    approved_at: str,
+    created_by_ingest: str,
+    targets: list[tuple[str, str, str]],
+    by: str,
+    text_source: str | None = None,
+    edited_by_human: bool = False,
+    edited_at: str | None = None,
+    speaker: str | None = None,
+    status_reason: str | None = None,
+    session_date: str | None = None,
+    corrections_applied: list[dict] | None = None,
+    inputs_json: str | None = None,
+) -> FactRow:
+    """INSERT facts + N fact_targets + fact_status_history. Caller owns the tx.
+
+    `targets`: list of (entity_category, entity_slug, section) tuples.
+    Requires at least one target.
+    """
+    if not targets:
+        msg = "at least one target required"
+        raise FactError(msg)
+    if status not in VALID_STATUSES:
+        msg = f"invalid status {status!r}; must be one of {sorted(VALID_STATUSES)}"
+        raise FactError(msg)
+    corrections_json = json.dumps(corrections_applied or [])
+    try:
+        conn.execute(
+            """
+            INSERT INTO facts (
+                id, text, raw_transcript_span, text_corrects_transcript,
+                text_source, edited_by_human, edited_at,
+                source_id, locator, speaker,
+                status, status_reason, session_date,
+                approved_at, created_by_ingest, claim_group_id,
+                corrections_applied_json, inputs_json
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?)
+            """,
+            (
+                fact_id,
+                text,
+                raw_transcript_span,
+                int(text_corrects_transcript),
+                text_source,
+                int(edited_by_human),
+                edited_at,
+                source_id,
+                locator,
+                speaker,
+                status,
+                status_reason,
+                session_date,
+                approved_at,
+                created_by_ingest,
+                corrections_json,
+                inputs_json,
+            ),
+        )
+    except Exception as exc:
+        msg = f"create_fact_with_targets failed for {fact_id}: {exc}"
+        raise FactError(msg) from exc
+
+    for entity_category, entity_slug, section in targets:
+        conn.execute(
+            """
+            INSERT INTO fact_targets (fact_id, entity_category, entity_slug, section)
+            VALUES (?, ?, ?, ?)
+            """,
+            (fact_id, entity_category, entity_slug, section),
+        )
+    conn.execute(
+        """
+        INSERT INTO fact_status_history (fact_id, status, at, by, reason)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (fact_id, status, approved_at, by, status_reason),
+    )
+
+    row = conn.execute("SELECT * FROM facts WHERE id=?", (fact_id,)).fetchone()
+    if row is None:  # pragma: no cover
+        msg = (
+            f"create_fact_with_targets: get after insert returned nothing for {fact_id}"
         )
         raise FactError(msg)
     return _fact_from_row(row)

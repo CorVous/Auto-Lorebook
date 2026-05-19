@@ -386,11 +386,153 @@ CREATE TABLE plan_metadata (
     conn.execute("UPDATE schema_version SET version = 4")
 
 
+# v5 proposals DDL (drops target_entity_name, section, speaker, plan_route_id).
+_V5_PROPOSALS = """
+CREATE TABLE proposals (
+    proposal_id                 TEXT PRIMARY KEY,
+    ingest_id                   TEXT NOT NULL,
+    proposed_id                 TEXT NOT NULL,
+    claim_group_id              TEXT NOT NULL,
+    text                        TEXT NOT NULL,
+    raw_transcript_span         TEXT NOT NULL,
+    text_corrects_transcript    INTEGER NOT NULL,
+    corrections_applied_json    TEXT NOT NULL DEFAULT '[]',
+    source_id                   TEXT NOT NULL,
+    locator                     TEXT NOT NULL,
+    status                      TEXT NOT NULL,
+    status_reason               TEXT,
+    session_date                TEXT,
+    reading_section             TEXT NOT NULL,
+    reading_bullet_index        INTEGER NOT NULL,
+    context_before              TEXT,
+    context_after               TEXT,
+    extractor_flagged           INTEGER NOT NULL DEFAULT 0,
+    hint_widened                INTEGER NOT NULL DEFAULT 0,
+    inputs_json                 TEXT,
+    flag_reason                 TEXT,
+    FOREIGN KEY (ingest_id) REFERENCES ingests(ingest_id) ON DELETE CASCADE
+)
+"""
+
+_V5_PROPOSAL_TARGETS = """
+CREATE TABLE proposal_targets (
+    proposal_id     TEXT NOT NULL,
+    position        INTEGER NOT NULL,
+    entity_name     TEXT NOT NULL,
+    section         TEXT NOT NULL,
+    speaker         TEXT,
+    proposal_type   TEXT NOT NULL CHECK(proposal_type IN (
+                        'new_fact','new_entity_with_facts')),
+    proposed_category TEXT,
+    PRIMARY KEY (proposal_id, position),
+    FOREIGN KEY (proposal_id) REFERENCES proposals(proposal_id) ON DELETE CASCADE
+)
+"""
+
+
+def _migration_005_multi_target_proposals(conn: sqlite3.Connection) -> None:
+    """Reshape proposals: drop per-target columns; add proposal_targets child table.
+
+    Create-copy-drop-rename for proposals (SQLite can't drop columns with FK
+    constraints). Old per-target columns migrate to proposal_targets.
+    Siblings (multiple proposals per claim_group_id) consolidate to the
+    lowest-rowid survivor; others become extra proposal_targets rows (position
+    by rowid order within the group).
+    """
+    # 1. snapshot old per-target data into a temp table before restructuring
+    conn.execute("""
+        CREATE TEMP TABLE _pt_snapshot AS
+        SELECT
+            p.ingest_id,
+            p.claim_group_id,
+            p.proposal_id,
+            p.rowid AS rn,
+            p.target_entity_name,
+            p.section,
+            p.speaker,
+            p.proposal_type
+        FROM proposals p
+    """)
+
+    # 2. create new proposals table without per-target columns
+    conn.execute(
+        _V5_PROPOSALS.replace("CREATE TABLE proposals", "CREATE TABLE proposals_new")
+    )
+
+    # 3. copy only lowest-rowid row per (ingest_id, claim_group_id)
+    conn.execute("""
+        INSERT INTO proposals_new (
+            proposal_id, ingest_id, proposed_id, claim_group_id,
+            text, raw_transcript_span, text_corrects_transcript,
+            corrections_applied_json, source_id, locator,
+            status, status_reason, session_date,
+            reading_section, reading_bullet_index,
+            context_before, context_after,
+            extractor_flagged, hint_widened, inputs_json, flag_reason
+        )
+        SELECT
+            proposal_id, ingest_id, proposed_id, claim_group_id,
+            text, raw_transcript_span, text_corrects_transcript,
+            corrections_applied_json, source_id, locator,
+            status, status_reason, session_date,
+            reading_section, reading_bullet_index,
+            context_before, context_after,
+            extractor_flagged, hint_widened, inputs_json, flag_reason
+        FROM proposals
+        WHERE rowid IN (
+            SELECT MIN(rowid)
+            FROM proposals
+            GROUP BY ingest_id, claim_group_id
+        )
+    """)
+
+    conn.execute("DROP TABLE proposals")
+    conn.execute("ALTER TABLE proposals_new RENAME TO proposals")
+
+    # 4. create proposal_targets child table
+    conn.execute(_V5_PROPOSAL_TARGETS)
+
+    # 5. populate proposal_targets from snapshot; position by rowid rank
+    #    Each old sibling row becomes a proposal_targets row under the survivor.
+    conn.execute("""
+        INSERT INTO proposal_targets (
+            proposal_id, position, entity_name, section, speaker,
+            proposal_type, proposed_category
+        )
+        SELECT
+            survivor.proposal_id,
+            (
+                SELECT COUNT(*)
+                FROM _pt_snapshot older
+                WHERE older.ingest_id = snap.ingest_id
+                  AND older.claim_group_id = snap.claim_group_id
+                  AND older.rn < snap.rn
+            ) AS position,
+            snap.target_entity_name,
+            snap.section,
+            snap.speaker,
+            snap.proposal_type,
+            NULL
+        FROM _pt_snapshot snap
+        JOIN (
+            SELECT ingest_id, claim_group_id, MIN(rn) AS min_rn, proposal_id
+            FROM _pt_snapshot
+            GROUP BY ingest_id, claim_group_id
+        ) survivor
+          ON survivor.ingest_id = snap.ingest_id
+         AND survivor.claim_group_id = snap.claim_group_id
+    """)
+
+    conn.execute("DROP TABLE IF EXISTS _pt_snapshot")
+    conn.execute("UPDATE schema_version SET version = 5")
+
+
 MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
     _migration_001_initial,
     _migration_002_widen_source_type,
     _migration_003_fix_segment_status_and_add_flags_json,
     _migration_004_plan_metadata_and_flag_reason,
+    _migration_005_multi_target_proposals,
 )
 
 CURRENT_SCHEMA_VERSION: int = len(MIGRATIONS)

@@ -1,4 +1,4 @@
-"""Single-target proposal approval: idempotent, transaction-owning.
+"""Multi-target proposal approval: idempotent, transaction-owning.
 
 Public API:
     ApprovalResult
@@ -33,9 +33,7 @@ def approve_proposal(
     conn: sqlite3.Connection,
     *,
     proposal: Proposal,
-    entity_category: str,
-    entity_slug: str,
-    section: str,
+    targets_resolved: list[tuple[str, str, str]],
     by: str,
     when: str | None = None,
     edited_text: str | None = None,
@@ -44,8 +42,9 @@ def approve_proposal(
     edited_status_reason: str | None = None,
     inputs_json: str | None = None,
 ) -> ApprovalResult:
-    """Insert fact row + delete proposal; own the transaction.
+    """Insert fact row + N fact_targets + delete proposal; own the transaction.
 
+    `targets_resolved`: list of (entity_category, entity_slug, section).
     Issues BEGIN IMMEDIATE / COMMIT. Idempotent: if a facts row with the
     same id already exists, skips the insert and deletes the proposal row
     without error.
@@ -55,7 +54,11 @@ def approve_proposal(
     now = when or format_iso_now()
     fact_id = proposal.proposed_id
     text = edited_text if edited_text is not None else proposal.text
-    speaker = edited_speaker if edited_speaker is not None else proposal.speaker
+    speaker = (
+        edited_speaker
+        if edited_speaker is not None
+        else (proposal.targets[0].speaker if proposal.targets else None)
+    )
     status = edited_status if edited_status is not None else proposal.status
     status_reason = (
         edited_status_reason
@@ -82,7 +85,7 @@ def approve_proposal(
             conn.execute("COMMIT")
             return ApprovalResult.SKIPPED_IDEMPOTENT
 
-        facts_mod.create_fact_with_target(
+        facts_mod.create_fact_with_targets(
             conn,
             fact_id=fact_id,
             text=text,
@@ -95,9 +98,7 @@ def approve_proposal(
             status=status,
             approved_at=now,
             created_by_ingest=proposal.source_id,
-            entity_category=entity_category,
-            entity_slug=entity_slug,
-            section=section,
+            targets=targets_resolved,
             by=by,
             text_source=text_source,
             edited_by_human=edited_by_human,

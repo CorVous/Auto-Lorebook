@@ -472,13 +472,7 @@ def extract(
     try:
         proposal_yaml_mod.delete_all_for_ingest(conn3, source_id)
         for proposal in proposals:
-            route_row = conn3.execute(
-                "SELECT id FROM plan_routes"
-                " WHERE ingest_id=? AND claim_group_id=? AND target_entity_name=?",
-                (source_id, proposal.claim_group_id, proposal.target_entity),
-            ).fetchone()
-            route_id = route_row[0] if route_row else 0
-            proposal_yaml_mod.write_proposal(conn3, source_id, route_id, proposal)
+            proposal_yaml_mod.write_proposal(conn3, source_id, proposal)
         conn3.commit()
     finally:
         conn3.close()

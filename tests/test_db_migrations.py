@@ -33,6 +33,7 @@ _EXPECTED_TABLES = frozenset({
     "plan_routes",
     "proposals",
     "plan_metadata",
+    "proposal_targets",
 })
 
 
@@ -334,6 +335,103 @@ def test_migration_004_proposals_has_flag_reason() -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(proposals)").fetchall()}
     conn.close()
     assert "flag_reason" in cols
+
+
+def test_migration_005_creates_proposal_targets() -> None:
+    """Migration 005 creates proposal_targets with expected columns and FK CASCADE."""
+    conn = db.open(":memory:")
+    cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(proposal_targets)").fetchall()
+    }
+    conn.close()
+    assert cols == {
+        "proposal_id",
+        "position",
+        "entity_name",
+        "section",
+        "speaker",
+        "proposal_type",
+        "proposed_category",
+    }
+
+
+def test_migration_005_drops_per_target_columns_from_proposals() -> None:
+    """Migration 005 removes target_entity_name, section, speaker, plan_route_id."""
+    conn = db.open(":memory:")
+    proposal_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(proposals)").fetchall()
+    }
+    conn.close()
+    assert "target_entity_name" not in proposal_cols
+    assert "section" not in proposal_cols
+    assert "speaker" not in proposal_cols
+    assert "plan_route_id" not in proposal_cols
+
+
+def test_migration_005_preserves_existing_rows(tmp_path: Path) -> None:
+    """Rows from v4 survive migration 005; proposal_targets populated from proposals."""
+    from auto_lorebook.db.migrations import (  # noqa: PLC0415
+        _migration_001_initial,  # noqa: PLC2701
+        _migration_002_widen_source_type,  # noqa: PLC2701
+        _migration_003_fix_segment_status_and_add_flags_json,  # noqa: PLC2701
+        _migration_004_plan_metadata_and_flag_reason,  # noqa: PLC2701
+    )
+
+    db_path = tmp_path / "wiki.db"
+    raw = sqlite3.connect(str(db_path))
+    raw.execute("PRAGMA foreign_keys=OFF")  # ease seeding
+    _migration_001_initial(raw)
+    _migration_002_widen_source_type(raw)
+    _migration_003_fix_segment_status_and_add_flags_json(raw)
+    _migration_004_plan_metadata_and_flag_reason(raw)
+    raw.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at)"
+        " VALUES ('s1', 'srt', '2026-01-01T00:00:00+00:00')"
+    )
+    raw.execute(
+        "INSERT INTO ingests(ingest_id, source_id, started_at, state)"
+        " VALUES ('i1', 's1', '2026-01-01T00:00:00+00:00', 'reading')"
+    )
+    raw.execute(
+        "INSERT INTO plan_routes(ingest_id, claim_group_id, target_entity_name,"
+        " entity_state, proposed_section, proposed_status, locator, locator_hint,"
+        " reading_section, reading_bullet_index)"
+        " VALUES ('i1','cg-001','Aldara','existing','founding','authoritative',"
+        " '0:00:01','0:00:00-0:00:10','[0:00:00-0:01:00] S1',0)"
+    )
+    raw.execute(
+        "INSERT INTO proposals(proposal_id, ingest_id, plan_route_id, proposal_type,"
+        " target_entity_name, proposed_id, claim_group_id, text, raw_transcript_span,"
+        " text_corrects_transcript, corrections_applied_json, source_id, locator,"
+        " status, section, reading_section, reading_bullet_index, speaker)"
+        " VALUES ('aldara-f001','i1',1,'new_fact','Aldara','aldara-f001','cg-001',"
+        " 'Aldara was founded.','Aldara was founded.',0,'[]','s1','0:00:01',"
+        " 'authoritative','founding','[0:00:00-0:01:00] S1',0,'DM')"
+    )
+    raw.execute("DELETE FROM schema_version")
+    raw.execute("INSERT INTO schema_version(version) VALUES (4)")
+    raw.commit()
+    raw.close()
+
+    conn = db.open(db_path)
+    version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    # proposal row preserved
+    p_row = conn.execute(
+        "SELECT proposal_id FROM proposals WHERE proposal_id='aldara-f001'"
+    ).fetchone()
+    # proposal_targets populated
+    pt_rows = conn.execute(
+        "SELECT entity_name, section, speaker FROM proposal_targets"
+        " WHERE proposal_id='aldara-f001'"
+    ).fetchall()
+    conn.close()
+
+    assert version == CURRENT_SCHEMA_VERSION
+    assert p_row is not None
+    assert len(pt_rows) == 1
+    assert pt_rows[0][0] == "Aldara"
+    assert pt_rows[0][1] == "founding"
+    assert pt_rows[0][2] == "DM"
 
 
 def test_migration_004_preserves_existing_rows(tmp_path: Path) -> None:

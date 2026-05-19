@@ -85,7 +85,7 @@ Routes:
 
 **Bundle-level edits** carry only `text`, `status`, and `status_reason`
 — those are claim-level facts about the world, so they propagate to
-every checked route and should agree across siblings.
+every checked route and should agree across all targets.
 **Per-target overrides** carry only `section` and `speaker` and live
 in the `[t]argets` sub-prompt: different routes point at different
 entities, so section is inherently route-shaped, and speaker
@@ -171,10 +171,10 @@ Two recovery invariants cover partial runs:
    the resume run sees the correct totals.
 
 2. **Proposals as subset.** At the start of `run()`, the engine validates
-   that every DB proposal row corresponds to a `(claim_group_id,
-   target_entity)` pair in the plan. Missing pairs are normal after a
-   partial run (already-approved proposal rows were deleted). Extra pairs —
-   orphans whose plan key doesn't exist — raise `ReviewError`. The recovery
+   that every target within each DB proposal corresponds to a
+   `(claim_group_id, entity)` pair in the plan. Missing pairs are normal
+   after a partial run (already-approved proposal rows were deleted).
+   Extra pairs — orphans whose plan key doesn't exist — raise `ReviewError`. The recovery
    path is [`replan`](planner.md#replan-escape-hatch), which rebuilds the
    plan and discards proposals no longer sanctioned by it.
 

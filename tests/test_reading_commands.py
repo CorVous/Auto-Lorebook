@@ -1030,11 +1030,11 @@ class TestExtract:
         )
         assert proposals_dir.is_dir()
         files = sorted(proposals_dir.glob("*.yaml"))
-        assert len(files) == 2
+        # one proposal per claim group (cg-001 has 2 targets → 1 file)
+        assert len(files) == 1
         names = {f.name for f in files}
         assert "aldara-f001.yaml" in names
-        assert "second-age-f001.yaml" in names
 
         out = capsys.readouterr().out
-        assert "Extracted 2 proposal" in out
+        assert "Extracted 1 proposal" in out
         assert "(0 flagged)" in out

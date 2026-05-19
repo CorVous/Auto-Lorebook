@@ -273,6 +273,21 @@ CREATE TABLE proposals (
 )
 """
 
+PROPOSAL_TARGETS = """
+CREATE TABLE proposal_targets (
+    proposal_id     TEXT NOT NULL,
+    position        INTEGER NOT NULL,
+    entity_name     TEXT NOT NULL,
+    section         TEXT NOT NULL,
+    speaker         TEXT,
+    proposal_type   TEXT NOT NULL CHECK(proposal_type IN (
+                        'new_fact','new_entity_with_facts')),
+    proposed_category TEXT,
+    PRIMARY KEY (proposal_id, position),
+    FOREIGN KEY (proposal_id) REFERENCES proposals(proposal_id) ON DELETE CASCADE
+)
+"""
+
 PLAN_METADATA = """
 CREATE TABLE plan_metadata (
     ingest_id                TEXT PRIMARY KEY,

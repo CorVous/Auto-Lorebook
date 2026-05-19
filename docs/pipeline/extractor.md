@@ -29,20 +29,29 @@ can't provide.
 
 ## Output
 
-One YAML file per proposed fact at
-`pending/<ingest_id>/proposals/<proposal_id>.yaml`:
+One YAML file per claim group at
+`pending/<ingest_id>/proposals/<proposal_id>.yaml`.
+Each file covers all targets of that claim:
 
 ```yaml
 schema_version: 1
-proposal_type: new_fact          # new_fact | new_entity_with_facts
-target_entity: Aldara
-proposed_id: aldara-f004
-claim_group_id: cg-001           # shared with siblings routing the same claim elsewhere
-claim_group_siblings:            # other targets of the same claim, informational
+proposed_id: aldara-f004        # derived from first target's slug + counter
+claim_group_id: cg-001
+targets:
+  - entity: Aldara
+    section: founding
+    speaker: DM
+    proposal_type: new_fact     # new_fact | new_entity_with_facts
   - entity: Theron
-    proposed_id: theron-f011
+    section: biography
+    speaker: DM
+    proposal_type: new_entity_with_facts
+    proposed_category: characters
   - entity: Second Age
-    proposed_id: second-age-f002
+    section: events-in-era
+    speaker: DM
+    proposal_type: new_entity_with_facts
+    proposed_category: events
 
 text: "Theron's grandfather founded Aldara in the Second Age."
 raw_transcript_span: "Fair-on's grandfather founded all-dara in the Second Age."
@@ -57,11 +66,9 @@ corrections_applied:
 
 source_id: yt-abc123
 locator: "0:04:32-0:04:41"
-speaker: DM
 status: authoritative
 status_reason: null
 session_date: 2026-01-15
-section: founding
 
 reading_section: "[4:30-8:00] Founding of Aldara"
 reading_bullet_index: 0
@@ -78,10 +85,10 @@ context_after: "And that's why the Theron name matters so much now."
 - `text` differs from `raw_transcript_span` only through applied
   `corrections_applied`. No rewriting, cleanup, or filler removal at
   this stage.
-- **Windowed search.** Each proposal's prompt is fed only the
-  transcript slice covering its `locator_hint` window, not the whole
-  transcript or the whole segment. This is the primary lever keeping
-  Stage 3 prompts small and uniform in size across proposals.
+- **Windowed search.** Each claim's prompt is fed only the transcript
+  slice covering its `locator_hint` window, not the whole transcript
+  or the whole segment. This is the primary lever keeping Stage 3
+  prompts small and uniform in size across claims.
 - **Fallback on miss.** If substring verification fails within the
   hint window, the extractor retries once with the span widened to
   the full parent segment from 1a. If that also fails, flag with
@@ -96,18 +103,19 @@ context_after: "And that's why the Theron name matters so much now."
 - If the claim cannot be found in a single contiguous span, flag with
   `extractor_flagged: true` and an explanation. Do not synthesize
   across non-adjacent spans.
-- Parallelizable: each proposal is independent.
 
-## Claim-group deduplication
+## Multi-target claims
 
-Sibling proposals within a `claim_group_id` share the same
-`raw_transcript_span`, `locator`, `text`, and `corrections_applied`.
-The extractor runs once per claim group — not once per proposal — then
-copies the result to each sibling.
+One LLM extraction call per claim group — not per target. All targets
+in `targets[]` share the same `text`, `raw_transcript_span`, `locator`,
+and `corrections_applied`. Per-target fields (`section`, `speaker`,
+`proposal_type`, `proposed_category`) differ per entry.
 
-Each sibling still gets its own proposal file, its own `proposed_id`,
-and its own `target_entity` and `section`; only the span-location
-fields are shared. If extraction fails for a claim group, all sibling
-proposals inherit the same `extractor_flagged` state.
+The extractor emits **one proposal file per claim group**. The
+`proposed_id` is derived from the first target's entity slug plus a
+per-entity counter (e.g. `aldara-f004`).
+
+If extraction fails for a claim group, all targets inherit the same
+`extractor_flagged` state.
 
 Next stage: [human fact review](review.md).

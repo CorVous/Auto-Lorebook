@@ -519,9 +519,9 @@ class TestMultiTargetBundle:
         # No proposals remain in DB.
         assert _db_proposal_count(ingested_wiki, "yt-abc12345678") == 0
 
-        # Count: approved=3 (one bundle, three routes).
+        # Count: approved=1 (one proposal, three fact_targets).
         out = capsys.readouterr().out
-        assert "approved=3" in out
+        assert "approved=1" in out
 
     def test_drop_one_route_writes_two_facts_and_deletes_proposal(
         self,
@@ -565,8 +565,9 @@ class TestMultiTargetBundle:
             "Second Age stub missing"
         )
 
-        assert result.approved == 2
-        assert result.rejected == 1
+        # one proposal approved (with 2/3 targets selected); no proposals rejected
+        assert result.approved == 1
+        assert result.rejected == 0
 
         # No proposals remain in DB.
         assert _db_proposal_count(ingested_wiki, "yt-abc12345678") == 0
@@ -602,7 +603,8 @@ class TestMultiTargetBundle:
             reviewer=_RejectAllReviewer(),
         )
 
-        assert result.rejected == 3
+        # one proposal rejected
+        assert result.rejected == 1
         assert result.approved == 0
         assert _db_entity(ingested_wiki, "locations", "aldara") is None
         assert _db_entity(ingested_wiki, "characters", "theron") is None
@@ -623,33 +625,43 @@ class TestMultiTargetBundle:
 def _make_proposal_for_view(
     *, target: str, proposed_id: str, section: str = "founding"
 ) -> proposal_yaml.Proposal:
+    from auto_lorebook.proposal_yaml import ProposalTarget  # noqa: PLC0415
+
     return proposal_yaml.Proposal(
-        proposal_type="new_entity_with_facts",
-        target_entity=target,
         proposed_id=proposed_id,
         claim_group_id="cg-001",
+        targets=[
+            ProposalTarget(
+                entity=target,
+                section=section,
+                speaker="DM",
+                proposal_type="new_entity_with_facts",
+            ),
+        ],
         text=f"{target} was founded in the Second Age.",
         raw_transcript_span=f"{target} was founded in the Second Age.",
         text_corrects_transcript=False,
+        corrections_applied=[],
         source_id="yt-x",
         locator="0:00:08-0:00:18",
-        speaker="DM",
         reading_section="[0:00:00-0:00:30] Founding",
         reading_bullet_index=0,
         status="authoritative",
         session_date="2026-04-15",
-        section=section,
         context_before="",
         context_after="",
     )
 
 
 def _two_target_view() -> BundleView:
+    p_aldara = _make_proposal_for_view(target="Aldara", proposed_id="aldara-f001")
+    p_theron = _make_proposal_for_view(
+        target="Theron", proposed_id="theron-f001", section="lineage"
+    )
     targets = (
         TargetView(
-            proposal=_make_proposal_for_view(
-                target="Aldara", proposed_id="aldara-f001"
-            ),
+            proposal=p_aldara,
+            target=p_aldara.targets[0],
             is_new_entity=True,
             new_entity_category="locations",
             created_earlier_in_session=False,
@@ -657,9 +669,8 @@ def _two_target_view() -> BundleView:
             matched_via=None,
         ),
         TargetView(
-            proposal=_make_proposal_for_view(
-                target="Theron", proposed_id="theron-f001", section="lineage"
-            ),
+            proposal=p_theron,
+            target=p_theron.targets[0],
             is_new_entity=True,
             new_entity_category="characters",
             created_earlier_in_session=False,
@@ -842,7 +853,7 @@ class TestInteractiveReviewerUndoIntegration:
         # No proposals remain in DB.
         assert _db_proposal_count(ingested_wiki, "yt-abc12345678") == 0
         out = capsys.readouterr().out
-        assert "approved=3" in out
+        assert "approved=1" in out
 
     def test_undo_then_reject_still_rejects_whole_bundle(
         self,
@@ -893,4 +904,4 @@ class TestInteractiveReviewerUndoIntegration:
         # No proposals remain in DB.
         assert _db_proposal_count(ingested_wiki, "yt-abc12345678") == 0
         out = capsys.readouterr().out
-        assert "rejected=3" in out
+        assert "rejected=1" in out
