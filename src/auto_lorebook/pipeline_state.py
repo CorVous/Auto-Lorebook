@@ -1,0 +1,74 @@
+"""Pipeline state: detect next incomplete stage for a source."""
+
+from __future__ import annotations
+
+from enum import Enum
+from typing import TYPE_CHECKING
+
+from auto_lorebook import wiki_state
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from auto_lorebook.config import Config
+
+
+class Stage(Enum):
+    """Pipeline stages in execution order."""
+
+    INGEST = "ingest"
+    GENERATE_READING = "generate_reading"
+    APPROVE_READING = "approve_reading"
+    PLAN = "plan"
+    EXTRACT = "extract"
+    REVIEW = "review"
+
+
+def first_missing_stage(
+    cfg: Config,
+    source_id: str,
+    *,
+    wiki_override: str | None,
+) -> Stage | None:
+    """Return first incomplete stage, or None when all stages done.
+
+    Pure filesystem inspection — no I/O side effects.
+
+    Detector table:
+      INGEST        : <wiki>/sources/<sid>/info.yaml exists
+      GENERATE_READING : pending/<sid>/reading/reading.yaml exists
+      APPROVE_READING  : <wiki>/sources/<sid>/reading.md exists
+      PLAN          : pending/<sid>/plan.yaml exists
+      EXTRACT       : pending/<sid>/proposals/ exists and non-empty
+      REVIEW (done) : plan.yaml exists AND proposals dir empty or absent
+    """
+    wiki_root: Path = cfg.resolve_active_wiki(wiki_override)
+
+    info_yaml = wiki_root / "sources" / source_id / "info.yaml"
+    if not info_yaml.exists():
+        return Stage.INGEST
+
+    sidecar = wiki_state.pending_reading_dir(wiki_root, source_id) / "reading.yaml"
+    wiki_reading = wiki_root / "sources" / source_id / "reading.md"
+
+    # wiki-side reading.md implies GENERATE_READING + APPROVE_READING both done
+    if not wiki_reading.exists():
+        if not sidecar.exists():
+            return Stage.GENERATE_READING
+        return Stage.APPROVE_READING
+
+    plan_yaml = wiki_state.pending_plan_path(wiki_root, source_id)
+    if not plan_yaml.exists():
+        return Stage.PLAN
+
+    proposals_dir = wiki_state.pending_proposals_dir(wiki_root, source_id)
+    if proposals_dir.exists():
+        if any(proposals_dir.iterdir()):
+            return Stage.REVIEW
+        # dir exists but empty → extract not yet populated
+        return Stage.EXTRACT
+    # proposals dir absent: use sidecar as proxy for pipeline completion
+    # sidecar exists → reading was generated normally → full pipeline ran → done
+    if sidecar.exists():
+        return None
+    return Stage.EXTRACT
