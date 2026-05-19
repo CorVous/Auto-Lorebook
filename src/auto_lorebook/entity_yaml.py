@@ -8,13 +8,16 @@ read→write round-trip.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from auto_lorebook._io import atomic_write_text
+
+# re-export so callers importing slugify from entity_yaml keep working
+from auto_lorebook.entities import normalize_name as _normalize_name
+from auto_lorebook.entities import slugify as slugify  # noqa: PLC0414
 from auto_lorebook.schema import SchemaVersionError, read_schema_version
 
 if TYPE_CHECKING:
@@ -24,7 +27,7 @@ _logger = logging.getLogger(__name__)
 
 _MAX_SCHEMA = 1
 
-# the six entity categories; mirrors `entity_index._CATEGORIES`
+# six entity categories; mirrors DDL CHECK in db/ddl.py
 CATEGORIES: tuple[str, ...] = (
     "characters",
     "locations",
@@ -87,19 +90,8 @@ class Entity:
 
 
 def normalize_alias_name(name: str) -> str:
-    """Case-fold + whitespace-trim for dedup and lookup comparisons."""
-    return name.strip().casefold()
-
-
-_SLUG_STRIP_RE = re.compile(r"[^a-z0-9-]+")
-_SLUG_DASH_RE = re.compile(r"-+")
-
-
-def slugify(name: str) -> str:
-    """Canonical slug for an entity name. Empty input → empty string."""
-    s = name.strip().casefold().replace(" ", "-")
-    s = _SLUG_STRIP_RE.sub("-", s)
-    return _SLUG_DASH_RE.sub("-", s).strip("-")
+    """Delegate to entities.normalize_name (NFKC + casefold + collapse whitespace)."""
+    return _normalize_name(name)
 
 
 def _alias_from_dict(data: Any) -> Alias | None:  # noqa: ANN401

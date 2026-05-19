@@ -1,180 +1,106 @@
 # Entity model
 
-An entity is a character, location, faction, event, item, or concept
-in the wiki. Entity identity lives entirely in entity YAMLs — the
-filesystem is the registry; no separate index file.
+Entity identity lives in the `entities` and `aliases` tables of
+`wiki.db`. See [ADR-0004](../adr/0004-sqlite-replaces-yaml-wiki-store.md) for the
+rationale and the full transition timeline.
 
-## Entity YAML schema
+## `entities` table
 
-`<category>/<slug>.yaml`:
+| Column | Type | Notes |
+|---|---|---|
+| `category` | TEXT | One of `characters`, `locations`, `factions`, `events`, `items`, `concepts`. Part of PK. |
+| `slug` | TEXT | URL-safe identifier, lowercase, hyphen-separated. Part of PK. |
+| `canonical_name` | TEXT | Display name. Rename only touches this column — `slug` never changes. |
+| `superseded_by_category` | TEXT | Nullable FK to `entities(category, slug)`. Set on merge. |
+| `superseded_by_slug` | TEXT | Nullable FK to `entities(category, slug)`. Set on merge. |
+| `created_at` | TEXT | ISO-8601 timestamp. |
+| `created_by_ingest` | TEXT | Ingest ID that first created this entity. |
+| `updated_at` | TEXT | ISO-8601 timestamp, updated on rename or supersession. |
 
-```yaml
-schema_version: 1
-entity: Aldara
-category: locations
-slug: aldara
-aliases:
-  - name: Kingdom of Aldara
-    added_by_ingest: ingest-2026-01-16-a
-    added_at: 2026-01-16T14:32:11Z
-    source: hand-edited          # hand-edited | alias-confirmation | stub-creation | promoted-from-merge
-  - name: Aldaran Realm
-    added_by_ingest: ingest-2026-01-16-a
-    added_at: 2026-01-16T14:47:03Z
-    source: alias-confirmation
-  - name: the Realm
-    added_by_ingest: ingest-2026-02-03-b
-    added_at: 2026-02-03T19:14:55Z
-    source: alias-confirmation
-superseded_by: null              # or "<category>/<slug>" when merged
-created_at: 2026-01-16T14:32:11Z
-created_by_ingest: ingest-2026-01-16-a
-updated_at: 2026-02-03T19:14:55Z
+**Rules:**
 
-facts:
-  - id: aldara-f001
-    text: "Theron's grandfather founded Aldara in the Second Age."
-    raw_transcript_span: "Fair-on's grandfather founded all-dara in the Second Age."
-    text_corrects_transcript: true
-    corrections_applied:
-      - from: "Fair-on"
-        to: "Theron"
-        source: global-transcription-correction
-      - from: "all-dara"
-        to: "Aldara"
-        source: reading-name-correction
-    edited_by_human: false
-    edited_at: null
-    text_source: null              # set to original LLM text when edited_by_human
-    source_id: yt-abc123
-    locator: "0:04:32-0:04:41"
-    speaker: DM
-    status: authoritative       # authoritative | trustworthy | hearsay | disproven
-    status_reason: null
-    status_history:
-      - status: authoritative
-        at: 2026-01-16T18:22:47Z
-        by: human-review
-        reason: null
-    session_date: 2026-01-15
-    approved_at: 2026-01-16T18:22:47Z
-    created_by_ingest: ingest-2026-01-16-a
-    claim_group_id: cg-ingest-2026-01-16-a-001
-    section: founding
-```
+- `(category, slug)` is the primary key and the stable identity. It
+  never changes after creation, even through renames.
+- Renaming an entity updates only `canonical_name` and `updated_at`.
+- Supersession records that this entity was merged into another.
+  The file (and DB row) persist as a historical record. Most queries
+  filter out superseded entities by default.
 
-## Field semantics
+## `aliases` table
 
-### Entity-level
+| Column | Type | Notes |
+|---|---|---|
+| `entity_category` | TEXT | FK to `entities(category)`. |
+| `entity_slug` | TEXT | FK to `entities(slug)`. |
+| `name` | TEXT | Original casing preserved. |
+| `name_normalized` | TEXT | Result of `normalize_name(name)` — used for lookup. |
+| `added_by_ingest` | TEXT | Ingest ID that added the alias. |
+| `added_at` | TEXT | ISO-8601 timestamp. |
+| `source` | TEXT | One of five values (see below). |
 
-- **`slug`** — filename stem. Renames are explicit: change `slug`, the
-  tool moves the file.
-- **`aliases`** — list of records, each
-  `{name, added_by_ingest, added_at, source}`. `source` is one of:
-    - `hand-edited` — user added directly to the YAML.
-    - `alias-confirmation` — approved during a review alias
-      sub-prompt.
-    - `stub-creation` — accompanied the entity's first approved fact.
-    - `promoted-from-merge` — carried over when a superseded entity
-      was merged in. `added_by_ingest` is copied from the source
-      entity's record, not the merge ingest, to preserve provenance.
+**Primary key:** `(entity_category, entity_slug, name_normalized)`.
 
-    Duplicate names are deduplicated on write, keeping the earliest
-    record. Aliases are compared by normalized name (case-insensitive,
-    whitespace-trimmed); the record preserves the user's original
-    casing.
-- **`superseded_by`** — null, or `"<category>/<slug>"` pointing to
-  the entity this one was merged into. The planner's entity index
-  resolves mentions of this entity (including its aliases) to the
-  target. The file stays as a historical record.
-- **`created_by_ingest`** — the ingest that first created this entity
-  stub (via the first approved fact targeting it). Used for
-  `reject-ingest` cleanup and to derive the "created earlier in this
-  review session" display note.
+This gives per-entity uniqueness: the same normalized name may appear
+as an alias on multiple entities (cross-entity collision). That
+ambiguity is surfaced at lookup time — `get_by_alias` returns `None`
+when ambiguous and `category=None`; pass `category=` to disambiguate.
 
-### Fact-level
+**`source` values:**
 
-- **`id`** — stable across renames and edits. Assigned at approval.
-- **`text`** — current displayed version. Starts as extracted span
-  with corrections applied; can be edited by human during review.
-- **`raw_transcript_span`** — literal substring of the source
-  transcript. Immutable. Evidence.
-- **`text_corrects_transcript`** — true if `text` differs from
-  `raw_transcript_span` (either through corrections or human edits).
-- **`corrections_applied`** — audit trail of substitutions, with
-  source (`global-transcription-correction`, `reading-name-correction`,
-  or `human-edit`).
-- **`text_source`** — when `edited_by_human` is true, the original
-  pre-edit `text` (post-corrections) is preserved here so the audit
-  trail isn't lost. `null` when the fact was approved without edits.
-- **`source_id`** — foreign key to `sources/<source_id>/info.yaml`.
-- **`locator`** — timestamp range in canonical `h:mm:ss-h:mm:ss`
-  format for audio/video, or line range for text. See
-  [timestamps](timestamps.md).
-- **`speaker`** — free-text attribution. Conventions: "DM",
-  "Player-Thorin", "Innkeeper NPC", "Narrator".
-- **`status`** — epistemic tier:
-    - **Authoritative** — stated by the canonical voice (DM
-      narration, worldbuilding-video author, notes by the setting's
-      author). The setting itself vouches for it.
-    - **Trustworthy** — stated within fiction by a source with
-      plausible domain knowledge over the claim (a maester on
-      heraldry, a priest on their own god's rites, a guild captain
-      on guild history). Not canonical voice, but not idle gossip
-      either — the source has standing on _this topic_.
-    - **Hearsay** — stated within fiction by a source without special
-      standing on the claim (tavern rumor, street talk, secondhand
-      retelling, NPC speculation outside their expertise).
-    - **Disproven** — superseded by a later authoritative fact.
+- `hand-edited` — user added directly to YAML or CLI.
+- `alias-confirmation` — approved during a review alias sub-prompt.
+- `stub-creation` — accompanied the entity's first approved fact.
+- `promoted-from-merge` — carried over when a superseded entity was
+  merged in. `added_by_ingest` is copied from the source entity's
+  record to preserve provenance.
+- `cli-edit` — added or edited via the `entities` CLI subcommand.
 
-    Domain knowledge is topic-scoped: the same NPC can produce
-    `trustworthy` facts on their specialty and `hearsay` facts on
-    unrelated subjects. When in doubt between trustworthy and
-    hearsay, prefer hearsay — the distinction is meant to elevate
-    clear domain authority, not to launder every speaker with a
-    title.
-- **`status_reason`** — required for `trustworthy`, `hearsay`, and
-  `disproven`; free-text. For `trustworthy`, name the domain warrant
-  (e.g., "Speaker is the court maester discussing bloodline
-  heraldry"). For `hearsay`, note why the source is unreliable. For
-  `disproven`, cite the superseding fact.
-- **`status_history`** — full log of status changes. Each entry
-  carries `status`, `at`, `by` (e.g., `human-review`, `ingest-<id>`,
-  `migration`), and `reason`. Append-only.
-- **`session_date`** — when the claim entered canon. Can be null.
-- **`approved_at`** — when the human approved the fact.
-- **`created_by_ingest`** — ID of the ingest session that produced
-  this fact. Used to bulk-reject an ingest if needed.
-- **`claim_group_id`** — populated when this fact was routed to
-  multiple entities from the same claim; null for single-target
-  claims. Facts sharing a `claim_group_id` across entity YAMLs share
-  the same `raw_transcript_span`, `locator`, `source_id`, and (at
-  approval time) `text`. Scoped to the ingest: IDs are formatted
-  `cg-<ingest_id>-NNN` so a group ID is globally unique without a
-  separate registry.
-- **`section`** — organizational bucket within the entity page
-  (founding, government, legends, etc.). Free-text; the
-  [summarizer](../pipeline/summarizer.md) normalizes case and trims
-  whitespace when grouping.
+## Normalization
 
-## Entity index
+`normalize_name(name)` applies:
 
-The filesystem is the source of truth. An entity exists iff
-`<category>/<slug>.yaml` exists. Canonical name, aliases, category,
-and merge status all live in the entity YAML.
+1. **NFKC** — decomposes compatibility forms (fullwidth, ligatures, etc.)
+2. **casefold** — locale-agnostic lowercasing.
+3. **strip** — leading/trailing whitespace removed.
+4. **collapse whitespace** — runs of internal whitespace → single space.
 
-The planner builds an in-memory index from entity YAMLs at the start
-of each command that needs one. The review loop refreshes the index
-after each approval so that entities created earlier in a review
-session are visible to later proposals in the same session. At small
-scale (hundreds of entities) this is fast; if it becomes slow, the
-tool may cache the index at `.cache/entity-index.json`. The cache is
-never authoritative — it is rebuilt from YAMLs whenever any entity
-YAML changes.
+Worked examples:
 
-`auto-lorebook entities rebuild-index` is reserved for that future
-cache. Until a cache exists, it is a no-op that prints a status line —
-the in-memory index is rebuilt on every command run regardless.
+| Input | Output |
+|---|---|
+| `"  King Theron  "` | `"king theron"` |
+| `"Ａｌｄａｒａ"` (fullwidth) | `"aldara"` |
+
+The stored `name_normalized` is what all alias lookups compare against.
+The original `name` field preserves the user's casing.
+
+## Supersession resolution
+
+`resolve(conn, category, slug)` follows the `superseded_by_*` chain
+until it reaches an entity with no successor, returning that leaf. The
+`max_hops` parameter (default 16) guards against cycles introduced by
+direct SQL manipulation — `supersede()` prevents cycles at the Python
+layer but the guard covers edge cases.
+
+`list_entities` and `render_for_preamble` exclude superseded entities
+by default (pass `include_superseded=True` to override).
+
+## Visibility
+
+One SQLite connection per command invocation, opened in autocommit mode
+(`isolation_level=None`). Writes are immediately visible to subsequent
+reads on the same connection within the session. The review loop
+exploits this: after approving a new entity, `lookup_by_planner_name`
+finds it on the next proposal without reopening the DB.
+
+## Transitional dual-write (issues #71–#74)
+
+During this window YAML files and the DB are both written on entity
+creation and alias confirmation. The DB is the live source of truth for
+preamble generation and entity lookup. YAMLs are still written because
+the facts module and Stage 4 summary regen still read them. Issue #74
+will cut the YAML write path and make the DB the sole store for entity
+identity data. ADR-0004 is the long arc.
 
 ## Global transcription corrections
 
@@ -199,11 +125,10 @@ from entity aliases (semantic, in-world) and from per-source
 
 ### Application
 
-- **Reading stage** — the tool applies corrections as literal
-  substitutions to the transcript before the LLM sees it in 1a, and
-  includes them in every substage's preamble as an explicit
-  instruction. Per-source `name_corrections` stack on top; per-source
-  wins on conflict.
+- **Reading stage** — corrections applied as literal substitutions to
+  the transcript before the LLM sees it in 1a, and included in every
+  substage's preamble as an explicit instruction. Per-source
+  `name_corrections` stack on top; per-source wins on conflict.
 - **Extractor stage** — applies the union of global corrections and
   approved reading's `name_corrections` when producing `text` from
   `raw_transcript_span`. Each substitution is logged in

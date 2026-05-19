@@ -18,9 +18,10 @@ with the first approval of a fact targeting it:
 3. Aliases confirmed during any approval for that entity are merged
    into its `aliases` list (on stub creation for the first approval;
    on update for later ones).
-4. The in-memory entity index is refreshed after each approval, so a
-   proposal reviewed later in the same session that references an
-   entity created earlier in the session sees it as existing.
+4. The DB connection persists across the review session, so a proposal
+   reviewed later in the same session that references an entity created
+   earlier in the session sees it as existing — writes are immediately
+   visible on the same connection.
 
 If every proposal for a proposed new entity is rejected, no stub is
 ever written. This falls out of the design rather than requiring

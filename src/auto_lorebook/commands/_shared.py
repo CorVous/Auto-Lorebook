@@ -8,11 +8,12 @@ from typing import TYPE_CHECKING
 from auto_lorebook import config as cfg_mod
 from auto_lorebook import (
     corrections,
-    entity_index,
     info_yaml,
     interactive,
     wiki_context,
 )
+from auto_lorebook import db as db_mod
+from auto_lorebook import entities as entities_mod
 from auto_lorebook import preamble as preamble_mod
 from auto_lorebook.config import ConfigError
 
@@ -89,9 +90,10 @@ def finalize_context(
         wiki_root=wiki_repo,
     )
 
-    idx = entity_index.build(wiki_repo)
+    conn = db_mod.open(wiki_repo / ".wiki-state" / "wiki.db")
+    entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
     try:
-        p = preamble_mod.assemble(info, wc, cors, idx, reduced=False)
+        p = preamble_mod.assemble(info, wc, cors, entity_snippet, reduced=False)
         p.check_budget(
             context_window=cfg.models.primary_context_window,
             budget_fraction=cfg.preamble.budget_fraction,

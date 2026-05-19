@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from auto_lorebook.corrections import Corrections
-    from auto_lorebook.entity_index import EntityIndex
     from auto_lorebook.info_yaml import Info
     from auto_lorebook.wiki_context import WikiContext
 
@@ -120,10 +119,6 @@ def _render_corrections(corrections: Corrections) -> str:
     return "\n".join(lines)
 
 
-def _render_entities(entity_index: EntityIndex) -> str:
-    return entity_index.render_for_preamble()
-
-
 def _section(title: str, body: str) -> str:
     return f"## {title}\n\n{body}"
 
@@ -132,12 +127,14 @@ def assemble(
     info: Info,
     wiki_context: WikiContext,
     corrections: Corrections,
-    entity_index: EntityIndex,
+    entity_snippet: str,
     *,
     reduced: bool,
 ) -> AssembledPreamble:
     """Assemble a deterministic preamble string.
 
+    :param entity_snippet: pre-rendered entity section
+        (from ``entities.render_for_preamble``)
     :param reduced: if True, emit only corrections + entity sections
                     (for the extractor stage)
     """
@@ -151,7 +148,7 @@ def assemble(
         sections[_SEC_SETTING] = setting_body or "(none)"
 
     sections[_SEC_CORRECTIONS] = _render_corrections(corrections)
-    sections[_SEC_ENTITIES] = _render_entities(entity_index)
+    sections[_SEC_ENTITIES] = entity_snippet
 
     if reduced:
         order = [_SEC_CORRECTIONS, _SEC_ENTITIES]

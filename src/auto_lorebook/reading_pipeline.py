@@ -16,9 +16,8 @@ from auto_lorebook import config as cfg_mod
 from auto_lorebook import (
     corrections as corrections_mod,
 )
-from auto_lorebook import (
-    entity_index as entity_index_mod,
-)
+from auto_lorebook import db as db_mod
+from auto_lorebook import entities as entities_mod
 from auto_lorebook import entity_yaml as entity_yaml_mod
 from auto_lorebook import gap_check as gap_check_mod
 from auto_lorebook import info_yaml as info_yaml_mod
@@ -40,6 +39,7 @@ from auto_lorebook import wiki_state as wiki_state_mod
 from auto_lorebook.openrouter import OpenRouterClient, OpenRouterError
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
 
     from auto_lorebook.gap_check import GapWarning
@@ -362,8 +362,9 @@ def plan(
         raise ReadingPipelineError(str(e)) from e
     wc = wiki_context_mod.read(wiki_repo / ".wiki-context.yaml")
     cors = corrections_mod.read(wiki_repo / ".transcription-corrections.yaml")
-    idx = entity_index_mod.build(wiki_repo)
-    p = preamble_mod.assemble(info, wc, cors, idx, reduced=False)
+    conn = db_mod.open(wiki_repo / ".wiki-state" / "wiki.db")
+    entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
+    p = preamble_mod.assemble(info, wc, cors, entity_snippet, reduced=False)
     try:
         p.check_budget(
             context_window=cfg.models.primary_context_window,
@@ -433,13 +434,14 @@ def extract(
         raise ReadingPipelineError(str(e)) from e
     cors = corrections_mod.read(wiki_repo / ".transcription-corrections.yaml")
     wc = wiki_context_mod.read(wiki_repo / ".wiki-context.yaml")
-    idx = entity_index_mod.build(wiki_repo)
+    conn = db_mod.open(wiki_repo / ".wiki-state" / "wiki.db")
+    entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
     try:
         loaded = transcript_mod.load(wiki_repo, info, cors)
     except transcript_mod.TranscriptError as e:
         raise ReadingPipelineError(str(e)) from e
 
-    p = preamble_mod.assemble(info, wc, cors, idx, reduced=True)
+    p = preamble_mod.assemble(info, wc, cors, entity_snippet, reduced=True)
     try:
         p.check_budget(
             context_window=cfg.models.primary_context_window,
@@ -449,7 +451,7 @@ def extract(
         raise ReadingPipelineError(str(e)) from e
 
     existing_fact_counts, existing_slugs = _collect_existing_target_metadata(
-        wiki_repo, plan_obj, idx
+        wiki_repo, plan_obj, conn
     )
 
     client = _build_client(cfg)
@@ -493,7 +495,7 @@ def extract(
 def _collect_existing_target_metadata(
     wiki_repo: Path,
     plan_obj: Plan,
-    idx: entity_index_mod.EntityIndex,
+    conn: sqlite3.Connection,
 ) -> tuple[dict[str, int], dict[str, str]]:
     """Per-target fact counts and slugs for entities resolving to disk."""
     fact_counts: dict[str, int] = {}
@@ -504,7 +506,7 @@ def _collect_existing_target_metadata(
                 continue
             if target.entity_state == "new":
                 continue
-            entry = idx.lookup(target.entity)
+            entry = entities_mod.lookup_by_planner_name(conn, target.entity)
             if entry is None:
                 # planner said "existing" but we can't resolve — treat as new
                 # so allocation still works deterministically
@@ -719,14 +721,15 @@ def _load_context(
 
     wc = wiki_context_mod.read(wiki_repo / ".wiki-context.yaml")
     cors = corrections_mod.read(wiki_repo / ".transcription-corrections.yaml")
-    idx = entity_index_mod.build(wiki_repo)
+    conn = db_mod.open(wiki_repo / ".wiki-state" / "wiki.db")
+    entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
 
     try:
         loaded = transcript_mod.load(wiki_repo, info, cors)
     except transcript_mod.TranscriptError as e:
         raise ReadingPipelineError(str(e)) from e
 
-    p = preamble_mod.assemble(info, wc, cors, idx, reduced=False)
+    p = preamble_mod.assemble(info, wc, cors, entity_snippet, reduced=False)
     try:
         p.check_budget(
             context_window=cfg.models.primary_context_window,

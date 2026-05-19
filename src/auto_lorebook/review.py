@@ -19,9 +19,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from auto_lorebook import config as cfg_mod
-from auto_lorebook import (
-    entity_index as entity_index_mod,
-)
+from auto_lorebook import db as db_mod
+from auto_lorebook import entities as entities_mod
 from auto_lorebook import entity_yaml as entity_yaml_mod
 from auto_lorebook import info_yaml as info_yaml_mod
 from auto_lorebook import plan_yaml as plan_yaml_mod
@@ -31,6 +30,7 @@ from auto_lorebook.entity_yaml import Alias, Entity, normalize_alias_name
 from auto_lorebook.timestamps import format_iso_now
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
 
     from auto_lorebook.info_yaml import Info
@@ -367,7 +367,7 @@ class _ApprovalContext:
     source_id: str
     info: Info
     plan: Plan
-    index: entity_index_mod.EntityIndex
+    conn: sqlite3.Connection
     merged_aliases: set[tuple[str, str]] = field(default_factory=set)
     declined_aliases: set[tuple[str, str]] = field(default_factory=set)
 
@@ -393,7 +393,7 @@ def _resolve_entity_path(
         path = ctx.wiki_repo / category / f"{slug}.yaml"
         return path, slug, category
 
-    entry = ctx.index.lookup(proposal.target_entity)
+    entry = entities_mod.lookup_by_planner_name(ctx.conn, proposal.target_entity)
     if entry is None:
         msg = (
             f"proposal {proposal.proposed_id}: target {proposal.target_entity!r} "
@@ -467,13 +467,59 @@ def _approve(
         )
     entity_yaml_mod.write(entity, path)
     proposal_path.unlink(missing_ok=True)
-    # refresh in-memory index so siblings later in the loop see this entity
-    ctx.index = entity_index_mod.build(ctx.wiki_repo)
+    # dual-write: also upsert into DB so in-session lookup works immediately
+    _upsert_entity_to_db(ctx.conn, entity, confirmed_aliases, ctx.source_id, now)
     # record merged aliases so sibling prompts skip them
     target_key = proposal.target_entity.casefold()
     for alias in confirmed_aliases:
         ctx.merged_aliases.add((target_key, normalize_alias_name(alias)))
     return True
+
+
+def _upsert_entity_to_db(
+    conn: sqlite3.Connection,
+    entity: Entity,
+    confirmed_aliases: list[str],
+    ingest_id: str,
+    now: str,
+) -> None:
+    """Write entity + confirmed_aliases to DB (INSERT OR IGNORE; idempotent)."""
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO entities
+            (category, slug, canonical_name,
+             superseded_by_category, superseded_by_slug,
+             created_at, created_by_ingest, updated_at)
+        VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)
+        """,
+        (
+            entity.category,
+            entity.slug,
+            entity.entity,
+            entity.created_at or now,
+            ingest_id,
+            entity.updated_at or now,
+        ),
+    )
+    for alias_name in confirmed_aliases:
+        normalized = entities_mod.normalize_name(alias_name)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO aliases
+                (entity_category, entity_slug, name, name_normalized,
+                 added_by_ingest, added_at, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                entity.category,
+                entity.slug,
+                alias_name,
+                normalized,
+                ingest_id,
+                now,
+                "alias-confirmation",
+            ),
+        )
 
 
 def _reject(proposal_path: Path) -> None:
@@ -498,7 +544,9 @@ def _build_target_view(ctx: _ApprovalContext, proposal: Proposal) -> TargetView:
     matched_via = _matched_via_for(ctx.plan, proposal)
     created_earlier = False
     if is_new:
-        existing_entry = ctx.index.lookup(proposal.target_entity)
+        existing_entry = entities_mod.lookup_by_planner_name(
+            ctx.conn, proposal.target_entity
+        )
         if existing_entry is not None:
             entity_path = (
                 ctx.wiki_repo / existing_entry.category / f"{existing_entry.slug}.yaml"
@@ -608,7 +656,7 @@ def _seed_merged_aliases_from_disk(ctx: _ApprovalContext) -> None:
             if target.entity in seen:
                 continue
             seen.add(target.entity)
-            entry = ctx.index.lookup(target.entity)
+            entry = entities_mod.lookup_by_planner_name(ctx.conn, target.entity)
             if entry is None:
                 continue
             path = ctx.wiki_repo / entry.category / f"{entry.slug}.yaml"
@@ -650,14 +698,16 @@ def run(
         raise ReviewError(msg)
     plan = plan_yaml_mod.read(plan_path)
     _validate_proposals_subset_of_plan(plan, source_id)
-    index = entity_index_mod.build(wiki_repo)
+    conn = db_mod.open(wiki_repo / ".wiki-state" / "wiki.db")
+    # backfill DB from YAMLs on first run (idempotent)
+    entities_mod.list_entities(conn, wiki_repo=wiki_repo)
     ctx = _ApprovalContext(
         cfg=cfg,
         wiki_repo=wiki_repo,
         source_id=source_id,
         info=info,
         plan=plan,
-        index=index,
+        conn=conn,
     )
     _seed_merged_aliases_from_disk(ctx)
 

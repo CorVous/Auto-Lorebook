@@ -292,7 +292,7 @@ class TestRebuildIndex:
         _write_entity(configured_wiki, category="characters", slug="x", name="X")
         rc = entities_cmd.run(_ns("rebuild-index"))
         assert rc == 0
-        assert "no cache in use" in capsys.readouterr().out
+        assert "DB-backed" in capsys.readouterr().out
 
 
 def test_argparse_requires_subaction() -> None:

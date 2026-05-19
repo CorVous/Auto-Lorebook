@@ -56,7 +56,7 @@ Every YAML file carries `schema_version` as its first key — see
   hand-editable as the designated post-approval edit surface.
 - **Purpose** — canonical name, aliases, and facts for a single
   entity. The source of truth for entity state.
-- **Details** — [entity model](../architecture/entity-model.md#entity-yaml-schema).
+- **Details** — [entity model](../architecture/entity-model.md#entities-table).
 
 ### `<category>/<slug>.md`
 
