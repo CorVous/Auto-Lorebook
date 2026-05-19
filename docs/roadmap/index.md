@@ -21,11 +21,12 @@ implementation status.
     `entities rebuild-index` is a placeholder until a disk cache
     materialises.
 
-    Phase 3 (planner) landed: Stage 2 LLM planner runs automatically
-    after `approve-reading`, writes `pending/<source_id>/plan.yaml`
-    with no filesystem side effects (new entities and aliases are
-    proposals only), supports multi-target routing per claim, and
-    exposes `plans list` / `plans show` for inspection.
+    Phase 3 (planner) landed: Stage 2 LLM planner (`auto-lorebook plan
+    <id>`) writes `pending/<source_id>/plan.yaml` with no filesystem
+    side effects (new entities and aliases are proposals only), supports
+    multi-target routing per claim, and exposes `plans list` /
+    `plans show` for inspection. Automatic chaining after
+    `approve-reading` is a planned ergonomics improvement (see #59).
 
     Phase 4 extractor landed: Stage 3 runs automatically after the
     planner, parallelised per `PlannedClaim`, with reduced preamble,
@@ -155,11 +156,11 @@ this phase but are deferred — `rename` to whenever a real need surfaces,
   per-target section and rationale.
 - `plans list` and `plans show` inspection commands.
 
-**Exit criterion** — ingest a source, review reading, planner runs
-automatically and produces a plan. New entities are _proposals on the
-plan_, not files in the wiki. Aliases are proposed, not yet written.
-At least one planned claim in a representative session routes to
-multiple targets. ✓
+**Exit criterion** — ingest a source, review reading, run
+`auto-lorebook plan <id>`, and confirm a plan is produced. New entities
+are _proposals on the plan_, not files in the wiki. Aliases are
+proposed, not yet written. At least one planned claim in a
+representative session routes to multiple targets. ✓
 
 `replan` was spec'd alongside this phase but landed in Phase 4
 once the extractor + review loop gave it something to discard.

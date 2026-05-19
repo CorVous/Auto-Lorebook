@@ -224,9 +224,6 @@ Setting [Aether Chronicles]:
 Any notes? (one line, or Enter to skip): Picks up mid-session after a long rest.
 
 Context saved to sources/yt-abc123/info.yaml.
-
-Generate reading now? [Y/n]: y
-Generating reading (segment → attribute → summarize)...
 ```
 
 Speakers are not prompted for at ingest time. They're defined once in
@@ -234,10 +231,8 @@ Speakers are not prompted for at ingest time. They're defined once in
 sources. Per-source speaker variation (guest players, one-off NPCs)
 can be added to `info.yaml` manually if needed.
 
-After context is captured, the tool offers to run the reading pipeline
-immediately. Declining leaves the source at "context captured, reading
-not yet generated"; the user runs `auto-lorebook generate-reading
-<source_id>` manually later.
+After context is captured, run the reading pipeline with
+`auto-lorebook generate-reading <source_id>`.
 
 ## Flags and non-interactive mode
 

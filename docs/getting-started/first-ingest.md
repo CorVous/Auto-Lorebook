@@ -37,8 +37,6 @@ Setting [Aether Chronicles]:
 Any notes? (one line, or Enter to skip): Picks up mid-session after a long rest.
 
 Context saved to sources/yt-abc123/info.yaml.
-
-Generate reading now? [Y/n]: y
 ```
 
 Context fields are optional — blank is allowed. Unfilled fields reduce
