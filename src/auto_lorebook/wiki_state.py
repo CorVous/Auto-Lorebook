@@ -14,7 +14,8 @@ PROPOSALS_DIRNAME = "proposals"
 PLAN_FILENAME = "plan.yaml"
 LAST_CONTEXT_FILENAME = "last-context.yaml"
 GITIGNORE_FILENAME = ".gitignore"
-GITIGNORE_BODY = "pending/\n"
+WIKI_DB_FILENAME = "wiki.db"
+GITIGNORE_BODY = "pending/\nwiki.db\nwiki.db-wal\nwiki.db-shm\n"
 
 
 def wiki_state_dir(wiki_root: Path) -> Path:
@@ -60,3 +61,8 @@ def last_context_path(wiki_root: Path) -> Path:
 def gitignore_path(wiki_root: Path) -> Path:
     """Return <wiki>/.wiki-state/.gitignore."""
     return wiki_state_dir(wiki_root) / GITIGNORE_FILENAME
+
+
+def wiki_db_path(wiki_root: Path) -> Path:
+    """Return <wiki>/.wiki-state/wiki.db."""
+    return wiki_state_dir(wiki_root) / WIKI_DB_FILENAME

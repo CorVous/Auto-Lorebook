@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from auto_lorebook import config as cfg_mod
+from auto_lorebook import db, wiki_state
 from auto_lorebook import wiki_bootstrap as wiki_bootstrap_mod
 from auto_lorebook.config import save_config
 from auto_lorebook.wiki_registry import WikiEntry, WikiRegistry, WikiRegistryError
@@ -189,12 +190,14 @@ def _run_use(args: argparse.Namespace, home: Path | None) -> int:
     reg = _build_registry(cfg)
     target = args.target
 
-    # known nickname → just switch
-    known = {e.nickname for e in reg.entries}
+    # known nickname → just switch (and ensure DB is initialised)
+    known = {e.nickname: e for e in reg.entries}
     if target in known:
         reg.set_active(target)
         cfg.active_wiki = reg.active
         save_config(cfg, home=home)
+        reg_path = known[target].path
+        db.open(wiki_state.wiki_db_path(reg_path)).close()
         print(f"active wiki: {target!r}")  # noqa: T201
         return 0
 

@@ -78,3 +78,8 @@ def test_pending_proposal_path_various_ids(source_id: str, proposal_id: str) -> 
     assert p.suffix == ".yaml"
     assert p.parent.name == "proposals"
     assert p.parent.parent.name == source_id
+
+
+def test_wiki_db_path_shape() -> None:
+    p = wiki_state.wiki_db_path(Path("/w"))
+    assert p == Path("/w/.wiki-state/wiki.db")

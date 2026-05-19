@@ -72,6 +72,18 @@ Every YAML file carries `schema_version` as its first key — see
 
 ## Tool state directory
 
+### `<wiki>/.wiki-state/wiki.db`
+
+- **Owner** — tool; never hand-edited.
+- **Purpose** — relational store for entities, facts, ingests, proposals,
+  and all other mutable tool state. Replaces per-file YAML for structured
+  data (YAML entity files remain the human-edit surface for now).
+- **Format** — SQLite 3; WAL journal mode; foreign keys enforced.
+- **Schema** — integer `schema_version`; migrated lazily by `db.open()`.
+  See [schema versioning](../architecture/schema-versioning.md#wiki-sqlite-database-wikidb).
+- **Excluded from git** — `.wiki-state/.gitignore` lists `wiki.db`,
+  `wiki.db-wal`, `wiki.db-shm`.
+
 ### `~/.auto-lorebook/config.yaml`
 
 - **Owner** — user.

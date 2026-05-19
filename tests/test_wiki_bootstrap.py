@@ -81,4 +81,58 @@ def test_preserves_existing_gitignore(tmp_path: Path) -> None:
 
     wiki_bootstrap.bootstrap(wiki)
 
-    assert gi.read_text(encoding="utf-8") == custom
+    content = gi.read_text(encoding="utf-8")
+    # original content preserved
+    assert "*.pyc" in content
+    assert "pending/" in content
+    # wiki.db lines appended
+    assert "wiki.db" in content
+
+
+def test_first_run_creates_wiki_db(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    wiki_bootstrap.bootstrap(wiki)
+    assert wiki_state.wiki_db_path(wiki).exists()
+
+
+def test_first_run_gitignore_excludes_wiki_db(tmp_path: Path) -> None:
+    wiki = tmp_path / "wiki"
+    wiki_bootstrap.bootstrap(wiki)
+    gi = wiki_state.gitignore_path(wiki)
+    content = gi.read_text(encoding="utf-8")
+    assert "wiki.db" in content
+    assert "wiki.db-wal" in content
+    assert "wiki.db-shm" in content
+
+
+def test_existing_gitignore_gets_wiki_db_lines_appended(tmp_path: Path) -> None:
+    """Gitignore without wiki.db token → appended; not rewritten."""
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    state_dir = wiki_state.wiki_state_dir(wiki)
+    state_dir.mkdir(parents=True)
+    gi = wiki_state.gitignore_path(wiki)
+    original = "*.pyc\n"
+    gi.write_text(original, encoding="utf-8")
+
+    wiki_bootstrap.bootstrap(wiki)
+
+    content = gi.read_text(encoding="utf-8")
+    assert content.startswith(original)  # original content at top
+    assert "wiki.db" in content
+
+
+def test_existing_gitignore_with_wiki_db_not_duplicated(tmp_path: Path) -> None:
+    """If wiki.db already in gitignore, don't duplicate."""
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    state_dir = wiki_state.wiki_state_dir(wiki)
+    state_dir.mkdir(parents=True)
+    gi = wiki_state.gitignore_path(wiki)
+    original = "pending/\nwiki.db\n"
+    gi.write_text(original, encoding="utf-8")
+
+    wiki_bootstrap.bootstrap(wiki)
+
+    content = gi.read_text(encoding="utf-8")
+    assert content.count("wiki.db") == 1
