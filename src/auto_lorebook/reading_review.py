@@ -155,11 +155,16 @@ def run(
     fires (every segment decided), writes the wiki-side `reading.md`.
     """
     wiki_repo = cfg.resolve_active_wiki(wiki_override)
-    info_path = wiki_repo / "sources" / source_id / "info.yaml"
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
+    from auto_lorebook import wiki_state as wiki_state_mod  # noqa: PLC0415
+
+    info_conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
     try:
-        info = info_yaml_mod.read(info_path)
+        info = info_yaml_mod.read(info_conn, source_id, wiki_repo=wiki_repo)
     except info_yaml_mod.InfoError as e:
         raise ReadingReviewError(str(e)) from e
+    finally:
+        info_conn.close()
 
     sidecar_path = pipeline_mod.pending_sidecar_path(source_id)
     if not sidecar_path.exists():

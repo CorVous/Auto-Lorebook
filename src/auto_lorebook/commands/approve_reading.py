@@ -391,10 +391,16 @@ def _interactive_session(
     # load source title for header
     source_title: str | None = None
     try:
+        from auto_lorebook import db as db_mod  # noqa: PLC0415
+        from auto_lorebook import wiki_state as wiki_state_mod  # noqa: PLC0415
+
         wiki_repo = cfg.resolve_active_wiki(wiki_override)
-        info_path = wiki_repo / "sources" / source_id / "info.yaml"
-        info = info_yaml_mod.read(info_path)
-        source_title = info.title
+        title_conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+        try:
+            info = info_yaml_mod.read(title_conn, source_id, wiki_repo=wiki_repo)
+            source_title = info.title
+        finally:
+            title_conn.close()
     except info_yaml_mod.InfoError:
         pass
 

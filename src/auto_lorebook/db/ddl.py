@@ -50,7 +50,8 @@ CREATE TABLE aliases (
 SOURCES = """
 CREATE TABLE sources (
     source_id       TEXT PRIMARY KEY,
-    source_type     TEXT NOT NULL CHECK(source_type IN ('youtube','srt','text')),
+    source_type     TEXT NOT NULL CHECK(source_type IN (
+                        'youtube','srt','text','markdown')),
     source_url      TEXT,
     title           TEXT,
     duration_seconds INTEGER,

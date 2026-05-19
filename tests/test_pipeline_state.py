@@ -27,7 +27,13 @@ def _cfg(wiki: Path) -> MagicMock:
 def _mk_info_yaml(wiki: Path, sid: str) -> None:
     d = wiki / "sources" / sid
     d.mkdir(parents=True, exist_ok=True)
-    (d / "info.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+    (d / "info.yaml").write_text(
+        "schema_version: 1\n"
+        f"source_id: {sid}\n"
+        "source_type: text\n"
+        "fetched_at: '2026-01-01T00:00:00Z'\n",
+        encoding="utf-8",
+    )
 
 
 def _mk_reading_sidecar(wiki: Path, sid: str) -> None:

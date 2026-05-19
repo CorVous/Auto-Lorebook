@@ -24,7 +24,6 @@ def _info(
         source_url=source_url,
         title=title,
         duration_seconds=600,
-        transcript_filename="transcript.en.srt",
         context=SourceContext(),
     )
 

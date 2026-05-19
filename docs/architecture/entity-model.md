@@ -104,7 +104,12 @@ identity data. ADR-0004 is the long arc.
 
 ## Global transcription corrections
 
-`.transcription-corrections.yaml` at the wiki root:
+The canonical store is the `transcription_corrections` and
+`correction_also_seen_in` tables in `wiki.db`. `.transcription-corrections.yaml`
+at the wiki root is the legacy hand-edit surface; on first read the tool
+lazy-backfills it into the DB and thereafter reads from the DB only.
+
+`.transcription-corrections.yaml` format reference:
 
 ```yaml
 schema_version: 1

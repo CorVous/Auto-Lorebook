@@ -56,7 +56,7 @@ def _write_info(wiki: Path) -> None:
                 "duration_seconds": info.duration_seconds,
                 "fetched_at": info.fetched_at,
                 "session_date": None,
-                "transcript_filename": info.transcript_filename,
+                "transcript_filename": "transcript.en.srt",
                 "caption_type": "manual",
                 "context": {
                     "perspective": None,

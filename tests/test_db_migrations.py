@@ -97,27 +97,29 @@ def test_old_schema_version_upgrades_to_current(tmp_path: Path) -> None:
 
 
 def test_multistep_upgrade_runs_each_migration_in_order(tmp_path: Path) -> None:
-    """Monkeypatch MIGRATIONS to add a no-op v2; verify order is preserved."""
+    """Monkeypatch MIGRATIONS to add a no-op v3; verify order is preserved."""
     db_path = tmp_path / "wiki.db"
     order: list[int] = []
 
-    def _migration_002_noop(conn: sqlite3.Connection) -> None:
-        order.append(2)
-        conn.execute("UPDATE schema_version SET version = 2")
+    def _migration_003_noop(conn: sqlite3.Connection) -> None:
+        order.append(3)
+        conn.execute("UPDATE schema_version SET version = 3")
 
-    extended = (*MIGRATIONS, _migration_002_noop)
+    extended = (*MIGRATIONS, _migration_003_noop)
+    # CURRENT_SCHEMA_VERSION must match len(extended) = 3
+    extended_version = len(extended)
 
     with (
         patch("auto_lorebook.db.connection.MIGRATIONS", extended),
-        patch("auto_lorebook.db.connection.CURRENT_SCHEMA_VERSION", 2),
-        patch("auto_lorebook.db.migrations.CURRENT_SCHEMA_VERSION", 2),
+        patch("auto_lorebook.db.connection.CURRENT_SCHEMA_VERSION", extended_version),
+        patch("auto_lorebook.db.migrations.CURRENT_SCHEMA_VERSION", extended_version),
     ):
         conn = db.open(db_path)
         version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
         conn.close()
 
-    assert version == 2
-    assert order == [2]  # migration 1 wrote its own version row; noop ran
+    assert version == extended_version
+    assert order == [3]  # migrations 1+2 ran implicitly; noop ran last
 
 
 def test_future_schema_version_raises_named_error(tmp_path: Path) -> None:
@@ -167,3 +169,58 @@ def test_foreign_keys_enforced(tmp_path: Path) -> None:
             "VALUES ('no-such-fact', 'characters', 'alice', 'traits')"
         )
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Migration 002 specific tests
+# ---------------------------------------------------------------------------
+
+
+def test_migration_002_widens_source_type_check() -> None:
+    """After migrations, inserting source_type='markdown' succeeds."""
+    conn = db.open(":memory:")
+    conn.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at)"
+        " VALUES ('md-001', 'markdown', '2026-01-01T00:00:00+00:00')"
+    )
+    row = conn.execute(
+        "SELECT source_type FROM sources WHERE source_id='md-001'"
+    ).fetchone()
+    conn.close()
+    assert row[0] == "markdown"
+
+
+def test_migration_002_preserves_existing_rows(tmp_path: Path) -> None:
+    """Rows inserted before migration 002 survive the table-swap."""
+    db_path = tmp_path / "wiki.db"
+
+    # Create a v1 DB (only migration 001)
+    from auto_lorebook.db.migrations import (  # noqa: PLC0415
+        _migration_001_initial,  # noqa: PLC2701
+    )
+
+    raw = sqlite3.connect(str(db_path))
+    raw.execute("PRAGMA foreign_keys=ON")
+    _migration_001_initial(raw)
+    raw.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at)"
+        " VALUES ('srt-existing', 'srt', '2026-01-01T00:00:00+00:00')"
+    )
+    raw.commit()
+    raw.close()
+
+    # open() detects version=1 and runs migration 002
+    conn = db.open(db_path)
+    version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    row = conn.execute(
+        "SELECT source_id FROM sources WHERE source_id='srt-existing'"
+    ).fetchone()
+    # now markdown inserts should work too
+    conn.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at)"
+        " VALUES ('md-new', 'markdown', '2026-01-01T00:00:00+00:00')"
+    )
+    conn.close()
+
+    assert version == CURRENT_SCHEMA_VERSION
+    assert row is not None

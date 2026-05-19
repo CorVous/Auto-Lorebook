@@ -133,7 +133,7 @@ class TestSeedIngestPerStage:
         assert rc == 0
         sid = _seeded_sid_from(capsys.readouterr().out)
 
-        info = info_yaml.read(tmp_wiki / "sources" / sid / "info.yaml")
+        info = info_yaml.read_yaml(tmp_wiki / "sources" / sid / "info.yaml")
         assert info.source_id == sid
 
         from auto_lorebook import wiki_state  # noqa: PLC0415

@@ -16,6 +16,9 @@ Every YAML file carries `schema_version` as its first key — see
 - **Purpose** — setting name, description, naming conventions,
   interpretation defaults, recurring speakers.
 - **Details** — [context pipeline](../pipeline/context.md#wiki-level-context-wiki-contextyaml).
+- **DB-backed** — on first read the tool lazy-backfills the
+  `wiki_context` row in `wiki.db`; subsequent reads are DB-only.
+  The YAML file is retained as a hand-edit surface.
 
 ### `.transcription-corrections.yaml`
 
@@ -25,6 +28,9 @@ Every YAML file carries `schema_version` as its first key — see
 - **Purpose** — global phonetic / mishearing fixes applied to all
   sources.
 - **Details** — [entity model](../architecture/entity-model.md#global-transcription-corrections).
+- **DB-backed** — on first read the tool lazy-backfills the
+  `transcription_corrections` table in `wiki.db`; subsequent reads
+  are DB-only. The YAML file is retained as a hand-edit surface.
 
 ### `sources/<source_id>/transcript.en.srt`
 
@@ -38,6 +44,9 @@ Every YAML file carries `schema_version` as its first key — see
 - **Purpose** — URL, title, duration, caption type, session date,
   per-source context.
 - **Details** — [context pipeline](../pipeline/context.md#per-source-context-infoyaml).
+- **DB-backed** — on first read the tool lazy-backfills the `sources`
+  row in `wiki.db`; subsequent reads are DB-only. The YAML file is
+  retained as a hand-edit surface.
 
 ### `sources/<source_id>/reading.md`
 

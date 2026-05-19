@@ -19,10 +19,11 @@ Any directory you point the tool at, registered with a nickname:
 
 ```
 <wiki-repo>/
-  .transcription-corrections.yaml   # global phonetic / mishearing fixes
-  .wiki-context.yaml                # setting info, conventions, defaults
+  .transcription-corrections.yaml   # global phonetic / mishearing fixes (legacy; lazy-backfills wiki.db)
+  .wiki-context.yaml                # setting info, conventions, defaults (legacy; lazy-backfills wiki.db)
   .wiki-state/                      # per-wiki tool state (hidden)
     .gitignore                      # auto-managed: ignores pending/
+    wiki.db                         # canonical store for sources, corrections, wiki context, entities, …
     last-context.yaml               # per-setting defaults: perspective, source_nature
     pending/
       <source_id>/
@@ -40,7 +41,7 @@ Any directory you point the tool at, registered with a nickname:
   sources/
     <source_id>/
       transcript.en.srt             # raw transcript, untouched
-      info.yaml                     # url, title, duration, caption_type, context
+      info.yaml                     # url, title, duration, caption_type, context (legacy; lazy-backfills wiki.db)
       reading.md                    # corrected reading (after approval)
   characters/
     <slug>.yaml                     # canonical name, slug, aliases, facts

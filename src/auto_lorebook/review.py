@@ -690,15 +690,16 @@ def run(
     proposal files left on disk as `remaining`.
     """
     wiki_repo = cfg.resolve_active_wiki(wiki_override)
-    info_path = wiki_repo / "sources" / source_id / "info.yaml"
-    info = info_yaml_mod.read(info_path)
     plan_path = reading_pipeline.pending_plan_path(source_id)
     if not plan_path.exists():
         msg = f"No plan at {plan_path}; run `approve-reading {source_id}` first."
         raise ReviewError(msg)
     plan = plan_yaml_mod.read(plan_path)
     _validate_proposals_subset_of_plan(plan, source_id)
-    conn = db_mod.open(wiki_repo / ".wiki-state" / "wiki.db")
+    from auto_lorebook import wiki_state as wiki_state_mod  # noqa: PLC0415
+
+    conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
     # backfill DB from YAMLs on first run (idempotent)
     entities_mod.list_entities(conn, wiki_repo=wiki_repo)
     ctx = _ApprovalContext(
