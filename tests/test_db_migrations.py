@@ -224,3 +224,84 @@ def test_migration_002_preserves_existing_rows(tmp_path: Path) -> None:
 
     assert version == CURRENT_SCHEMA_VERSION
     assert row is not None
+
+
+# ---------------------------------------------------------------------------
+# Migration 003 specific tests
+# ---------------------------------------------------------------------------
+
+
+def test_migration_003_segment_status_check_accepts_skipped() -> None:
+    """v3 schema accepts segment_status='skipped'; old 'flagged' is gone."""
+    conn = db.open(":memory:")
+    conn.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at)"
+        " VALUES ('s1', 'srt', '2026-01-01T00:00:00+00:00')"
+    )
+    conn.execute(
+        "INSERT INTO ingests(ingest_id, source_id, started_at, state)"
+        " VALUES ('i1', 's1', '2026-01-01T00:00:00+00:00', 'reading')"
+    )
+    conn.execute(
+        "INSERT INTO segments(ingest_id, segment_id, start, end, title,"
+        " segment_status) VALUES"
+        " ('i1', 'seg-001', '0:00:00', '0:01:00', 't', 'skipped')"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO segments(ingest_id, segment_id, start, end, title,"
+            " segment_status) VALUES"
+            " ('i1', 'seg-002', '0:01:00', '0:02:00', 't', 'flagged')"
+        )
+    conn.close()
+
+
+def test_migration_003_preserves_existing_rows(tmp_path: Path) -> None:
+    """Segment rows inserted at v2 survive the v3 table-swap with flags_json='[]'."""
+    db_path = tmp_path / "wiki.db"
+
+    from auto_lorebook.db.migrations import (  # noqa: PLC0415
+        _migration_001_initial,  # noqa: PLC2701
+        _migration_002_widen_source_type,  # noqa: PLC2701
+    )
+
+    raw = sqlite3.connect(str(db_path))
+    raw.execute("PRAGMA foreign_keys=ON")
+    _migration_001_initial(raw)
+    _migration_002_widen_source_type(raw)
+    raw.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at)"
+        " VALUES ('s1', 'srt', '2026-01-01T00:00:00+00:00')"
+    )
+    raw.execute(
+        "INSERT INTO ingests(ingest_id, source_id, started_at, state)"
+        " VALUES ('i1', 's1', '2026-01-01T00:00:00+00:00', 'reading')"
+    )
+    raw.execute(
+        "INSERT INTO segments(ingest_id, segment_id, start, end, title,"
+        " segment_status) VALUES"
+        " ('i1', 'seg-001', '0:00:00', '0:01:00', 'pre-v3', 'draft')"
+    )
+    # stamp schema_version=2 so db.open runs migration 003 only
+    raw.execute(
+        "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)"
+    )
+    raw.execute("DELETE FROM schema_version")
+    raw.execute("INSERT INTO schema_version(version) VALUES (2)")
+    raw.commit()
+    raw.close()
+
+    # open() detects version=2 and applies migration 003
+    conn = db.open(db_path)
+    version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    row = conn.execute(
+        "SELECT segment_id, segment_status, flags_json FROM segments"
+        " WHERE ingest_id='i1' AND segment_id='seg-001'"
+    ).fetchone()
+    conn.close()
+
+    assert version == CURRENT_SCHEMA_VERSION
+    assert row is not None
+    assert row[0] == "seg-001"
+    assert row[1] == "draft"
+    assert row[2] == "[]"
