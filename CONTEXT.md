@@ -39,12 +39,18 @@ One row in a bundle: a `(claim_group_id, target_entity)` pair. Carries a `propos
 _Avoid_: target row, destination (target is fine in code).
 
 **Proposal**:
-On-disk YAML in `pending/<ingest_id>/proposals/` representing one route awaiting review.
+Row in the `proposals` table representing one route awaiting review.
 _Avoid_: pending fact.
 
 **Fact**:
-Approved entry inside an entity YAML's `facts` list. Created only by Review; never produced by earlier stages.
+Approved entry in the `facts` table, linked to one or more entities via `fact_targets`. Created only by Review; never produced by earlier stages.
 _Avoid_: claim (a claim is pre-approval; a fact is post-approval).
+
+**Fact target**:
+One row in `fact_targets` linking a fact to an entity. A fact with N targets replaces the former N-YAML-copies-with-shared-`claim_group_id` pattern.
+
+**Fact ref**:
+Typed directed edge in `fact_refs` between two facts. Types: `supersedes | contradicts | corroborates | qualifies`. A `supersedes` edge automatically sets the target fact's status to `disproven`; removing it restores the prior status from `status_history`.
 
 **Bundle-level edit**:
 Edit applied at the bundle screen; propagates to every checked route. Scope is `{text, status, status_reason}` — fields that describe the claim itself, not the routing.
@@ -64,13 +70,13 @@ One end-to-end run from source to (possibly partial) approved facts. Identified 
 - A **Plan** contains many **Claim groups**; each claim group contains one or more **Routes**.
 - Extraction emits one **Proposal** per **Route**.
 - A **Bundle** is the runtime view of one **Claim group** during review.
-- Approving a **Bundle** appends one **Fact** per checked **Route** to its target entity's YAML.
+- Approving a **Bundle** creates one **Fact** plus N **Fact targets** (one per checked route) in a single DB transaction.
 
 ## Invariants
 
-- **Plan/proposal correspondence**: at the start of `review`, the set of on-disk proposal files must correspond 1:1 to `(claim_group_id, target_entity)` keys in the plan. Missing keys (Ctrl-C resume after partial approval) are allowed — proposals are a subset of plan routes. Extra keys (orphans) raise `ReviewError` and direct the user to `replan`.
+- **Plan/proposal correspondence**: at the start of `review`, the set of proposal rows must correspond 1:1 to `(claim_group_id, target_entity)` keys in the plan. Missing keys (Ctrl-C resume after partial approval) are allowed — proposals are a subset of plan routes. Extra keys (orphans) raise `ReviewError` and direct the user to `replan`.
 - **Alias decline memory**: declined aliases are remembered in-memory for the duration of one `run()` call only. Ctrl-C resume re-asks for declined aliases (only accepted aliases survive on disk via `added_by_ingest`).
-- **Idempotent re-approval**: encountering a proposal whose `proposed_id` already exists on the target entity is a silent skip — the proposal file is removed and the run continues. Covers the Ctrl-C window between `entity_yaml.write` and `proposal_path.unlink`.
+- **Idempotent re-approval**: encountering a proposal whose `proposed_id` already exists in `facts` is a silent skip — the proposal row is deleted and the run continues. The proposal row is deleted in the same transaction that commits the fact row, so there is no window.
 - **Status audit asymmetry**: edits to a fact's `text` preserve the original in `text_source`; edits to `status` / `status_reason` do not preserve the planner's original. `status_history` records only the reviewer's final value. Rationale: text is a literal claim that can be objectively wrong, status is a reviewer judgment call.
 
 ## Flagged ambiguities
