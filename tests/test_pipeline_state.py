@@ -87,15 +87,15 @@ SID = "yt-abc12345678"
             [_mk_info_yaml, _mk_wiki_reading, _mk_plan_yaml],
             Stage.EXTRACT,
         ),
-        # info.yaml + wiki reading.md + plan.yaml + empty proposals dir → EXTRACT
-        (
-            [_mk_info_yaml, _mk_wiki_reading, _mk_plan_yaml, _mk_proposals_dir_empty],
-            Stage.EXTRACT,
-        ),
         # info.yaml + wiki reading.md + plan.yaml + non-empty proposals → REVIEW
         (
             [_mk_info_yaml, _mk_wiki_reading, _mk_plan_yaml, _mk_proposal],
             Stage.REVIEW,
+        ),
+        # info.yaml + wiki reading.md + plan.yaml + empty proposals dir → None
+        (
+            [_mk_info_yaml, _mk_wiki_reading, _mk_plan_yaml, _mk_proposals_dir_empty],
+            None,
         ),
     ],
     ids=[
@@ -104,8 +104,8 @@ SID = "yt-abc12345678"
         "sidecar→APPROVE_READING",
         "wiki-reading→PLAN",
         "plan+absent-proposals→EXTRACT",
-        "plan+empty-proposals→EXTRACT",
         "plan+proposals→REVIEW",
+        "plan+empty-proposals→None",
     ],
 )
 def test_first_missing_stage(
@@ -121,46 +121,24 @@ def test_first_missing_stage(
 
 
 def test_all_done_returns_none(tmp_wiki: Path) -> None:
-    """plan.yaml + emptied proposals dir → None (pipeline complete)."""
+    """plan.yaml + empty proposals dir → None (review complete)."""
     _mk_info_yaml(tmp_wiki, SID)
     _mk_reading_sidecar(tmp_wiki, SID)
     _mk_wiki_reading(tmp_wiki, SID)
     _mk_plan_yaml(tmp_wiki, SID)
     _mk_proposals_dir_empty(tmp_wiki, SID)
-    # proposals dir exists but is empty — same as "completed review"
     cfg = _cfg(tmp_wiki)
-    # EXTRACT would be returned… unless we mark it as already done by having
-    # a non-empty proposals dir that was subsequently emptied.
-    # Per spec: REVIEW done = plan.yaml exists AND proposals dir empty/absent.
-    # So with plan.yaml + empty proposals dir the result is EXTRACT, not None.
-    # None is only returned when ALL stages pass. We verify None is not returned
-    # prematurely by checking that the final state after review (proposals dir
-    # cleared) returns None.
-    # To reach None we need plan.yaml + proposals dir absent (treated as cleared).
-    # The issue spec says: "plan.yaml exists AND proposals dir empty (or absent)
-    # → returns None". So empty-proposals means DONE.
-    # BUT the EXTRACT detector says "absent or non-empty" → EXTRACT.
-    # Clarification from the spec table:
-    #   EXTRACT done: proposals dir exists and is non-empty
-    #   REVIEW done: plan.yaml exists AND proposals dir empty or absent → None
-    # So the EXTRACT detector passes when proposals dir is non-empty.
-    # If proposals dir is absent/empty AND plan.yaml exists → skip EXTRACT,
-    # skip REVIEW → return None.
-    # Re-run the test with consistent setup:
     result = first_missing_stage(cfg, SID, wiki_override=None)
-    # With plan.yaml + empty proposals: EXTRACT stage detector is False
-    # (proposals dir exists but is empty → "non-empty" check fails → not done)
-    # → returns EXTRACT. That's correct per the spec.
-    assert result == Stage.EXTRACT
+    assert result is None
 
 
 def test_none_when_fully_complete(tmp_wiki: Path) -> None:
-    """After review completes (proposals cleared), pipeline returns None."""
+    """After review empties proposals dir, pipeline returns None."""
     _mk_info_yaml(tmp_wiki, SID)
     _mk_reading_sidecar(tmp_wiki, SID)
     _mk_wiki_reading(tmp_wiki, SID)
     _mk_plan_yaml(tmp_wiki, SID)
-    # proposals dir absent — per spec REVIEW done = plan.yaml + empty/absent
+    _mk_proposals_dir_empty(tmp_wiki, SID)
     cfg = _cfg(tmp_wiki)
     result = first_missing_stage(cfg, SID, wiki_override=None)
     assert result is None

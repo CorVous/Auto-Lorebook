@@ -39,8 +39,9 @@ def first_missing_stage(
       GENERATE_READING : pending/<sid>/reading/reading.yaml exists
       APPROVE_READING  : <wiki>/sources/<sid>/reading.md exists
       PLAN          : pending/<sid>/plan.yaml exists
-      EXTRACT       : pending/<sid>/proposals/ exists and non-empty
-      REVIEW (done) : plan.yaml exists AND proposals dir empty or absent
+      EXTRACT       : pending/<sid>/proposals/ absent
+      REVIEW        : pending/<sid>/proposals/ exists and non-empty
+      done          : proposals dir exists and empty
     """
     wiki_root: Path = cfg.resolve_active_wiki(wiki_override)
 
@@ -62,13 +63,8 @@ def first_missing_stage(
         return Stage.PLAN
 
     proposals_dir = wiki_state.pending_proposals_dir(wiki_root, source_id)
-    if proposals_dir.exists():
-        if any(proposals_dir.iterdir()):
-            return Stage.REVIEW
-        # dir exists but empty → extract not yet populated
+    if not proposals_dir.exists():
         return Stage.EXTRACT
-    # proposals dir absent: use sidecar as proxy for pipeline completion
-    # sidecar exists → reading was generated normally → full pipeline ran → done
-    if sidecar.exists():
-        return None
-    return Stage.EXTRACT
+    if any(proposals_dir.iterdir()):
+        return Stage.REVIEW
+    return None
