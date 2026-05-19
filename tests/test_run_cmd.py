@@ -826,3 +826,147 @@ def test_add_parser_accepts_auto_approve_flag() -> None:
     parser = create_parser()
     args = parser.parse_args(["run", "--auto-approve", "yt-abc12345678"])
     assert args.auto_approve is True
+
+
+# ---------------------------------------------------------------------------
+# Stage headers and skip notices
+# ---------------------------------------------------------------------------
+
+
+def _all_stages_noop_runners() -> dict[Stage, Callable[[argparse.Namespace], int]]:
+    """Return STAGE_RUNNERS dict where every stage is a no-op returning 0."""
+    patched = dict(run_cmd.STAGE_RUNNERS)
+    for stage in list(patched):
+        patched[stage] = lambda _ns: 0
+    return patched
+
+
+def test_prints_six_headers_from_scratch(capsys: pytest.CaptureFixture[str]) -> None:
+    """Fresh run prints a stage header for all 6 pipeline stages."""
+    # source-id path; first fms → GENERATE_READING (resume), then each stage, then None.
+    fms_effects: list[Stage | None] = [
+        Stage.GENERATE_READING,  # resume (pre-flight)
+        Stage.APPROVE_READING,  # after GENERATE_READING
+        Stage.PLAN,  # after APPROVE_READING
+        Stage.EXTRACT,  # after PLAN
+        Stage.REVIEW,  # after EXTRACT
+        None,  # after REVIEW → done
+    ]
+    patched_runners = _all_stages_noop_runners()
+
+    args = argparse.Namespace(
+        url_or_sid="yt-abc12345678",
+        source_id=None,
+        wiki=None,
+        yes=True,
+        auto_approve=True,
+    )
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            side_effect=fms_effects,
+        ),
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+        patch("auto_lorebook.commands.run.ingest_cmd.run", return_value=0),
+    ):
+        mock_cfg.return_value = MagicMock()
+        result = run_cmd.run(args)
+
+    assert result == 0
+    out = capsys.readouterr().out
+    # Headers for stages 2-6 (ingest handled pre-loop; source-id path starts at 2).
+    expected_pairs = [
+        ("[2/6]", "generate-reading"),
+        ("[3/6]", "approve-reading"),
+        ("[4/6]", "plan"),
+        ("[5/6]", "extract"),
+        ("[6/6]", "review"),
+    ]
+    for index_tag, stage_name in expected_pairs:
+        assert index_tag in out, f"missing {index_tag} in stdout"
+        assert stage_name in out, f"missing stage name '{stage_name}' in stdout"
+
+
+def test_resume_prints_skip_notices_and_remaining_headers(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Resume from PLAN: 3 skip notices + headers for plan/extract/review."""
+    fms_effects: list[Stage | None] = [
+        Stage.PLAN,  # resume (pre-flight)
+        Stage.EXTRACT,
+        Stage.REVIEW,
+        None,
+    ]
+    patched_runners = _all_stages_noop_runners()
+
+    args = argparse.Namespace(
+        url_or_sid="yt-abc12345678",
+        source_id=None,
+        wiki=None,
+        yes=True,
+        auto_approve=True,
+    )
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            side_effect=fms_effects,
+        ),
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        result = run_cmd.run(args)
+
+    assert result == 0
+    out = capsys.readouterr().out
+    # Three skip notices for ingest, generate-reading, approve-reading
+    for skipped in ("ingest", "generate-reading", "approve-reading"):
+        assert skipped in out, f"missing skip notice for '{skipped}'"
+    # Three stage headers for plan, extract, review
+    for idx, stage_name in [
+        ("[4/6]", "plan"),
+        ("[5/6]", "extract"),
+        ("[6/6]", "review"),
+    ]:  # noqa: E501
+        assert idx in out, f"missing {idx} in stdout"
+        assert stage_name in out, f"missing stage header for '{stage_name}'"
+
+
+def test_skip_notice_mentions_artifact(capsys: pytest.CaptureFixture[str]) -> None:
+    """Skip notices include both the stage name and its artifact name."""
+    fms_effects: list[Stage | None] = [
+        Stage.PLAN,  # resume — ingest/generate-reading/approve-reading already done
+        None,
+    ]
+    patched_runners = _all_stages_noop_runners()
+
+    args = argparse.Namespace(
+        url_or_sid="yt-abc12345678",
+        source_id=None,
+        wiki=None,
+        yes=True,
+        auto_approve=True,
+    )
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            side_effect=fms_effects,
+        ),
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        run_cmd.run(args)
+
+    out = capsys.readouterr().out
+    # Check ingest skip notice mentions its artifact
+    assert "info.yaml" in out
+    # Check approve-reading skip notice mentions its artifact
+    assert "reading.md" in out

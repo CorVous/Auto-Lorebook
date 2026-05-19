@@ -112,6 +112,36 @@ _PIPELINE_ORDER = [
     Stage.REVIEW,
 ]
 
+# Display name (dashed, lowercase) for each stage.
+_STAGE_DISPLAY: dict[Stage, str] = {
+    Stage.INGEST: "ingest",
+    Stage.GENERATE_READING: "generate-reading",
+    Stage.APPROVE_READING: "approve-reading",
+    Stage.PLAN: "plan",
+    Stage.EXTRACT: "extract",
+    Stage.REVIEW: "review",
+}
+
+# Artifact that confirms the stage is done (used in skip notices).
+_STAGE_ARTIFACT: dict[Stage, str] = {
+    Stage.INGEST: "info.yaml",
+    Stage.GENERATE_READING: "reading sidecar",
+    Stage.APPROVE_READING: "reading.md",
+    Stage.PLAN: "plan.yaml",
+    Stage.EXTRACT: "proposals/",
+    Stage.REVIEW: "proposals empty",
+}
+
+
+def _print_stage_header(stage: Stage) -> None:
+    idx = _PIPELINE_ORDER.index(stage) + 1
+    total = len(_PIPELINE_ORDER)
+    print(f"── [{idx}/{total}] {_STAGE_DISPLAY[stage]} ──")  # noqa: T201
+
+
+def _print_skip_notice(stage: Stage) -> None:
+    print(f"✓ skipped {_STAGE_DISPLAY[stage]} ({_STAGE_ARTIFACT[stage]} exists)")  # noqa: T201
+
 
 def _reachable_gates(resume: Stage) -> list[Stage]:
     """Gates at-or-after resume point in pipeline order."""
@@ -215,6 +245,11 @@ def run(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # Emit skip notices for all stages before the resume point.
+    resume_idx = _PIPELINE_ORDER.index(resume)
+    for skipped_stage in _PIPELINE_ORDER[:resume_idx]:
+        _print_skip_notice(skipped_stage)
+
     # Reuse resume from pre-flight as the first loop stage; avoids double call.
     stage: Stage | None = resume
     while stage is not None:
@@ -223,6 +258,7 @@ def run(args: argparse.Namespace) -> int:
             _logger.error("Source %s still missing after ingest.", source_id)
             return 1
 
+        _print_stage_header(stage)
         stage_runner = STAGE_RUNNERS[stage]
         stage_args = _build_stage_args(stage, source_id, wiki_override, args)
         exit_code = stage_runner(stage_args)
