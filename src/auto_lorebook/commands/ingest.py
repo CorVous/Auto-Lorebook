@@ -20,25 +20,8 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-def add_parser(
-    subparsers: argparse._SubParsersAction,
-    common_parser: argparse.ArgumentParser,
-) -> argparse.ArgumentParser:
-    """Register the ingest subcommand."""
-    parser = subparsers.add_parser(
-        "ingest",
-        parents=[common_parser],
-        help="Ingest a source (local file or YouTube URL)",
-        description=(
-            "Fetch a source, gather context, and store it in the wiki. "
-            "Local files (.srt, .txt, .md) are supported. "
-            "YouTube URLs are fetched via yt-dlp (bundled)."
-        ),
-    )
-    parser.add_argument(
-        "url_or_path",
-        help="Local file path (.srt/.txt/.md) or YouTube URL",
-    )
+def add_ingest_args(parser: argparse.ArgumentParser) -> None:
+    """Add ingest-specific flags to parser (shared by ingest and run)."""
     parser.add_argument(
         "--source-url",
         dest="source_url",
@@ -103,6 +86,28 @@ def add_parser(
             "HTTP 429 rate limits."
         ),
     )
+
+
+def add_parser(
+    subparsers: argparse._SubParsersAction,
+    common_parser: argparse.ArgumentParser,
+) -> argparse.ArgumentParser:
+    """Register the ingest subcommand."""
+    parser = subparsers.add_parser(
+        "ingest",
+        parents=[common_parser],
+        help="Ingest a source (local file or YouTube URL)",
+        description=(
+            "Fetch a source, gather context, and store it in the wiki. "
+            "Local files (.srt, .txt, .md) are supported. "
+            "YouTube URLs are fetched via yt-dlp (bundled)."
+        ),
+    )
+    parser.add_argument(
+        "url_or_path",
+        help="Local file path (.srt/.txt/.md) or YouTube URL",
+    )
+    add_ingest_args(parser)
     parser.set_defaults(func=run)
     return parser
 

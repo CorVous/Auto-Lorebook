@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -255,7 +256,7 @@ def test_add_parser_registers_run_subcommand() -> None:
     """Run subcommand appears in parser after add_parser call."""
     parser = create_parser()
     args = parser.parse_args(["run", "yt-abc12345678"])
-    assert args.source_id == "yt-abc12345678"
+    assert args.url_or_sid == "yt-abc12345678"
     assert hasattr(args, "func")
 
 
@@ -264,4 +265,217 @@ def test_add_parser_accepts_wiki_flag() -> None:
     parser = create_parser()
     args = parser.parse_args(["--wiki", "alt", "run", "yt-abc12345678"])
     assert args.wiki == "alt"
-    assert args.source_id == "yt-abc12345678"
+    assert args.url_or_sid == "yt-abc12345678"
+
+
+# ---------------------------------------------------------------------------
+# add_ingest_args parity
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_flag_parity() -> None:
+    """Run and ingest parsers accept the same ingest-specific flags."""
+    ingest_flags = [
+        "--session-date=2026-01-15",
+        "--perspective=x",
+        "--source-nature=actual-play",
+        "--setting=Foo",
+        "--notes=bar",
+        "--source-url=https://example.com",
+        "--source-id=yt-abc12345678",
+        "--no-interactive",
+        "--cookies-from-browser=chrome",
+    ]
+    full_parser = create_parser()
+    # ingest with all flags
+    ingest_args = full_parser.parse_args([
+        "ingest",
+        "https://youtube.com/watch?v=abc12345678",
+        *ingest_flags,
+    ])
+    assert ingest_args.session_date == "2026-01-15"
+    assert ingest_args.perspective == "x"
+    assert ingest_args.source_nature == "actual-play"
+    assert ingest_args.setting == "Foo"
+    assert ingest_args.notes == "bar"
+    assert ingest_args.source_url == "https://example.com"
+    assert ingest_args.source_id == "yt-abc12345678"
+    assert ingest_args.no_interactive is True
+    assert ingest_args.cookies_from_browser == "chrome"
+
+    # run with the same flags
+    run_args = full_parser.parse_args(["run", "yt-abc12345678", *ingest_flags])
+    assert run_args.session_date == "2026-01-15"
+    assert run_args.perspective == "x"
+    assert run_args.source_nature == "actual-play"
+    assert run_args.setting == "Foo"
+    assert run_args.notes == "bar"
+    assert run_args.source_url == "https://example.com"
+    assert run_args.source_id == "yt-abc12345678"
+    assert run_args.no_interactive is True
+    assert run_args.cookies_from_browser == "chrome"
+
+
+# ---------------------------------------------------------------------------
+# URL → new source: ingest called first, then chain continues
+# ---------------------------------------------------------------------------
+
+
+def test_url_new_source_calls_ingest_then_chain() -> None:
+    """URL positional with no existing source calls ingest, then pipeline stages."""
+    url = "https://youtube.com/watch?v=abc12345678"
+    expected_sid = "yt-abc12345678"
+
+    ingest_calls: list[argparse.Namespace] = []
+    stage_calls: list[tuple[Stage, argparse.Namespace]] = []
+
+    def fake_ingest(ns: argparse.Namespace) -> int:
+        ingest_calls.append(ns)
+        return 0
+
+    patched_runners = dict(run_cmd.STAGE_RUNNERS)
+    for stage in list(patched_runners):
+
+        def make_runner(s: Stage) -> Callable[[argparse.Namespace], int]:
+            def runner(ns: argparse.Namespace) -> int:
+                stage_calls.append((s, ns))
+                return 0
+
+            return runner
+
+        patched_runners[stage] = make_runner(stage)
+
+    # fms: INGEST (triggers ingest), GENERATE_READING (first loop stage), None (done)
+    fms_side_effects = [Stage.INGEST, Stage.GENERATE_READING, None]
+
+    args = argparse.Namespace(
+        url_or_sid=url,
+        source_id=None,
+        wiki=None,
+        session_date=None,
+        perspective=None,
+        source_nature=None,
+        setting=None,
+        notes=None,
+        source_url=None,
+        no_interactive=True,
+        cookies_from_browser=None,
+    )
+
+    fms_patch = patch(
+        "auto_lorebook.commands.run.first_missing_stage",
+        side_effect=fms_side_effects,
+    )
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        fms_patch,
+        patch("auto_lorebook.commands.run.ingest_cmd.run", fake_ingest),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        result = run_cmd.run(args)
+
+    assert result == 0
+    # ingest was called with the URL and all ingest flags forwarded
+    assert len(ingest_calls) == 1
+    assert ingest_calls[0].url_or_path == url
+    # pipeline stage called after ingest
+    assert len(stage_calls) == 1
+    assert stage_calls[0][0] == Stage.GENERATE_READING
+    # source_id on stage namespace is the derived sid
+    assert stage_calls[0][1].source_id == expected_sid
+
+
+# ---------------------------------------------------------------------------
+# URL → existing source: ingest skipped, chain continues from first missing
+# ---------------------------------------------------------------------------
+
+
+def test_url_existing_source_skips_ingest() -> None:
+    """URL positional with existing source skips ingest, runs remaining stages."""
+    url = "https://youtube.com/watch?v=abc12345678"
+
+    ingest_calls: list[argparse.Namespace] = []
+
+    def fake_ingest(ns: argparse.Namespace) -> int:
+        ingest_calls.append(ns)
+        return 0
+
+    patched_runners = dict(run_cmd.STAGE_RUNNERS)
+    stage_calls: list[Stage] = []
+    for stage in list(patched_runners):
+
+        def make_runner(s: Stage) -> Callable[[argparse.Namespace], int]:
+            def runner(_ns: argparse.Namespace) -> int:
+                stage_calls.append(s)
+                return 0
+
+            return runner
+
+        patched_runners[stage] = make_runner(stage)
+
+    # URL path: fms called once to check ingest need (non-INGEST), then twice in loop.
+    fms_side_effects = [Stage.GENERATE_READING, Stage.GENERATE_READING, None]
+
+    args = argparse.Namespace(
+        url_or_sid=url,
+        source_id=None,
+        wiki=None,
+        session_date=None,
+        perspective=None,
+        source_nature=None,
+        setting=None,
+        notes=None,
+        source_url=None,
+        no_interactive=True,
+        cookies_from_browser=None,
+    )
+
+    fms_patch = patch(
+        "auto_lorebook.commands.run.first_missing_stage",
+        side_effect=fms_side_effects,
+    )
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        fms_patch,
+        patch("auto_lorebook.commands.run.ingest_cmd.run", fake_ingest),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        result = run_cmd.run(args)
+
+    assert result == 0
+    assert ingest_calls == []  # ingest NOT called
+    assert Stage.GENERATE_READING in stage_calls
+
+
+# ---------------------------------------------------------------------------
+# Source-id positional + ingest-only flag → warning, proceeds normally
+# ---------------------------------------------------------------------------
+
+
+def test_source_id_with_ingest_flags_warns(caplog: pytest.LogCaptureFixture) -> None:
+    """Source-id positional + ingest-only flags emits a warning log."""
+    args = argparse.Namespace(
+        source_id="yt-abc12345678",
+        wiki=None,
+        session_date="2026-01-15",  # ingest-only flag set
+        perspective=None,
+        source_nature=None,
+        setting=None,
+        notes=None,
+        source_url=None,
+        no_interactive=False,
+        cookies_from_browser=None,
+    )
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch("auto_lorebook.commands.run.first_missing_stage", return_value=None),
+        caplog.at_level(logging.WARNING, logger="auto_lorebook.commands.run"),
+    ):
+        mock_cfg.return_value = MagicMock()
+        result = run_cmd.run(args)
+
+    assert result == 0
+    assert any("ignored" in r.message.lower() for r in caplog.records)
