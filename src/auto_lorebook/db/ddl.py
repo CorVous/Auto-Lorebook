@@ -178,7 +178,7 @@ CREATE TABLE ingests (
     default_speaker         TEXT,
     name_corrections_json   TEXT NOT NULL DEFAULT '{}',
     session_date            TEXT,
-    FOREIGN KEY (source_id) REFERENCES sources(source_id)
+    FOREIGN KEY (source_id) REFERENCES sources(source_id) ON DELETE RESTRICT
 )
 """
 
