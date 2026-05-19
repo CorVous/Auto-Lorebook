@@ -208,6 +208,7 @@ def run(args: argparse.Namespace) -> int:
         # Check if source already ingested; if not, run ingest first.
         stage = first_missing_stage(cfg, source_id, wiki_override=wiki_override)
         if stage is Stage.INGEST:
+            _print_stage_header(Stage.INGEST)
             ingest_args = argparse.Namespace(
                 url_or_path=positional,
                 wiki=wiki_override,

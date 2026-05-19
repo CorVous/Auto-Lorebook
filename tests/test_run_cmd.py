@@ -842,10 +842,12 @@ def _all_stages_noop_runners() -> dict[Stage, Callable[[argparse.Namespace], int
 
 
 def test_prints_six_headers_from_scratch(capsys: pytest.CaptureFixture[str]) -> None:
-    """Fresh run prints a stage header for all 6 pipeline stages."""
-    # source-id path; first fms → GENERATE_READING (resume), then each stage, then None.
+    """Fresh URL run prints all 6 stage headers in order."""
+    # URL path: first fms → INGEST (triggers ingest), then pre-flight fms →
+    # GENERATE_READING, then each remaining stage, then None.
     fms_effects: list[Stage | None] = [
-        Stage.GENERATE_READING,  # resume (pre-flight)
+        Stage.INGEST,  # URL pre-ingest check → triggers ingest_cmd.run
+        Stage.GENERATE_READING,  # pre-flight after ingest
         Stage.APPROVE_READING,  # after GENERATE_READING
         Stage.PLAN,  # after APPROVE_READING
         Stage.EXTRACT,  # after PLAN
@@ -855,7 +857,7 @@ def test_prints_six_headers_from_scratch(capsys: pytest.CaptureFixture[str]) -> 
     patched_runners = _all_stages_noop_runners()
 
     args = argparse.Namespace(
-        url_or_sid="yt-abc12345678",
+        url_or_sid="https://www.youtube.com/watch?v=abc12345678",
         source_id=None,
         wiki=None,
         yes=True,
@@ -877,17 +879,23 @@ def test_prints_six_headers_from_scratch(capsys: pytest.CaptureFixture[str]) -> 
 
     assert result == 0
     out = capsys.readouterr().out
-    # Headers for stages 2-6 (ingest handled pre-loop; source-id path starts at 2).
-    expected_pairs = [
-        ("[2/6]", "generate-reading"),
-        ("[3/6]", "approve-reading"),
-        ("[4/6]", "plan"),
-        ("[5/6]", "extract"),
-        ("[6/6]", "review"),
-    ]
-    for index_tag, stage_name in expected_pairs:
-        assert index_tag in out, f"missing {index_tag} in stdout"
-        assert stage_name in out, f"missing stage name '{stage_name}' in stdout"
+    # All six [N/6] tags must appear in strictly increasing output position.
+    tags = ["[1/6]", "[2/6]", "[3/6]", "[4/6]", "[5/6]", "[6/6]"]
+    positions = [out.index(tag) for tag in tags]
+    assert positions == sorted(positions), (
+        f"headers out of order: {list(zip(tags, positions, strict=True))}"
+    )
+    # Stage names also present.
+    stage_names = (
+        "ingest",
+        "generate-reading",
+        "approve-reading",
+        "plan",
+        "extract",
+        "review",
+    )
+    for name in stage_names:
+        assert name in out, f"missing stage name '{name}' in stdout"
 
 
 def test_resume_prints_skip_notices_and_remaining_headers(
@@ -932,7 +940,7 @@ def test_resume_prints_skip_notices_and_remaining_headers(
         ("[4/6]", "plan"),
         ("[5/6]", "extract"),
         ("[6/6]", "review"),
-    ]:  # noqa: E501
+    ]:
         assert idx in out, f"missing {idx} in stdout"
         assert stage_name in out, f"missing stage header for '{stage_name}'"
 
