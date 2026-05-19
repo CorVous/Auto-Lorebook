@@ -2,9 +2,9 @@
 
 Discards unreviewed proposals from the current run and re-runs the
 planner + extractor against the wiki's current entity state. Already-
-approved facts in entity YAMLs are unaffected; stubs created by
-earlier approvals are visible to the new plan because
-`pipeline.extract` rebuilds the in-memory `EntityIndex` from disk.
+approved facts are unaffected; stubs created by earlier approvals
+are visible to the new plan because the planner queries the
+`entities` table directly via the wiki's SQLite connection.
 """
 
 from __future__ import annotations

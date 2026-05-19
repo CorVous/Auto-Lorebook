@@ -93,7 +93,7 @@ def add_parser(
     p_rebuild = sub.add_parser(
         "rebuild-index",
         parents=[common_parser],
-        help="Rebuild the in-memory entity index (no cache yet; placeholder)",
+        help="Legacy no-op; entities live in the wiki SQLite DB",
     )
     p_rebuild.set_defaults(func=run)
 
@@ -145,32 +145,9 @@ def _run_list(args: argparse.Namespace, wiki, conn) -> int:  # noqa: ANN001
 
 def _run_show(args: argparse.Namespace, wiki, conn) -> int:  # noqa: ANN001
     """3-tier resolution: slug → canonical_name → alias."""
-    query = args.query
     # backfill from YAML if DB empty
     entities_mod.list_entities(conn, wiki_repo=wiki)
-
-    # tier 1: by slug
-    rows = conn.execute("SELECT * FROM entities WHERE slug=?", (query,)).fetchall()
-    if not rows:
-        # tier 2: by canonical name (case-insensitive)
-        rows = conn.execute(
-            "SELECT * FROM entities WHERE canonical_name=? COLLATE NOCASE", (query,)
-        ).fetchall()
-    if not rows:
-        # tier 3: by alias
-        norm = entities_mod.normalize_name(query)
-        rows = conn.execute(
-            """
-            SELECT DISTINCT e.* FROM entities e
-            JOIN aliases a ON a.entity_category=e.category AND a.entity_slug=e.slug
-            WHERE a.name_normalized=?
-            """,
-            (norm,),
-        ).fetchall()
-
-    from auto_lorebook.entities import _entity_from_row  # noqa: PLC0415
-
-    matches = [_entity_from_row(r) for r in rows]
+    matches = entities_mod.search_entities(conn, args.query)
     if not matches:
         print(f"No entity matching {args.query!r}")  # noqa: T201
         return 1

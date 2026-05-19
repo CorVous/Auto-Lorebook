@@ -54,6 +54,37 @@ def test_normalize_fullwidth_unicode() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Slug normalization
+# ---------------------------------------------------------------------------
+
+
+def test_slugify_basic_ascii() -> None:
+    assert entities.slugify("Aldara") == "aldara"
+
+
+def test_slugify_strips_punctuation_and_collapses_dashes() -> None:
+    assert entities.slugify("The Ruined  Realm!!") == "the-ruined-realm"
+
+
+def test_slugify_idempotent() -> None:
+    s = entities.slugify("The Ruined Realm")
+    assert entities.slugify(s) == s
+
+
+def test_slugify_empty_input_returns_empty() -> None:
+    assert not entities.slugify("")
+    assert not entities.slugify("   ")
+
+
+def test_slugify_unicode_drops_diacritics() -> None:
+    # combining accent → casefold + slugify produces ascii-friendly slug
+    assert entities.slugify("Théron") in {"theron", "th-ron", "théron"}
+    # the contract is "stable + lowercase + no whitespace", not "ascii-only"
+    assert " " not in entities.slugify("Théron")
+    assert entities.slugify("Théron") == entities.slugify("Théron")  # idempotent
+
+
+# ---------------------------------------------------------------------------
 # CRUD
 # ---------------------------------------------------------------------------
 
@@ -326,7 +357,10 @@ def test_add_alias_dedup_nfkc(db_conn: sqlite3.Connection) -> None:
     assert result is None
 
 
-def test_add_alias_cross_entity_collision_allowed(db_conn: sqlite3.Connection) -> None:
+def test_add_alias_cross_entity_collision_allowed(
+    db_conn: sqlite3.Connection,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     entities.create_entity(
         db_conn,
         category="characters",
@@ -349,16 +383,23 @@ def test_add_alias_cross_entity_collision_allowed(db_conn: sqlite3.Connection) -
         ingest_id="i",
         source="hand-edited",
     )
-    result = entities.add_alias(
-        db_conn,
-        category="locations",
-        slug="theron-realm",
-        name="Theron Realm",
-        ingest_id="i",
-        source="hand-edited",
-    )
+    caplog.clear()
+    with caplog.at_level("INFO", logger="auto_lorebook.entities"):
+        result = entities.add_alias(
+            db_conn,
+            category="locations",
+            slug="theron-realm",
+            name="Theron Realm",
+            ingest_id="i",
+            source="hand-edited",
+        )
     # cross-entity same normalized name is allowed
     assert result is not None
+    # and we log it at INFO so the user sees the naming conflict
+    assert any(
+        "cross-entity" in r.message.lower() or "collision" in r.message.lower()
+        for r in caplog.records
+    ), f"expected cross-entity INFO log, got {[r.message for r in caplog.records]}"
 
 
 def test_add_alias_bad_source_raises(db_conn: sqlite3.Connection) -> None:

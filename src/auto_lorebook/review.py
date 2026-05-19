@@ -397,7 +397,7 @@ def _resolve_entity_path(
     if entry is None:
         msg = (
             f"proposal {proposal.proposed_id}: target {proposal.target_entity!r} "
-            f"is marked existing but not found in entity index"
+            f"is marked existing but no entity matches in the wiki DB"
         )
         raise ReviewError(msg)
     path = ctx.wiki_repo / entry.category / f"{entry.slug}.yaml"

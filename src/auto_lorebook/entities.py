@@ -230,13 +230,16 @@ def list_entities(
 ) -> list[EntityRow]:
     """List entities sorted by (category, canonical_name).
 
-    Lazy backfill: if DB empty and wiki_repo provided, scans YAML once.
+    Lazy backfill: if the entities table is globally empty AND
+    wiki_repo is provided, scans YAML once. Filtered-but-empty
+    results don't trigger backfill (a category with no entities is
+    a legitimate state, not a missing-DB signal).
     """
-    rows = _query_entities(conn, category, include_superseded=include_superseded)
-    if not rows and wiki_repo is not None:
-        _backfill_from_yaml(conn, wiki_repo)
-        rows = _query_entities(conn, category, include_superseded=include_superseded)
-    return rows
+    if wiki_repo is not None:
+        (db_total,) = conn.execute("SELECT COUNT(*) FROM entities").fetchone()
+        if db_total == 0:
+            _backfill_from_yaml(conn, wiki_repo)
+    return _query_entities(conn, category, include_superseded=include_superseded)
 
 
 def _query_entities(
@@ -361,11 +364,14 @@ def add_alias(
     ).fetchone()
     if cross:
         _logger.info(
-            "entities: alias %r (normalized %r) also on %s/%s",
+            "entities: cross-entity alias collision — %r (normalized %r) "
+            "already on %s/%s, now also on %s/%s",
             name,
             normalized,
             cross["entity_category"],
             cross["entity_slug"],
+            category,
+            slug,
         )
 
     try:
@@ -553,6 +559,36 @@ def lookup_by_planner_name(
     # alias match
     normalized = normalize_name(name)
     return get_by_alias(conn, normalized)
+
+
+def search_entities(
+    conn: sqlite3.Connection,
+    query: str,
+) -> list[EntityRow]:
+    """3-tier `entities show` lookup.
+
+    Order: exact slug → canonical name (case-insensitive) → alias
+    (normalized). Returns all matches at the first tier that has any;
+    empty list if nothing hits.
+    """
+    rows = conn.execute("SELECT * FROM entities WHERE slug=?", (query,)).fetchall()
+    if not rows:
+        rows = conn.execute(
+            "SELECT * FROM entities WHERE canonical_name=? COLLATE NOCASE",
+            (query,),
+        ).fetchall()
+    if not rows:
+        norm = normalize_name(query)
+        rows = conn.execute(
+            """
+            SELECT DISTINCT e.* FROM entities e
+            JOIN aliases a
+              ON a.entity_category=e.category AND a.entity_slug=e.slug
+            WHERE a.name_normalized=?
+            """,
+            (norm,),
+        ).fetchall()
+    return [_entity_from_row(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
