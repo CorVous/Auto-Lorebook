@@ -25,8 +25,7 @@ implementation status.
     <id>`) writes `pending/<source_id>/plan.yaml` with no filesystem
     side effects (new entities and aliases are proposals only), supports
     multi-target routing per claim, and exposes `plans list` /
-    `plans show` for inspection. Automatic chaining after
-    `approve-reading` is a planned ergonomics improvement (see #59).
+    `plans show` for inspection.
 
     Phase 4 extractor landed: Stage 3 runs automatically after the
     planner, parallelised per `PlannedClaim`, with reduced preamble,
@@ -68,6 +67,17 @@ implementation status.
     are left untouched so a follow-up `regenerate-reading` /
     `approve-reading` cleanly redoes the pipeline. **Phase 4 is
     fully landed.**
+
+    Pipeline ergonomics (#59) landed: `auto-lorebook run <URL-or-id>`
+    is the single entry point for the full pipeline. It detects which
+    stage is next, drives the source forward to completion, and stops
+    at each human gate (reading review, fact review). Stages already
+    complete are skipped with a notice. In a non-interactive shell,
+    `--yes` passes the reading gate and `--auto-approve` passes the
+    fact-review gate; without both flags, `run` refuses to proceed
+    past a gate unattended. The planner runs between the two gates
+    without its own gate; its failure modes surface during fact review,
+    with `replan` as the escape hatch.
 
 ## Phase 1: Reading stage
 
