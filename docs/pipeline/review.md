@@ -136,10 +136,11 @@ seeds its dedup set from on-disk alias records whose
 
 ### Actions
 
-- **Approve** — every checked route becomes a fact row in `facts` +
-  `fact_targets`, the entity row is created if new, and
-  `<category>/<slug>.md` is regenerated. Unchecked routes are dropped —
-  their proposal rows are deleted from the DB.
+- **Approve** — one fact row is inserted into `facts` plus one
+  `fact_targets` row per checked route, all in a single SQLite
+  transaction. Entity rows are created if new. After commit,
+  `<category>/<slug>.md` is regenerated for each target. Unchecked
+  routes are dropped before the insert — they never reach `facts`.
 - **Edit** — bundle-level edits to `text`, `status`, and
   `status_reason` propagate to every checked route. Per-target
   `section` / `speaker` overrides are set in `[t]argets`. Tracks

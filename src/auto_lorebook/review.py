@@ -671,15 +671,6 @@ def _process_bundle(
         confirmed_per_target.append(confirmed)
         edits_per_target.append(edits)
 
-        # regen .md for this entity
-        try:
-            summary_regen_mod.regenerate_entity(ctx.conn, ctx.wiki_repo, category, slug)
-        except ValueError:
-            _logger.warning(
-                "review: regenerate_entity failed for %s/%s; .md not written",
-                category,
-                slug,
-            )
         # record merged aliases
         for alias in confirmed:
             ctx.merged_aliases.add((target_key, normalize_alias_name(alias)))
@@ -713,6 +704,18 @@ def _process_bundle(
     )
 
     if approval_result == ApprovalResult.APPROVED:
+        # regen .md per target only after the fact is committed
+        for category, slug, _section in targets_resolved:
+            try:
+                summary_regen_mod.regenerate_entity(
+                    ctx.conn, ctx.wiki_repo, category, slug
+                )
+            except ValueError:
+                _logger.warning(
+                    "review: regenerate_entity failed for %s/%s; .md not written",
+                    category,
+                    slug,
+                )
         if bundle_edits is not None:
             result.edited += 1
         else:
@@ -722,4 +725,4 @@ def _process_bundle(
                 result.edited += 1
             else:
                 result.approved += 1
-    # SKIPPED_IDEMPOTENT: no counter increment
+    # SKIPPED_IDEMPOTENT: no counter increment, no regen

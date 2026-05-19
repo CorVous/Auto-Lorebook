@@ -145,10 +145,15 @@ YAMLs whose history matters.
 - **Planning + extraction.** Produces
   `<wiki>/.wiki-state/pending/<source_id>/plan.yaml` and one YAML per
   proposed fact under `<wiki>/.wiki-state/pending/<source_id>/proposals/`.
-- **Fact review.** Approvals write fact rows into `wiki.db` and
-  regenerate `<category>/<slug>.md`. Rejected proposals are discarded.
-  If every proposal for a new entity is rejected, no entity row or `.md`
-  is ever created.
+  Proposals are also persisted in `wiki.db` as `proposals` rows with
+  child `proposal_targets` rows (one per target entity, joined on
+  `proposal_id` with `ON DELETE CASCADE`); a multi-target bundle is
+  one `proposals` row + N `proposal_targets` rows.
+- **Fact review.** Approving a bundle inserts one `facts` row + N
+  `fact_targets` rows in a single transaction, then regenerates
+  `<category>/<slug>.md` for each target. Rejected proposals are
+  discarded. If every proposal for a new entity is rejected, no
+  entity row or `.md` is ever created.
 - **Ingest complete.** When all proposals are decided, the ingest's
   pending directory is discarded. The audit trail lives on in
   `created_by_ingest` and `approved_at` fields on the resulting
