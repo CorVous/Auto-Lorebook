@@ -27,14 +27,6 @@ Any directory you point the tool at, registered with a nickname:
     last-context.yaml               # per-setting defaults: perspective, source_nature
     pending/
       <source_id>/
-        reading/                    # intermediate reading artifacts
-          structure.yaml            # Stage 1a output (segments + attribution)
-          bullets.yaml              # Stage 1b output (raw bullets)
-          reading.yaml              # sidecar (default_speaker, name_corrections, session_date)
-          segments/
-            seg-001.md              # per-segment frontmatter + rendered body
-            seg-002.md
-            …
         plan.yaml                   # planner output
         proposals/
           <proposal_id>.yaml        # one per proposed fact
@@ -144,14 +136,13 @@ YAMLs whose history matters.
   `.wiki-state/`) if not already present. `auto-lorebook wiki use
   <nickname>` switches active to an existing entry.
 - **Ingest start.** Transcript and `info.yaml` land under
-  `<wiki>/sources/<source_id>/`. Intermediate reading artifacts
-  (`structure.yaml`, draft segment files) live under
-  `<wiki>/.wiki-state/pending/<source_id>/reading/`.
+  `<wiki>/sources/<source_id>/`. Reading pipeline state (segments,
+  bullets, sidecar) is stored in `wiki.db` (`segments`,
+  `segment_bullets`, and `ingests` tables), not as YAML files.
 - **Reading approval.** The wiki-side `reading.md` is written by the
   reading-review engine when every segment is decided (`accepted` or
   `skipped`). The presence of the file is the gate — there is no
-  top-level frontmatter flag. `structure.yaml` is retained as an audit
-  artifact for the lifetime of the ingest.
+  top-level frontmatter flag.
 - **Planning + extraction.** Produces
   `<wiki>/.wiki-state/pending/<source_id>/plan.yaml` and one YAML per
   proposed fact under `<wiki>/.wiki-state/pending/<source_id>/proposals/`.

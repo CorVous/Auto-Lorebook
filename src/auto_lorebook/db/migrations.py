@@ -325,9 +325,54 @@ def _migration_002_widen_source_type(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = 2")
 
 
+# v3 segments DDL (fixes segment_status CHECK + adds flags_json); used by migration 003.
+_V3_SEGMENTS = """
+CREATE TABLE segments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ingest_id       TEXT NOT NULL,
+    segment_id      TEXT NOT NULL,
+    start           TEXT NOT NULL,
+    end             TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    speaker         TEXT,
+    notes           TEXT,
+    segment_status  TEXT NOT NULL DEFAULT 'draft' CHECK(segment_status IN (
+                        'draft','accepted','skipped','regenerating')),
+    overrides_json  TEXT NOT NULL DEFAULT '[]',
+    flags_json      TEXT NOT NULL DEFAULT '[]',
+    UNIQUE (ingest_id, segment_id),
+    FOREIGN KEY (ingest_id) REFERENCES ingests(ingest_id) ON DELETE CASCADE
+)
+"""
+
+
+def _migration_003_fix_segment_status_and_add_flags_json(
+    conn: sqlite3.Connection,
+) -> None:
+    """Fix segments.segment_status CHECK ('flagged'→'skipped') + add flags_json.
+
+    SQLite cannot ALTER a CHECK constraint; uses create-copy-drop-rename.
+    Existing rows are preserved; flags_json defaults to '[]'.
+    """
+    conn.execute(
+        _V3_SEGMENTS.replace("CREATE TABLE segments", "CREATE TABLE segments_new")
+    )
+    conn.execute(
+        "INSERT INTO segments_new "
+        "(id, ingest_id, segment_id, start, end, title, speaker, notes, "
+        " segment_status, overrides_json) "
+        "SELECT id, ingest_id, segment_id, start, end, title, speaker, notes, "
+        "       segment_status, overrides_json FROM segments"
+    )
+    conn.execute("DROP TABLE segments")
+    conn.execute("ALTER TABLE segments_new RENAME TO segments")
+    conn.execute("UPDATE schema_version SET version = 3")
+
+
 MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
     _migration_001_initial,
     _migration_002_widen_source_type,
+    _migration_003_fix_segment_status_and_add_flags_json,
 )
 
 CURRENT_SCHEMA_VERSION: int = len(MIGRATIONS)

@@ -325,8 +325,17 @@ class TestRejectIngest:
         # sources/ untouched
         assert (sources_dir / "info.yaml").exists()
         assert (sources_dir / "transcript.en.srt").exists()
-        # reading-stage pending artifacts survive
-        assert reading_pipeline.pending_structure_path(SOURCE_ID).exists()
+        # reading-stage DB state survives (segments left intact for re-run)
+        from auto_lorebook import db as db_mod  # noqa: PLC0415
+        from auto_lorebook import structure_store as ss_mod  # noqa: PLC0415
+        from auto_lorebook import wiki_state as ws_mod  # noqa: PLC0415
+
+        conn = db_mod.open(ws_mod.wiki_db_path(ingested_wiki))
+        try:
+            segs = ss_mod.list_segments(conn, SOURCE_ID)
+        finally:
+            conn.close()
+        assert segs
 
     def test_nothing_to_reject(
         self,

@@ -10,6 +10,7 @@ from auto_lorebook import (
     corrections,
     info_yaml,
     interactive,
+    source_store,
     wiki_context,
 )
 from auto_lorebook import db as db_mod
@@ -83,6 +84,7 @@ def finalize_context(
             return 130
 
         info_yaml.write(conn, info)
+        source_store.record_in_db(conn, info, info.source_id, info.source_type)
         # also write YAML for human editing / backfill surface
         info_yaml.write_yaml(info, info_path)
         print(f"Context saved for source {info.source_id}")  # noqa: T201

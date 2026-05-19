@@ -97,17 +97,17 @@ def test_old_schema_version_upgrades_to_current(tmp_path: Path) -> None:
 
 
 def test_multistep_upgrade_runs_each_migration_in_order(tmp_path: Path) -> None:
-    """Monkeypatch MIGRATIONS to add a no-op v3; verify order is preserved."""
+    """Monkeypatch MIGRATIONS to add a noop beyond current; verify order preserved."""
     db_path = tmp_path / "wiki.db"
     order: list[int] = []
+    noop_version = len(MIGRATIONS) + 1
 
-    def _migration_003_noop(conn: sqlite3.Connection) -> None:
-        order.append(3)
-        conn.execute("UPDATE schema_version SET version = 3")
+    def _migration_noop(conn: sqlite3.Connection) -> None:
+        order.append(noop_version)
+        conn.execute("UPDATE schema_version SET version = ?", (noop_version,))
 
-    extended = (*MIGRATIONS, _migration_003_noop)
-    # CURRENT_SCHEMA_VERSION must match len(extended) = 3
-    extended_version = len(extended)
+    extended = (*MIGRATIONS, _migration_noop)
+    extended_version = len(extended)  # CURRENT_SCHEMA_VERSION for the patched run
 
     with (
         patch("auto_lorebook.db.connection.MIGRATIONS", extended),
@@ -119,7 +119,7 @@ def test_multistep_upgrade_runs_each_migration_in_order(tmp_path: Path) -> None:
         conn.close()
 
     assert version == extended_version
-    assert order == [3]  # migrations 1+2 ran implicitly; noop ran last
+    assert order == [noop_version]  # prior migrations ran implicitly; noop ran last
 
 
 def test_future_schema_version_raises_named_error(tmp_path: Path) -> None:

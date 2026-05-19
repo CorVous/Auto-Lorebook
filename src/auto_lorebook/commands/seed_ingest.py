@@ -4,6 +4,9 @@ Seeds a fresh disposable ``qa-*`` source with synthetic stage-input
 fixtures, so a stage can be exercised in isolation without running the
 prior stages or hitting the LLM. Pair with ``reject-ingest <sid>`` to
 clean up.
+
+Reading-pipeline state is seeded directly into DB (not as pending YAML).
+Fixture YAMLs remain on disk as the seed source for human readability.
 """
 
 from __future__ import annotations
@@ -33,18 +36,17 @@ _DEFAULT_FIXTURE = "tiny-aldara"
 _SOURCE_ID_BYTES = 4  # 8 hex chars
 _MINT_RETRY = 16
 
-# stage → (next CLI hint, ordered list of files to seed cumulatively)
+# stage → ordered list of fixture keys to seed cumulatively
 _STAGES: dict[str, tuple[str, ...]] = {
     "structure": ("info", "transcript"),
     "summarize": ("info", "transcript", "structure"),
-    "approve": ("info", "transcript", "structure", "bullets", "sidecar", "segments"),
+    "approve": ("info", "transcript", "structure", "bullets", "sidecar"),
     "plan": (
         "info",
         "transcript",
         "structure",
         "bullets",
         "sidecar",
-        "segments",
         "approved_reading",
     ),
 }
@@ -153,6 +155,21 @@ def _seed(
     fixture_name: str,
     wiki_override: str | None = None,
 ) -> None:
+    import pathlib  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    import yaml  # noqa: PLC0415
+
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
+    from auto_lorebook import reading_sidecar as sidecar_mod  # noqa: PLC0415
+    from auto_lorebook import (  # noqa: PLC0415
+        source_store,
+        stage1b,
+        structure_store,
+    )
+    from auto_lorebook import structure as structure_mod  # noqa: PLC0415
+    from auto_lorebook.info_yaml import read_yaml  # noqa: PLC0415
+
     wiki_repo = cfg.resolve_active_wiki(wiki_override)
     if _source_collides(cfg, sid, wiki_override=wiki_override):
         msg = (
@@ -164,37 +181,72 @@ def _seed(
 
     fixture_root = _resolve_fixture(fixture_name)
     wiki_src = wiki_repo / "sources" / sid
-    pending_reading = wiki_state_mod.pending_reading_dir(wiki_repo, sid)
 
-    # wiki side first so a half-failed seed leaves only sources/<sid>
-    # behind, which `reject-ingest` will tolerate.
-    for key in _STAGES[at]:
-        if key == "segments":
-            _emit_segments_dir(fixture_root, pending_reading / "segments", sid)
-        else:
-            src_name, dest = _emit_target(key, wiki_src, pending_reading)
-            _emit_file(fixture_root, src_name, dest, sid)
+    keys = _STAGES[at]
 
+    # always: copy transcript + write info.yaml
+    _emit_file(fixture_root, "transcript.en.srt", wiki_src / "transcript.en.srt", sid)
+    _emit_file(fixture_root, "info.yaml", wiki_src / "info.yaml", sid)
 
-def _emit_target(
-    key: str,
-    wiki_src: Path,
-    pending_reading: Path,
-) -> tuple[str, Path]:
-    if key == "info":
-        return "info.yaml", wiki_src / "info.yaml"
-    if key == "transcript":
-        return "transcript.en.srt", wiki_src / "transcript.en.srt"
-    if key == "structure":
-        return "structure.yaml", pending_reading / "structure.yaml"
-    if key == "bullets":
-        return "bullets.yaml", pending_reading / "bullets.yaml"
-    if key == "sidecar":
-        return "reading.yaml", pending_reading / "reading.yaml"
-    if key == "approved_reading":
-        return "reading.md", wiki_src / "reading.md"
-    msg = f"internal: unknown seed key {key!r}"
-    raise SeedIngestError(msg)
+    # open DB connection for DB-backed state
+    db_path = wiki_state_mod.wiki_db_path(wiki_repo)
+    conn = db_mod.open(db_path)
+    try:
+        # read info back to get the Info object for record_in_db
+        info = read_yaml(wiki_src / "info.yaml")
+
+        # record sources + ingests row
+        source_store.record_in_db(conn, info, sid, info.source_type)
+
+        if "structure" in keys:
+            src = fixture_root / "structure.yaml"
+            text = src.read_text(encoding="utf-8").replace(_SOURCE_ID_PLACEHOLDER, sid)
+            with tempfile.NamedTemporaryFile(
+                suffix=".yaml", mode="w", encoding="utf-8", delete=False
+            ) as tf:
+                tf.write(text)
+                tmp = pathlib.Path(tf.name)
+            try:
+                structure = structure_mod.read(tmp)
+            finally:
+                tmp.unlink(missing_ok=True)
+            structure_store.write_structure(conn, sid, structure)
+
+        if "bullets" in keys:
+            src = fixture_root / "bullets.yaml"
+            text = src.read_text(encoding="utf-8").replace(_SOURCE_ID_PLACEHOLDER, sid)
+            with tempfile.NamedTemporaryFile(
+                suffix=".yaml", mode="w", encoding="utf-8", delete=False
+            ) as tf:
+                tf.write(text)
+                tmp = pathlib.Path(tf.name)
+            try:
+                rb = stage1b.read_bullets(tmp)
+            finally:
+                tmp.unlink(missing_ok=True)
+            structure_store.write_bullets(conn, sid, rb)
+
+        if "sidecar" in keys:
+            src = fixture_root / "reading.yaml"
+            text = src.read_text(encoding="utf-8").replace(_SOURCE_ID_PLACEHOLDER, sid)
+            raw_sc = yaml.safe_load(text)
+            sidecar_mod.write_state(
+                conn,
+                sid,
+                default_speaker=str(raw_sc.get("default_speaker") or ""),
+                name_corrections={
+                    str(k): str(v)
+                    for k, v in (raw_sc.get("name_corrections") or {}).items()
+                },
+                session_date=raw_sc.get("session_date"),
+            )
+
+        if "approved_reading" in keys:
+            _emit_file(fixture_root, "reading.md", wiki_src / "reading.md", sid)
+
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _emit_file(
@@ -210,25 +262,6 @@ def _emit_file(
     text = src.read_text(encoding="utf-8")
     text = text.replace(_SOURCE_ID_PLACEHOLDER, sid)
     atomic_write_text(dest, text)
-
-
-def _emit_segments_dir(
-    fixture_root: Traversable,
-    dest_dir: Path,
-    sid: str,
-) -> None:
-    """Copy all *.md files from fixture segments/ to dest_dir."""
-    src_dir = fixture_root / "segments"
-    if not src_dir.is_dir():
-        msg = f"fixture segments/ directory missing in {fixture_root}"
-        raise SeedIngestError(msg)
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    for child in src_dir.iterdir():
-        if not child.name.endswith(".md"):
-            continue
-        text = child.read_text(encoding="utf-8")
-        text = text.replace(_SOURCE_ID_PLACEHOLDER, sid)
-        atomic_write_text(dest_dir / child.name, text)
 
 
 def _resolve_fixture(fixture_name: str) -> Traversable:

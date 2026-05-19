@@ -13,19 +13,24 @@ from auto_lorebook import (
     plan_yaml,
     proposal_yaml,
     reading,
-    stage1b,
 )
 from auto_lorebook import reading_pipeline as pipeline
 from auto_lorebook import reading_sidecar as reading_sidecar_mod
-from auto_lorebook import segment_file as segment_file_mod
-from auto_lorebook import (
-    structure as structure_mod,
-)
+from auto_lorebook import structure_store as structure_store_mod
 from auto_lorebook.commands import seed_ingest_cmd
 from tests.test_reading_commands import _wire_client_responses
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
+
+
+def _open_wiki_db(wiki: Path) -> sqlite3.Connection:
+    """Open wiki DB."""
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
+    from auto_lorebook import wiki_state  # noqa: PLC0415
+
+    return db_mod.open(wiki_state.wiki_db_path(wiki))
 
 
 @pytest.fixture
@@ -66,28 +71,12 @@ class TestSeedIngestPerStage:
     """Each --at value seeds the right files and they load via their parsers."""
 
     @pytest.mark.parametrize(
-        ("at", "expected_wiki", "expected_pending"),
+        ("at", "expected_wiki", "expect_segments_in_db"),
         [
-            (
-                "structure",
-                {"transcript.en.srt", "info.yaml"},
-                set(),
-            ),
-            (
-                "summarize",
-                {"transcript.en.srt", "info.yaml"},
-                {"structure.yaml"},
-            ),
-            (
-                "approve",
-                {"transcript.en.srt", "info.yaml"},
-                {"structure.yaml", "bullets.yaml", "reading.yaml", "segments"},
-            ),
-            (
-                "plan",
-                {"transcript.en.srt", "info.yaml", "reading.md"},
-                {"structure.yaml", "bullets.yaml", "reading.yaml", "segments"},
-            ),
+            ("structure", {"transcript.en.srt", "info.yaml"}, False),
+            ("summarize", {"transcript.en.srt", "info.yaml"}, True),
+            ("approve", {"transcript.en.srt", "info.yaml"}, True),
+            ("plan", {"transcript.en.srt", "info.yaml", "reading.md"}, True),
         ],
     )
     def test_files_land_at_expected_paths(
@@ -97,7 +86,7 @@ class TestSeedIngestPerStage:
         capsys: pytest.CaptureFixture[str],
         at: str,
         expected_wiki: set[str],
-        expected_pending: set[str],
+        expect_segments_in_db: bool,  # noqa: FBT001
     ) -> None:
         _write_user_config(tmp_home, tmp_wiki)
         rc = seed_ingest_cmd.run(_args(at=at, fixture="tiny-aldara", source_id=None))
@@ -105,20 +94,24 @@ class TestSeedIngestPerStage:
         sid = _seeded_sid_from(capsys.readouterr().out)
         assert sid.startswith("qa-")
 
+        wiki_src = tmp_wiki / "sources" / sid
+        assert {p.name for p in wiki_src.iterdir()} == expected_wiki
+
+        # no old-style pending reading dir on disk
         from auto_lorebook import wiki_state  # noqa: PLC0415
 
-        wiki_src = tmp_wiki / "sources" / sid
-        pending_reading = wiki_state.pending_reading_dir(tmp_wiki, sid)
+        assert not wiki_state.pending_reading_dir(tmp_wiki, sid).exists()
 
-        assert {p.name for p in wiki_src.iterdir()} == expected_wiki
-        if expected_pending:
-            assert {p.name for p in pending_reading.iterdir()} == expected_pending
+        # DB state: segments present iff at >= summarize
+        conn = _open_wiki_db(tmp_wiki)
+        try:
+            segs = structure_store_mod.list_segments(conn, sid)
+        finally:
+            conn.close()
+        if expect_segments_in_db:
+            assert segs
         else:
-            assert not pending_reading.exists()
-
-        # no old-style pending reading.md
-        if pending_reading.exists():
-            assert not (pending_reading / "reading.md").exists()
+            assert not segs
 
     def test_substitutes_source_id_in_artifacts(
         self,
@@ -133,34 +126,35 @@ class TestSeedIngestPerStage:
         assert rc == 0
         sid = _seeded_sid_from(capsys.readouterr().out)
 
+        # info.yaml on disk
         info = info_yaml.read_yaml(tmp_wiki / "sources" / sid / "info.yaml")
         assert info.source_id == sid
 
-        from auto_lorebook import wiki_state  # noqa: PLC0415
+        conn = _open_wiki_db(tmp_wiki)
+        try:
+            # structure from DB
+            struct = structure_store_mod.read_structure(conn, sid)
+            assert struct.source_id == sid
 
-        pr = wiki_state.pending_reading_dir(tmp_wiki, sid)
-        struct = structure_mod.read(pr / "structure.yaml")
-        assert struct.source_id == sid
+            # bullets from DB
+            bullets = structure_store_mod.read_bullets(conn, sid)
+            assert bullets.source_id == sid
 
-        bullets = stage1b.read_bullets(pr / "bullets.yaml")
-        assert bullets.source_id == sid
+            # sidecar from DB
+            sidecar = reading_sidecar_mod.read_state(conn, sid)
+            assert sidecar.default_speaker == "DM"
+        finally:
+            conn.close()
 
+        # approved reading.md on disk
         approved_path = tmp_wiki / "sources" / sid / "reading.md"
         fm = reading.read_frontmatter(approved_path)
         assert fm["source_id"] == sid
         assert "reading_status" not in fm
 
-        sidecar = reading_sidecar_mod.read(pr / "reading.yaml")
-        assert sidecar.default_speaker == "DM"
-
-        # placeholder must not survive anywhere on disk
+        # placeholder must not survive in info.yaml or reading.md
         for path in (
             tmp_wiki / "sources" / sid / "info.yaml",
-            pr / "structure.yaml",
-            pr / "bullets.yaml",
-            pr / "reading.yaml",
-            pr / "segments" / "seg-001.md",
-            pr / "segments" / "seg-002.md",
             approved_path,
         ):
             assert "__QA_SOURCE_ID__" not in path.read_text(encoding="utf-8")
@@ -178,13 +172,16 @@ class TestSeedIngestPerStage:
         assert rc == 0
         sid = _seeded_sid_from(capsys.readouterr().out)
 
-        from auto_lorebook import wiki_state  # noqa: PLC0415
-
-        pr = wiki_state.pending_reading_dir(tmp_wiki, sid)
-        seg001 = segment_file_mod.read(pr / "segments" / "seg-001.md")
-        assert seg001.frontmatter.segment_status == "draft"
-        seg002 = segment_file_mod.read(pr / "segments" / "seg-002.md")
-        assert seg002.frontmatter.segment_status == "draft"
+        conn = _open_wiki_db(tmp_wiki)
+        try:
+            seg001 = structure_store_mod.get_segment(conn, sid, "seg-001")
+            assert seg001 is not None
+            assert seg001.segment_status == "draft"
+            seg002 = structure_store_mod.get_segment(conn, sid, "seg-002")
+            assert seg002 is not None
+            assert seg002.segment_status == "draft"
+        finally:
+            conn.close()
 
     def test_explicit_source_id_used_verbatim(
         self,

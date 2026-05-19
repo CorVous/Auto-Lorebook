@@ -144,9 +144,9 @@ def reject_ingest(
         result.facts_removed += plan.facts_dropped
         result.aliases_removed += plan.aliases_dropped
 
-    # Pipeline artifacts: drop plan.yaml + proposals/. Leave reading/
-    # alone so replan / regenerate-reading still work after a partial
-    # reset.
+    # Pipeline artifacts: drop plan.yaml + proposals/. Leave reading-state
+    # DB rows (ingests/segments/segment_bullets) alone so replan /
+    # regenerate-reading still work after a partial reset.
     plan_path = pipeline_mod.pending_plan_path(source_id)
     plan_path.unlink(missing_ok=True)
     proposals_dir = pipeline_mod.pending_proposals_dir(source_id)

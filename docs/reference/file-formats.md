@@ -99,28 +99,14 @@ Every YAML file carries `schema_version` as its first key — see
 - **Purpose** — model selection, wiki repo path, API key env var name.
 - **Details** — [installation](../getting-started/installation.md#configure).
 
-### `<wiki>/.wiki-state/pending/<ingest_id>/reading/structure.yaml`
+### `wiki.db` — reading stage tables
 
-- **Stage** — Stage 1a output.
-- **Purpose** — segments, speaker attribution, sub-segment overrides,
-  uncertainty flags. Intermediate artifact; retained as audit through
-  ingest lifetime.
-- **Details** — [Stage 1a](../pipeline/reading.md#stage-1a-structure).
-
-### `<wiki>/.wiki-state/pending/<ingest_id>/reading/reading.yaml`
-
-- **Stage** — Stage 1b output; sidecar.
-- **Purpose** — session metadata: `default_speaker`, `name_corrections`,
-  `session_date`. Preserved across regenerations.
-- **Details** — [Stage 1b](../pipeline/reading.md#stage-1b-summarize).
-
-### `<wiki>/.wiki-state/pending/<ingest_id>/reading/segments/<segment_id>.md`
-
-- **Stage** — Stage 1b output; per-segment.
-- **Purpose** — YAML frontmatter (segment metadata, `segment_status`)
-  plus pre-rendered bullet body. Assembled into the wiki-side
-  `reading.md` at approval time.
-- **Details** — [reading assembly](../pipeline/reading.md#reading-assembly).
+- **Stage** — Stage 1a + 1b output.
+- **Tables** — `segments` (one row per segment: id, start, end, title,
+  speaker, status, overrides_json, flags_json), `segment_bullets` (one
+  row per bullet), `ingests` (session metadata: `default_speaker`,
+  `name_corrections_json`, `session_date`, `state`).
+- **Details** — [Stage 1: reading](../pipeline/reading.md).
 
 ### `<wiki>/.wiki-state/pending/<ingest_id>/plan.yaml`
 
@@ -146,15 +132,11 @@ SHA-256 hashes of the inputs that produced it. See
 
 Only these files are intended as hand-edit surfaces:
 
-- `pending/<id>/reading/reading.yaml` — before approval. Edit
-  `name_corrections` and `session_date`.
-- `pending/<id>/reading/segments/seg-NNN.md` — before approval. Edit
-  bullet body text and timestamps. (Per-segment interactive editing
-  lands in a future slice; currently the assembled preview is
-  read-only.)
+- Reading sidecar (before approval) — edit `name_corrections` and
+  `session_date` via the `[m]` meta command in `approve-reading`, which
+  opens a temp file and writes the changes back to `wiki.db`.
 - `<category>/<slug>.yaml` — after approval. Edit facts, aliases,
   sections, `superseded_by`.
 
-Hand-edits to intermediate artifacts (`structure.yaml`, `plan.yaml`,
-proposal YAMLs) are not detected as staleness signals; they are not
-supported edit surfaces.
+Reading stage state (`wiki.db` tables) and plan artifacts (`plan.yaml`,
+proposal YAMLs) are not supported as direct hand-edit surfaces.

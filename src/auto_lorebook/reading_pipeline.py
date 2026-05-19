@@ -3,6 +3,13 @@
 Exposes `generate`, `approve`, `regenerate`, and `assemble_draft` entry
 points used by the three reading subcommands. The command modules handle
 argparse; this module handles the wiring between stages.
+
+State is now stored in wiki.db (ingests/segments/segment_bullets tables).
+Pending YAML files (structure.yaml, bullets.yaml, reading.yaml, seg-NNN.md)
+are no longer written by this module.
+
+Hard-cutover: if a pre-existing YAML reading state is detected alongside a
+missing ingests row, a ReadingPipelineError is raised with a remediation hint.
 """
 
 from __future__ import annotations
@@ -27,12 +34,13 @@ from auto_lorebook import proposal_yaml as proposal_yaml_mod
 from auto_lorebook import reading as reading_mod
 from auto_lorebook import reading_assembly as reading_assembly_mod
 from auto_lorebook import reading_sidecar as sidecar_mod
-from auto_lorebook import segment_file as segment_file_mod
+from auto_lorebook import source_store as source_store_mod
 from auto_lorebook import stage1a as stage1a_mod
 from auto_lorebook import stage1b as stage1b_mod
 from auto_lorebook import stage2 as stage2_mod
 from auto_lorebook import stage3 as stage3_mod
 from auto_lorebook import structure as structure_mod
+from auto_lorebook import structure_store as structure_store_mod
 from auto_lorebook import transcript as transcript_mod
 from auto_lorebook import wiki_context as wiki_context_mod
 from auto_lorebook import wiki_state as wiki_state_mod
@@ -47,8 +55,7 @@ if TYPE_CHECKING:
     from auto_lorebook.plan_yaml import Plan
     from auto_lorebook.proposal_yaml import Proposal
     from auto_lorebook.reading_review import RegenBatch
-    from auto_lorebook.reading_sidecar import Sidecar
-    from auto_lorebook.segment_file import SegmentFile
+    from auto_lorebook.reading_sidecar import IngestState
 
 _logger = logging.getLogger(__name__)
 
@@ -59,12 +66,11 @@ class ReadingPipelineError(RuntimeError):
 
 @dataclass
 class GenerateResult:
-    """Paths and warnings produced by a generate/regenerate run."""
+    """Result of a generate/regenerate run."""
 
-    sidecar_path: Path
-    segments_dir: Path
-    structure_path: Path
-    bullets_path: Path
+    ingest_id: str
+    segments_count: int
+    bullets_count: int
     gap_warnings: list[GapWarning]
 
 
@@ -90,7 +96,7 @@ def generate(
     source_id: str,
     wiki_override: str | None = None,
 ) -> GenerateResult:
-    """Run Stage 1a + 1b from scratch and write draft segment files."""
+    """Run Stage 1a + 1b from scratch and store in DB."""
     return _run_full(cfg, source_id, wiki_override=wiki_override)
 
 
@@ -123,91 +129,72 @@ def regenerate_after_review(
 ) -> GenerateResult:
     """Re-run Stage 1b on regenerating segments after a quit-commit.
 
-    Injects accepted-segments context; writes updated bullets.yaml and
-    seg-NNN.md files with status reset to draft.
+    Injects accepted-segments context; rewrites bullets and resets statuses to draft.
     """
     source_id = batch.source_id
-    structure_path = pending_structure_path(source_id)
-    if not structure_path.exists():
-        msg = (
-            f"No prior structure.yaml for {source_id!r}. "
-            "Run `regenerate-reading --from=structure` or `generate-reading` first."
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
+    conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    try:
+        _check_no_stale_yaml(wiki_repo, source_id, conn)
+        if not sidecar_mod.exists(conn, source_id):
+            msg = (
+                f"No prior reading state for {source_id!r}. "
+                "Run `regenerate-reading --from=structure` or `generate-reading` first."
+            )
+            raise ReadingPipelineError(msg)
+        try:
+            structure = structure_store_mod.read_structure(conn, source_id)
+        except structure_store_mod.StructureStoreError as e:
+            raise ReadingPipelineError(str(e)) from e
+
+        _info, ctx = _load_context_with_conn(cfg, source_id, conn, wiki_repo)
+        client = _build_client(cfg)
+        model = cfg.models.primary
+
+        existing_bullets = structure_store_mod.read_bullets(conn, source_id)
+        new_bullets = stage1b_mod.run(
+            transcript=ctx.transcript,
+            structure=structure,
+            preamble_text=ctx.preamble_text,
+            client=client,
+            model=model,
+            segment_ids=list(batch.regen_segment_ids),
+            accepted_context=list(batch.accepted_context),
         )
-        raise ReadingPipelineError(msg)
-    structure = structure_mod.read(structure_path)
+        # rebuilt segments overwrite; untouched segments keep existing bullets
+        merged = existing_bullets.segments.copy()
+        for sid, bullets_list in new_bullets.segments.items():
+            merged[sid] = bullets_list
+        for seg in structure.segments:
+            merged.setdefault(seg.id, [])
+        new_bullets.segments = merged
 
-    info, ctx = _load_context(cfg, source_id, wiki_override=wiki_override)
-    client = _build_client(cfg)
-    model = cfg.models.primary
+        structure_store_mod.write_bullets(conn, source_id, new_bullets)
 
-    existing = _load_existing_bullets(source_id)
-    new_bullets = stage1b_mod.run(
-        transcript=ctx.transcript,
-        structure=structure,
-        preamble_text=ctx.preamble_text,
-        client=client,
-        model=model,
-        segment_ids=list(batch.regen_segment_ids),
-        accepted_context=list(batch.accepted_context),
-    )
-    # rebuilt segments overwrite; untouched segments keep existing bullets
-    merged = existing.segments.copy()
-    for sid, bullets_list in new_bullets.segments.items():
-        merged[sid] = bullets_list
-    for seg in structure.segments:
-        merged.setdefault(seg.id, [])
-    new_bullets.segments = merged
-    stage1b_mod.write_bullets(new_bullets, pending_bullets_path(source_id))
+        # reset status of regen segments to draft
+        for seg_id in batch.regen_segment_ids:
+            structure_store_mod.set_segment_status(conn, source_id, seg_id, "draft")
 
-    warnings = gap_check_mod.check(structure)
-    existing_sc = _load_existing_sidecar(source_id)
-    name_corrections = existing_sc.name_corrections if existing_sc else {}
-    session_date = existing_sc.session_date if existing_sc else None
-    sc = sidecar_mod.Sidecar(
-        default_speaker=structure.default_speaker,
-        name_corrections=name_corrections,
-        session_date=session_date,
-        gap_warnings=warnings,
-    )
-    sidecar_path = pending_sidecar_path(source_id)
-    sidecar_mod.write(sc, sidecar_path)
-
-    segs_dir = pending_segments_dir(source_id)
-    segs_dir.mkdir(parents=True, exist_ok=True)
-    flags_by_seg = _flags_by_segment(structure)
-    target_ids = set(batch.regen_segment_ids)
-    for seg in structure.segments:
-        if seg.id not in target_ids:
-            continue
-        body = build_segment_body(
-            seg,
-            new_bullets.segments.get(seg.id, []),
-            flags_by_seg.get(seg.id, []),
-            info.source_url,
-            name_corrections,
+        warnings = gap_check_mod.check(structure)
+        existing_sc = _load_existing_state(conn, source_id)
+        name_corrections = existing_sc.name_corrections if existing_sc else {}
+        session_date = existing_sc.session_date if existing_sc else None
+        sidecar_mod.write_state(
+            conn,
+            source_id,
+            default_speaker=structure.default_speaker,
+            name_corrections=name_corrections,
+            session_date=session_date,
         )
-        sf = segment_file_mod.SegmentFile(
-            frontmatter=segment_file_mod.SegmentFrontmatter(
-                segment_id=seg.id,
-                segment_status="draft",
-                start=seg.start,
-                end=seg.end,
-                title=seg.title,
-                speaker=seg.speaker,
-                notes=seg.notes,
-                overrides=list(seg.overrides),
-            ),
-            body=body,
+        conn.commit()
+        return GenerateResult(
+            ingest_id=source_id,
+            segments_count=len(structure.segments),
+            bullets_count=sum(len(bl) for bl in new_bullets.segments.values()),
+            gap_warnings=warnings,
         )
-        segment_file_mod.write(sf, pending_segment_path(source_id, seg.id))
-
-    return GenerateResult(
-        sidecar_path=sidecar_path,
-        segments_dir=segs_dir,
-        structure_path=pending_structure_path(source_id),
-        bullets_path=pending_bullets_path(source_id),
-        gap_warnings=warnings,
-    )
+    finally:
+        conn.close()
 
 
 def approve(
@@ -250,28 +237,27 @@ def assemble_draft(
     source_id: str,
     wiki_override: str | None = None,
 ) -> str:
-    """Assemble the current segment files into a draft preview string."""
-    sidecar_path = pending_sidecar_path(source_id)
-    if not sidecar_path.exists():
-        msg = f"No draft reading for {source_id!r}. Run `generate-reading` first."
-        raise ReadingPipelineError(msg)
-
+    """Assemble current segment state into a draft preview string."""
     wiki_repo = cfg.resolve_active_wiki(wiki_override)
     conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
     try:
-        info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
-    except info_yaml_mod.InfoError as e:
-        raise ReadingPipelineError(str(e)) from e
+        _check_no_stale_yaml(wiki_repo, source_id, conn)
+        if not sidecar_mod.exists(conn, source_id):
+            msg = f"No draft reading for {source_id!r}. Run `generate-reading` first."
+            raise ReadingPipelineError(msg)
+        try:
+            info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
+        except info_yaml_mod.InfoError as e:
+            raise ReadingPipelineError(str(e)) from e
+        try:
+            sc = sidecar_mod.read_state(conn, source_id)
+        except sidecar_mod.ReadingSidecarError as e:
+            raise ReadingPipelineError(str(e)) from e
+        return reading_assembly_mod.assemble(
+            conn=conn, ingest_id=source_id, info=info, sidecar=sc
+        )
     finally:
         conn.close()
-
-    try:
-        sc = sidecar_mod.read(sidecar_path)
-    except sidecar_mod.ReadingSidecarError as e:
-        raise ReadingPipelineError(str(e)) from e
-
-    segments = _load_segments(source_id)
-    return reading_assembly_mod.assemble(segments=segments, sidecar=sc, info=info)
 
 
 def _active_wiki_root() -> Path:
@@ -336,26 +322,6 @@ def plan(
             f"Run `approve-reading {source_id}` first."
         )
         raise ReadingPipelineError(msg)
-    # File presence is the approval gate — written only when the reading-review
-    # engine commits with every segment decided (accepted or skipped).
-
-    structure_path = pending_structure_path(source_id)
-    bullets_path = pending_bullets_path(source_id)
-    if not structure_path.exists() or not bullets_path.exists():
-        msg = (
-            f"Missing prior pipeline artifacts for {source_id!r}. "
-            "Re-run `regenerate-reading` to repopulate "
-            f"{pending_dir(source_id)}."
-        )
-        raise ReadingPipelineError(msg)
-    try:
-        structure = structure_mod.read(structure_path)
-    except structure_mod.StructureError as e:
-        raise ReadingPipelineError(str(e)) from e
-    try:
-        bullets = stage1b_mod.read_bullets(bullets_path)
-    except stage1b_mod.Stage1bError as e:
-        raise ReadingPipelineError(str(e)) from e
 
     conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
     try:
@@ -366,8 +332,26 @@ def plan(
         wc = wiki_context_mod.read(conn, wiki_repo=wiki_repo)
         cors = corrections_mod.read(conn, wiki_repo=wiki_repo)
         entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
+
+        try:
+            structure = structure_store_mod.read_structure(conn, source_id)
+        except structure_store_mod.StructureStoreError as e:
+            msg = (
+                f"Missing prior structure for {source_id!r}. "
+                "Re-run `regenerate-reading` to repopulate."
+            )
+            raise ReadingPipelineError(msg) from e
+        try:
+            bullets = structure_store_mod.read_bullets(conn, source_id)
+        except Exception as e:
+            msg = (
+                f"Missing prior bullets for {source_id!r}. "
+                "Re-run `regenerate-reading` to repopulate."
+            )
+            raise ReadingPipelineError(msg) from e
     finally:
         conn.close()
+
     p = preamble_mod.assemble(info, wc, cors, entity_snippet, reduced=False)
     try:
         p.check_budget(
@@ -419,18 +403,6 @@ def extract(
     except plan_yaml_mod.PlanError as e:
         raise ReadingPipelineError(str(e)) from e
 
-    structure_path = pending_structure_path(source_id)
-    if not structure_path.exists():
-        msg = (
-            f"No structure.yaml for {source_id!r}; run `regenerate-reading` "
-            "to repopulate."
-        )
-        raise ReadingPipelineError(msg)
-    try:
-        structure = structure_mod.read(structure_path)
-    except structure_mod.StructureError as e:
-        raise ReadingPipelineError(str(e)) from e
-
     conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
     try:
         try:
@@ -444,6 +416,15 @@ def extract(
             loaded = transcript_mod.load(wiki_repo, info, cors)
         except transcript_mod.TranscriptError as e:
             raise ReadingPipelineError(str(e)) from e
+
+        try:
+            structure = structure_store_mod.read_structure(conn, source_id)
+        except structure_store_mod.StructureStoreError as e:
+            msg = (
+                f"No structure for {source_id!r}; "
+                "run `regenerate-reading` to repopulate."
+            )
+            raise ReadingPipelineError(msg) from e
 
         p = preamble_mod.assemble(info, wc, cors, entity_snippet, reduced=True)
         try:
@@ -480,9 +461,6 @@ def extract(
         raise ReadingPipelineError(str(e)) from e
 
     proposals_dir = pending_proposals_dir(source_id)
-    # Wipe + recreate: approved facts already live in entity YAMLs, so
-    # the proposals dir holds only un-reviewed work — wiping loses
-    # nothing authoritative. Review-loop PR will own per-proposal lifecycle.
     if proposals_dir.exists():
         shutil.rmtree(proposals_dir)
     proposals_dir.mkdir(parents=True, exist_ok=True)
@@ -514,8 +492,6 @@ def _collect_existing_target_metadata(
                 continue
             entry = entities_mod.lookup_by_planner_name(conn, target.entity)
             if entry is None:
-                # planner said "existing" but we can't resolve — treat as new
-                # so allocation still works deterministically
                 continue
             entity_path = wiki_repo / entry.category / f"{entry.slug}.yaml"
             try:
@@ -527,86 +503,86 @@ def _collect_existing_target_metadata(
     return fact_counts, slugs
 
 
+def _check_no_stale_yaml(
+    wiki_repo: Path,
+    source_id: str,
+    conn: sqlite3.Connection,
+) -> None:
+    """Fail loudly if pre-existing YAML reading state exists without a DB row.
+
+    Hard-cutover: no lazy backfill. If a human has old YAML state and no DB
+    row, they must run regenerate-reading --from=structure to rebuild.
+    """
+    pending_yaml = (
+        wiki_state_mod.pending_reading_dir(wiki_repo, source_id) / "reading.yaml"
+    )
+    if pending_yaml.exists() and not sidecar_mod.exists(conn, source_id):
+        msg = (
+            f"Pre-existing YAML reading state detected at {pending_yaml}. "
+            f"Run `auto-lorebook regenerate-reading {source_id} --from=structure` "
+            "to rebuild from transcript into the DB."
+        )
+        raise ReadingPipelineError(msg)
+
+
 def _run_full(
     cfg: cfg_mod.Config,
     source_id: str,
     wiki_override: str | None = None,
 ) -> GenerateResult:
-    info, ctx = _load_context(cfg, source_id, wiki_override=wiki_override)
-    client = _build_client(cfg)
-    model = cfg.models.primary
-
-    structure = stage1a_mod.run(
-        transcript=ctx.transcript,
-        preamble_text=ctx.preamble_text,
-        source_id=source_id,
-        client=client,
-        model=model,
-    )
-    pdir = pending_dir(source_id)
-    pdir.mkdir(parents=True, exist_ok=True)
-    structure_mod.write(structure, pending_structure_path(source_id))
-
-    warnings = gap_check_mod.check(structure)
-
-    bullets = stage1b_mod.run(
-        transcript=ctx.transcript,
-        structure=structure,
-        preamble_text=ctx.preamble_text,
-        client=client,
-        model=model,
-    )
-    for seg in structure.segments:
-        bullets.segments.setdefault(seg.id, [])
-    stage1b_mod.write_bullets(bullets, pending_bullets_path(source_id))
-
-    # build sidecar from structure defaults
-    existing_sc = _load_existing_sidecar(source_id)
-    name_corrections = existing_sc.name_corrections if existing_sc else {}
-    session_date = existing_sc.session_date if existing_sc else None
-    sc = sidecar_mod.Sidecar(
-        default_speaker=structure.default_speaker,
-        name_corrections=name_corrections,
-        session_date=session_date,
-        gap_warnings=warnings,
-    )
-    sidecar_path = pending_sidecar_path(source_id)
-    sidecar_mod.write(sc, sidecar_path)
-
-    # write per-segment files
-    segs_dir = pending_segments_dir(source_id)
-    segs_dir.mkdir(parents=True, exist_ok=True)
-    flags_by_seg = _flags_by_segment(structure)
-    for seg in structure.segments:
-        body = build_segment_body(
-            seg,
-            bullets.segments.get(seg.id, []),
-            flags_by_seg.get(seg.id, []),
-            info.source_url,
-            name_corrections,
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
+    conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    try:
+        _check_no_stale_yaml(wiki_repo, source_id, conn)
+        loaded_info, ctx = _load_context_with_conn(cfg, source_id, conn, wiki_repo)
+        # ensure sources + ingests rows exist (idempotent if already seeded)
+        source_store_mod.record_in_db(
+            conn, loaded_info, source_id, loaded_info.source_type
         )
-        sf = segment_file_mod.SegmentFile(
-            frontmatter=segment_file_mod.SegmentFrontmatter(
-                segment_id=seg.id,
-                segment_status="draft",
-                start=seg.start,
-                end=seg.end,
-                title=seg.title,
-                speaker=seg.speaker,
-                notes=seg.notes,
-                overrides=list(seg.overrides),
-            ),
-            body=body,
-        )
-        segment_file_mod.write(sf, pending_segment_path(source_id, seg.id))
+        client = _build_client(cfg)
+        model = cfg.models.primary
 
-    return GenerateResult(
-        sidecar_path=sidecar_path,
-        segments_dir=segs_dir,
-        structure_path=pending_structure_path(source_id),
-        bullets_path=pending_bullets_path(source_id),
-        gap_warnings=warnings,
-    )
+        structure = stage1a_mod.run(
+            transcript=ctx.transcript,
+            preamble_text=ctx.preamble_text,
+            source_id=source_id,
+            client=client,
+            model=model,
+        )
+        structure_store_mod.write_structure(conn, source_id, structure)
+
+        warnings = gap_check_mod.check(structure)
+
+        bullets = stage1b_mod.run(
+            transcript=ctx.transcript,
+            structure=structure,
+            preamble_text=ctx.preamble_text,
+            client=client,
+            model=model,
+        )
+        for seg in structure.segments:
+            bullets.segments.setdefault(seg.id, [])
+        structure_store_mod.write_bullets(conn, source_id, bullets)
+
+        existing_sc = _load_existing_state(conn, source_id)
+        name_corrections = existing_sc.name_corrections if existing_sc else {}
+        session_date = existing_sc.session_date if existing_sc else None
+        sidecar_mod.write_state(
+            conn,
+            source_id,
+            default_speaker=structure.default_speaker,
+            name_corrections=name_corrections,
+            session_date=session_date,
+        )
+        conn.commit()
+        return GenerateResult(
+            ingest_id=source_id,
+            segments_count=len(structure.segments),
+            bullets_count=sum(len(bl) for bl in bullets.segments.values()),
+            gap_warnings=warnings,
+        )
+    finally:
+        conn.close()
 
 
 def _run_summarize_only(
@@ -616,92 +592,64 @@ def _run_summarize_only(
     segment_ids: list[str] | None,
     wiki_override: str | None = None,
 ) -> GenerateResult:
-    structure_path = pending_structure_path(source_id)
-    if not structure_path.exists():
-        msg = (
-            f"No prior structure.yaml for {source_id!r}. "
-            "Run `regenerate-reading --from=structure` or `generate-reading` first."
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
+    conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    try:
+        _check_no_stale_yaml(wiki_repo, source_id, conn)
+        if not sidecar_mod.exists(conn, source_id):
+            msg = (
+                f"No prior reading state for {source_id!r}. "
+                "Run `regenerate-reading --from=structure` or `generate-reading` first."
+            )
+            raise ReadingPipelineError(msg)
+
+        try:
+            structure = structure_store_mod.read_structure(conn, source_id)
+        except structure_store_mod.StructureStoreError as e:
+            raise ReadingPipelineError(str(e)) from e
+
+        _info, ctx = _load_context_with_conn(cfg, source_id, conn, wiki_repo)
+        client = _build_client(cfg)
+        model = cfg.models.primary
+
+        existing_bullets = structure_store_mod.read_bullets(conn, source_id)
+        new_bullets = stage1b_mod.run(
+            transcript=ctx.transcript,
+            structure=structure,
+            preamble_text=ctx.preamble_text,
+            client=client,
+            model=model,
+            segment_ids=segment_ids,
         )
-        raise ReadingPipelineError(msg)
-    structure = structure_mod.read(structure_path)
+        # rebuilt segments overwrite; untouched segments keep existing bullets
+        merged = existing_bullets.segments.copy()
+        for sid, bullets_list in new_bullets.segments.items():
+            merged[sid] = bullets_list
+        for seg in structure.segments:
+            merged.setdefault(seg.id, [])
+        new_bullets.segments = merged
+        structure_store_mod.write_bullets(conn, source_id, new_bullets)
 
-    info, ctx = _load_context(cfg, source_id, wiki_override=wiki_override)
-    client = _build_client(cfg)
-    model = cfg.models.primary
-
-    existing = _load_existing_bullets(source_id)
-    new_bullets = stage1b_mod.run(
-        transcript=ctx.transcript,
-        structure=structure,
-        preamble_text=ctx.preamble_text,
-        client=client,
-        model=model,
-        segment_ids=segment_ids,
-    )
-    # rebuilt segments overwrite; untouched segments keep existing bullets
-    merged = existing.segments.copy()
-    for sid, bullets_list in new_bullets.segments.items():
-        merged[sid] = bullets_list
-    for seg in structure.segments:
-        merged.setdefault(seg.id, [])
-    new_bullets.segments = merged
-    stage1b_mod.write_bullets(new_bullets, pending_bullets_path(source_id))
-
-    # always rewrite sidecar (preserving corrections + session_date)
-    warnings = gap_check_mod.check(structure)
-    existing_sc = _load_existing_sidecar(source_id)
-    name_corrections = existing_sc.name_corrections if existing_sc else {}
-    session_date = existing_sc.session_date if existing_sc else None
-    sc = sidecar_mod.Sidecar(
-        default_speaker=structure.default_speaker,
-        name_corrections=name_corrections,
-        session_date=session_date,
-        gap_warnings=warnings,
-    )
-    sidecar_path = pending_sidecar_path(source_id)
-    sidecar_mod.write(sc, sidecar_path)
-
-    # rewrite only targeted segment files (or all when segment_ids is None)
-    segs_dir = pending_segments_dir(source_id)
-    segs_dir.mkdir(parents=True, exist_ok=True)
-    flags_by_seg = _flags_by_segment(structure)
-    target_ids = (
-        set(segment_ids)
-        if segment_ids is not None
-        else {seg.id for seg in structure.segments}
-    )
-    for seg in structure.segments:
-        if seg.id not in target_ids:
-            continue
-        body = build_segment_body(
-            seg,
-            new_bullets.segments.get(seg.id, []),
-            flags_by_seg.get(seg.id, []),
-            info.source_url,
-            name_corrections,
+        warnings = gap_check_mod.check(structure)
+        existing_sc = _load_existing_state(conn, source_id)
+        name_corrections = existing_sc.name_corrections if existing_sc else {}
+        session_date = existing_sc.session_date if existing_sc else None
+        sidecar_mod.write_state(
+            conn,
+            source_id,
+            default_speaker=structure.default_speaker,
+            name_corrections=name_corrections,
+            session_date=session_date,
         )
-        sf = segment_file_mod.SegmentFile(
-            frontmatter=segment_file_mod.SegmentFrontmatter(
-                segment_id=seg.id,
-                segment_status="draft",
-                start=seg.start,
-                end=seg.end,
-                title=seg.title,
-                speaker=seg.speaker,
-                notes=seg.notes,
-                overrides=list(seg.overrides),
-            ),
-            body=body,
+        conn.commit()
+        return GenerateResult(
+            ingest_id=source_id,
+            segments_count=len(structure.segments),
+            bullets_count=sum(len(bl) for bl in new_bullets.segments.values()),
+            gap_warnings=warnings,
         )
-        segment_file_mod.write(sf, pending_segment_path(source_id, seg.id))
-
-    return GenerateResult(
-        sidecar_path=sidecar_path,
-        segments_dir=segs_dir,
-        structure_path=pending_structure_path(source_id),
-        bullets_path=pending_bullets_path(source_id),
-        gap_warnings=warnings,
-    )
+    finally:
+        conn.close()
 
 
 @dataclass
@@ -710,23 +658,20 @@ class _Context:
     preamble_text: str
 
 
-def _load_context(
+def _load_context_with_conn(
     cfg: cfg_mod.Config,
     source_id: str,
-    wiki_override: str | None = None,
+    conn: sqlite3.Connection,
+    wiki_repo: Path,
 ) -> tuple[Info, _Context]:
-    wiki_repo = cfg.resolve_active_wiki(wiki_override)
-    conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    """Load context using an already-open connection."""
     try:
-        try:
-            info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
-        except info_yaml_mod.InfoError as e:
-            raise ReadingPipelineError(str(e)) from e
-        wc = wiki_context_mod.read(conn, wiki_repo=wiki_repo)
-        cors = corrections_mod.read(conn, wiki_repo=wiki_repo)
-        entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
-    finally:
-        conn.close()
+        info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
+    except info_yaml_mod.InfoError as e:
+        raise ReadingPipelineError(str(e)) from e
+    wc = wiki_context_mod.read(conn, wiki_repo=wiki_repo)
+    cors = corrections_mod.read(conn, wiki_repo=wiki_repo)
+    entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
 
     try:
         loaded = transcript_mod.load(wiki_repo, info, cors)
@@ -742,6 +687,19 @@ def _load_context(
     except preamble_mod.PreambleTooLargeError as e:
         raise ReadingPipelineError(str(e)) from e
     return info, _Context(transcript=loaded, preamble_text=p.text)
+
+
+def _load_context(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> tuple[Info, _Context]:
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
+    conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    try:
+        return _load_context_with_conn(cfg, source_id, conn, wiki_repo)
+    finally:
+        conn.close()
 
 
 def _build_client(cfg: cfg_mod.Config) -> OpenRouterClient:
@@ -764,32 +722,16 @@ def _build_client(cfg: cfg_mod.Config) -> OpenRouterClient:
         raise ReadingPipelineError(str(e)) from e
 
 
-def _load_existing_bullets(source_id: str) -> stage1b_mod.ReadingBullets:
-    path = pending_bullets_path(source_id)
-    if not path.exists():
-        return stage1b_mod.ReadingBullets(
-            source_id=source_id, generated_at="", segments={}
-        )
-    return stage1b_mod.read_bullets(path)
-
-
-def _load_existing_sidecar(source_id: str) -> Sidecar | None:
-    path = pending_sidecar_path(source_id)
-    if not path.exists():
+def _load_existing_state(
+    conn: sqlite3.Connection, source_id: str
+) -> IngestState | None:
+    """Load existing IngestState if present, else None."""
+    if not sidecar_mod.exists(conn, source_id):
         return None
     try:
-        return sidecar_mod.read(path)
+        return sidecar_mod.read_state(conn, source_id)
     except sidecar_mod.ReadingSidecarError:
         return None
-
-
-def _load_segments(source_id: str) -> list[SegmentFile]:
-    """Load all seg-NNN.md files sorted by filename."""
-    segs_dir = pending_segments_dir(source_id)
-    if not segs_dir.exists():
-        return []
-    paths = sorted(segs_dir.glob("*.md"))
-    return [segment_file_mod.read(p) for p in paths]
 
 
 def _flags_by_segment(

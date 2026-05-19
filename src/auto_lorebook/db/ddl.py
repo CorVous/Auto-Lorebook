@@ -194,8 +194,9 @@ CREATE TABLE segments (
     speaker         TEXT,
     notes           TEXT,
     segment_status  TEXT NOT NULL DEFAULT 'draft' CHECK(segment_status IN (
-                        'draft','accepted','flagged','regenerating')),
+                        'draft','accepted','skipped','regenerating')),
     overrides_json  TEXT NOT NULL DEFAULT '[]',
+    flags_json      TEXT NOT NULL DEFAULT '[]',
     UNIQUE (ingest_id, segment_id),
     FOREIGN KEY (ingest_id) REFERENCES ingests(ingest_id) ON DELETE CASCADE
 )

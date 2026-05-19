@@ -37,10 +37,27 @@ def _mk_info_yaml(wiki: Path, sid: str) -> None:
 
 
 def _mk_reading_sidecar(wiki: Path, sid: str) -> None:
-    """Create pending/<sid>/reading/reading.yaml."""
-    d = wiki / ".wiki-state" / "pending" / sid / "reading"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "reading.yaml").write_text("schema_version: 1\n", encoding="utf-8")
+    """Seed ingests row in wiki DB (DB-backed reading state)."""
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
+    from auto_lorebook import wiki_state  # noqa: PLC0415
+
+    conn = db_mod.open(wiki_state.wiki_db_path(wiki))
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO sources "
+            "(source_id, source_type, fetched_at, context_json) VALUES (?,?,?,?)",
+            (sid, "text", "2026-01-01T00:00:00Z", "{}"),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO ingests "
+            "(ingest_id, source_id, started_at, state, default_speaker, "
+            " name_corrections_json, session_date) "
+            "VALUES (?,?,?,'reading',NULL,'{}',NULL)",
+            (sid, sid, "2026-01-01T00:00:00Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _mk_wiki_reading(wiki: Path, sid: str) -> None:

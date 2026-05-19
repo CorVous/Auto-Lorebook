@@ -304,7 +304,17 @@ class TestReplan:
             approve_reading_cmd.run(_args(source_id=SOURCE_ID, yes=True))
             plan_cmd.run(_args(source_id=SOURCE_ID))
             extract_cmd.run(_args(source_id=SOURCE_ID))
-            # Remove structure.yaml to break the prerequisite.
-            reading_pipeline.pending_structure_path(SOURCE_ID).unlink()
+            # Remove segments from DB to break the structure prerequisite.
+            from auto_lorebook import db as db_mod  # noqa: PLC0415
+            from auto_lorebook import structure_store as ss_mod  # noqa: PLC0415
+            from auto_lorebook import wiki_state as ws_mod  # noqa: PLC0415
+
+            db_path = ws_mod.wiki_db_path(ingested_wiki)
+            conn = db_mod.open(db_path)
+            try:
+                ss_mod.delete_ingest_segments(conn, SOURCE_ID)
+                conn.commit()
+            finally:
+                conn.close()
             rc = replan_cmd.run(_args(source_id=SOURCE_ID))
         assert rc == 1

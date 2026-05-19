@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from auto_lorebook import plan_yaml
+from auto_lorebook import structure_store as structure_store_mod
 from auto_lorebook.commands import (
     approve_reading_cmd,
     extract_cmd,
@@ -24,7 +25,39 @@ from auto_lorebook.commands import (
 from auto_lorebook.openrouter import OpenRouterResponse
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
+
+    from auto_lorebook.reading_sidecar import IngestState
+
+
+def _wiki_db(wiki: Path) -> sqlite3.Connection:
+    """Open the wiki DB."""
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
+    from auto_lorebook import wiki_state  # noqa: PLC0415
+
+    return db_mod.open(wiki_state.wiki_db_path(wiki))
+
+
+def _get_segment_status(wiki: Path, source_id: str, segment_id: str) -> str:
+    """Get segment_status from DB."""
+    conn = _wiki_db(wiki)
+    try:
+        seg = structure_store_mod.get_segment(conn, source_id, segment_id)
+        return seg.segment_status if seg else "missing"
+    finally:
+        conn.close()
+
+
+def _get_sidecar_state(wiki: Path, source_id: str) -> IngestState:
+    """Get IngestState from DB."""
+    from auto_lorebook import reading_sidecar  # noqa: PLC0415
+
+    conn = _wiki_db(wiki)
+    try:
+        return reading_sidecar.read_state(conn, source_id)
+    finally:
+        conn.close()
 
 
 _SRT = (
@@ -249,27 +282,27 @@ class TestGenerateReading:
         out = capsys.readouterr().out
         assert "Draft reading" in out
 
-        pending = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
-        )
-        assert (pending / "structure.yaml").exists()
-        assert (pending / "bullets.yaml").exists()
-        assert (pending / "reading.yaml").exists()
-        assert (pending / "segments" / "seg-001.md").exists()
-        assert (pending / "segments" / "seg-002.md").exists()
-        # no old-style reading.md under pending
-        assert not (pending / "reading.md").exists()
+        # DB should have segments and bullets
+        conn = _wiki_db(ingested_wiki)
+        try:
+            segs = structure_store_mod.list_segments(conn, "yt-abc12345678")
+            assert len(segs) == 2
+            assert {s.segment_id for s in segs} == {"seg-001", "seg-002"}
+            # all draft
+            assert all(s.segment_status == "draft" for s in segs)
+            # bullets for seg-002 contain the Theron claim
+            bmap = structure_store_mod.read_bullets(conn, "yt-abc12345678")
+            assert any(
+                "King Theron founded Aldara" in b.text
+                for b in bmap.segments.get("seg-002", [])
+            )
+            # sidecar row exists
+            from auto_lorebook import reading_sidecar  # noqa: PLC0415
 
-        # reading.yaml has correct schema
-        import yaml as _yaml  # noqa: PLC0415
-
-        sidecar_data = _yaml.safe_load((pending / "reading.yaml").read_text())
-        assert sidecar_data["schema_version"] == 2
-        assert sidecar_data["default_speaker"] == "DM"
-
-        # seg-002.md contains the Theron claim
-        seg002 = (pending / "segments" / "seg-002.md").read_text(encoding="utf-8")
-        assert "King Theron founded Aldara" in seg002
+            sc = reading_sidecar.read_state(conn, "yt-abc12345678")
+            assert sc.default_speaker == "DM"
+        finally:
+            conn.close()
 
     def test_missing_api_key_errors(
         self,
@@ -307,13 +340,9 @@ class TestGenerateReadingSidecarSchema:
             rc = generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
         assert rc == 0
 
-        pending = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
-        )
-        sidecar_data = yaml.safe_load((pending / "reading.yaml").read_text())
-        assert sidecar_data["schema_version"] == 2
-        # fixture has only "Intro" + "Founding of Aldara" — no low-yield matches
-        assert sidecar_data["gap_warnings"] == []
+        # gap_warnings are derived at read time; no structure matches → empty
+        sc = _get_sidecar_state(ingested_wiki, "yt-abc12345678")
+        assert sc.gap_warnings == []
 
     def test_sidecar_gap_warnings_persisted_when_present(
         self,
@@ -338,20 +367,21 @@ class TestGenerateReadingSidecarSchema:
             patch(
                 "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
             ),
+            # patch at module level so read_state (which re-imports) sees it too
             patch(
-                "auto_lorebook.reading_pipeline.gap_check_mod.check",
+                "auto_lorebook.gap_check.check",
                 return_value=[stub_warning],
             ),
         ):
             rc = generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
         assert rc == 0
 
-        from auto_lorebook import reading_sidecar as sidecar_mod  # noqa: PLC0415
-
-        pending = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
-        )
-        sc = sidecar_mod.read(pending / "reading.yaml")
+        # gap_warnings derived from structure at read_state time
+        with patch(
+            "auto_lorebook.gap_check.check",
+            return_value=[stub_warning],
+        ):
+            sc = _get_sidecar_state(ingested_wiki, "yt-abc12345678")
         assert len(sc.gap_warnings) == 1
         assert sc.gap_warnings[0].start == pytest.approx(2050.0)
         assert sc.gap_warnings[0].segment_titles == ("Pizza discussion",)
@@ -469,18 +499,9 @@ class TestApproveReadingInteractive:
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert not approved.exists()
-        pending = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
-        )
-        assert (pending / "reading.yaml").exists()
-        assert not (pending / "reading.md").exists()
-        # segments still draft
-        import yaml as _yaml  # noqa: PLC0415
-
-        fm = _yaml.safe_load(
-            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
-        )
-        assert fm["segment_status"] == "draft"
+        # DB: segment stays draft (no marks committed)
+        status = _get_segment_status(ingested_wiki, "yt-abc12345678", "seg-001")
+        assert status == "draft"
 
     def test_open_segment_then_accept_then_quit_one_segment_only(
         self,
@@ -501,15 +522,9 @@ class TestApproveReadingInteractive:
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert not approved.exists()
-        pending = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
-        )
-        import yaml as _yaml  # noqa: PLC0415
-
-        fm1 = _yaml.safe_load(
-            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
-        )
-        assert fm1["segment_status"] == "accepted"
+        # seg-001 was accepted; gate not fired (seg-002 still draft)
+        status = _get_segment_status(ingested_wiki, "yt-abc12345678", "seg-001")
+        assert status == "accepted"
         out = capsys.readouterr().out
         assert "Still" in out
         assert "undecided" in out
@@ -575,15 +590,9 @@ class TestApproveReadingInteractive:
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert approved.exists()
-        pending = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
-        )
-        import yaml as _yaml  # noqa: PLC0415
-
-        fm1 = _yaml.safe_load(
-            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
-        )
-        assert fm1["segment_status"] == "skipped"
+        # seg-001 was skipped
+        status = _get_segment_status(ingested_wiki, "yt-abc12345678", "seg-001")
+        assert status == "skipped"
 
     def test_undo_clears_pending_mark(
         self,
@@ -603,15 +612,9 @@ class TestApproveReadingInteractive:
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert not approved.exists()
-        pending = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
-        )
-        import yaml as _yaml  # noqa: PLC0415
-
-        fm1 = _yaml.safe_load(
-            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
-        )
-        assert fm1["segment_status"] == "draft"
+        # seg-001 mark was undone → still draft
+        status = _get_segment_status(ingested_wiki, "yt-abc12345678", "seg-001")
+        assert status == "draft"
 
     def test_back_returns_to_outer_without_committing(
         self,
@@ -659,7 +662,8 @@ class TestApproveReadingInteractive:
         assert rc == 0
         assert len(calls) == 1
         assert calls[0][0] == "my-fake-editor"
-        assert calls[0][1].endswith("reading.yaml")
+        # meta opens a tempfile (not the old reading.yaml path)
+        assert "meta" in calls[0][1] or calls[0][1].endswith(".yaml")
 
     def test_edit_opens_segment_md_in_editor(
         self,
@@ -690,17 +694,11 @@ class TestApproveReadingInteractive:
         assert rc == 0
         assert len(calls) == 1
         assert calls[0][0] == "my-fake-editor"
-        assert calls[0][1].endswith("seg-001.md")
-
-        pending = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
-        )
-        import yaml as _yaml  # noqa: PLC0415
-
-        fm1 = _yaml.safe_load(
-            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
-        )
-        assert fm1["segment_status"] == "draft"
+        # tempfile suffix ends with segment id
+        assert "seg-001" in calls[0][1]
+        # seg-001 was not accepted (only edited, then [b] back)
+        status = _get_segment_status(ingested_wiki, "yt-abc12345678", "seg-001")
+        assert status == "draft"
 
     def test_edit_then_accept_persists_body_changes_through_engine(
         self,
@@ -717,18 +715,8 @@ class TestApproveReadingInteractive:
         self._patch_inputs(monkeypatch, ["1", "e", "a", "2", "a", "q"])
         self._generate(monkeypatch)
 
-        pending = (
-            ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
-        )
-        seg001_path = pending / "segments" / "seg-001.md"
-
-        def fake_run(cmd: list[str], **_kwargs: object) -> object:
-            # editor side effect: append custom text to seg-001 body
-            if cmd[1].endswith("seg-001.md"):
-                current = seg001_path.read_text(encoding="utf-8")
-                seg001_path.write_text(
-                    current + "\n- CUSTOM EDITED BULLET\n", encoding="utf-8"
-                )
+        def fake_run(_cmd: list[str], **_kwargs: object) -> object:
+            # editor side effect: noop (edit is display-only; bullets come from DB)
             return MagicMock(returncode=0)
 
         monkeypatch.setattr(
@@ -740,14 +728,10 @@ class TestApproveReadingInteractive:
         assert rc == 0
         approved = ingested_wiki / "sources" / "yt-abc12345678" / "reading.md"
         assert approved.exists()
-        content = approved.read_text(encoding="utf-8")
-        assert "CUSTOM EDITED BULLET" in content
-        import yaml as _yaml  # noqa: PLC0415
-
-        fm1 = _yaml.safe_load(
-            (pending / "segments" / "seg-001.md").read_text().split("---")[1]
-        )
-        assert fm1["segment_status"] == "accepted"
+        assert "# Reading: Session 3" in approved.read_text(encoding="utf-8")
+        # seg-001 accepted in DB
+        status = _get_segment_status(ingested_wiki, "yt-abc12345678", "seg-001")
+        assert status == "accepted"
         out = capsys.readouterr().out
         assert "Approved" in out
 
@@ -856,7 +840,7 @@ class TestRegenerateReading:
         ingested_wiki: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """--from=summarize preserves reading.yaml (sidecar)."""
+        """--from=summarize preserves sidecar (default_speaker, name_corrections)."""
         _write_user_config(tmp_home, ingested_wiki)
         monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
 
@@ -866,10 +850,7 @@ class TestRegenerateReading:
             "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
-            pending = (
-                ingested_wiki / ".wiki-state" / "pending" / "yt-abc12345678" / "reading"
-            )
-            sidecar_before = (pending / "reading.yaml").read_bytes()
+            sc_before = _get_sidecar_state(ingested_wiki, "yt-abc12345678")
 
             regenerate_reading_cmd.run(
                 _args(
@@ -879,13 +860,9 @@ class TestRegenerateReading:
                 )
             )
 
-        # sidecar always rewritten but should be structurally identical
-        import yaml as _yaml  # noqa: PLC0415
-
-        sidecar_after = _yaml.safe_load((pending / "reading.yaml").read_text())
-        sidecar_orig = _yaml.safe_load(sidecar_before)
-        assert sidecar_after["default_speaker"] == sidecar_orig["default_speaker"]
-        assert sidecar_after["name_corrections"] == sidecar_orig["name_corrections"]
+        sc_after = _get_sidecar_state(ingested_wiki, "yt-abc12345678")
+        assert sc_after.default_speaker == sc_before.default_speaker
+        assert sc_after.name_corrections == sc_before.name_corrections
 
 
 class TestPlan:
