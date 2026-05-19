@@ -21,8 +21,16 @@ from auto_lorebook.pipeline_state import Stage
 def _args(
     source_id: str = "yt-abc12345678",
     wiki: str | None = None,
+    *,
+    yes: bool = False,
+    auto_approve: bool = False,
 ) -> argparse.Namespace:
-    return argparse.Namespace(source_id=source_id, wiki=wiki)
+    return argparse.Namespace(
+        source_id=source_id,
+        wiki=wiki,
+        yes=yes,
+        auto_approve=auto_approve,
+    )
 
 
 def _fake_runner(
@@ -95,6 +103,7 @@ def test_dispatches_to_stage(
             side_effect=[stage, None],
         ),
         patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
         patch.object(
             run_cmd,
             "STAGE_RUNNERS",
@@ -129,6 +138,7 @@ def test_propagates_nonzero_exit_code() -> None:
             return_value=Stage.PLAN,
         ),
         patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
         patch.object(
             run_cmd,
             "STAGE_RUNNERS",
@@ -219,6 +229,7 @@ def test_wiki_override_threaded_to_stage_namespace() -> None:
             side_effect=[Stage.PLAN, None],
         ),
         patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
         patch.object(
             run_cmd,
             "STAGE_RUNNERS",
@@ -370,6 +381,7 @@ def test_url_new_source_calls_ingest_then_chain() -> None:
         patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
         fms_patch,
         patch("auto_lorebook.commands.run.ingest_cmd.run", fake_ingest),
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
         patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
     ):
         mock_cfg.return_value = MagicMock()
@@ -439,6 +451,7 @@ def test_url_existing_source_skips_ingest() -> None:
         patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
         fms_patch,
         patch("auto_lorebook.commands.run.ingest_cmd.run", fake_ingest),
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
         patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
     ):
         mock_cfg.return_value = MagicMock()
@@ -479,3 +492,337 @@ def test_source_id_with_ingest_flags_warns(caplog: pytest.LogCaptureFixture) -> 
 
     assert result == 0
     assert any("ignored" in r.message.lower() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight TTY refusal
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_refuses_when_non_tty_approve_reading_reachable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Non-TTY shell + approve-reading gate reachable → non-zero exit, names --yes."""
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            return_value=Stage.APPROVE_READING,
+        ),
+        patch(
+            "auto_lorebook.commands.run._is_interactive",
+            return_value=False,
+        ),
+        caplog.at_level(logging.ERROR, logger="auto_lorebook.commands.run"),
+    ):
+        mock_cfg.return_value = MagicMock()
+        result = run_cmd.run(_args())
+
+    assert result != 0
+    assert any("--yes" in r.message for r in caplog.records)
+
+
+def test_preflight_refuses_when_non_tty_review_reachable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Non-TTY shell + review gate reachable → non-zero exit, names --auto-approve."""
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            return_value=Stage.REVIEW,
+        ),
+        patch(
+            "auto_lorebook.commands.run._is_interactive",
+            return_value=False,
+        ),
+        caplog.at_level(logging.ERROR, logger="auto_lorebook.commands.run"),
+    ):
+        mock_cfg.return_value = MagicMock()
+        result = run_cmd.run(_args())
+
+    assert result != 0
+    assert any("--auto-approve" in r.message for r in caplog.records)
+
+
+def test_preflight_refuses_both_flags_when_both_reachable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Non-TTY + both gates reachable + neither flag → message names both."""
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            return_value=Stage.GENERATE_READING,
+        ),
+        patch(
+            "auto_lorebook.commands.run._is_interactive",
+            return_value=False,
+        ),
+        caplog.at_level(logging.ERROR, logger="auto_lorebook.commands.run"),
+    ):
+        mock_cfg.return_value = MagicMock()
+        result = run_cmd.run(_args())
+
+    assert result != 0
+    combined = " ".join(r.message for r in caplog.records)
+    assert "--yes" in combined
+    assert "--auto-approve" in combined
+
+
+def test_preflight_ok_when_approve_reading_not_reachable() -> None:
+    """Reading already approved (PLAN is first missing) → --yes not demanded.
+
+    REVIEW gate is still reachable, so --auto-approve is passed to satisfy it.
+    Verifies that --yes (approve-reading gate) is NOT required.
+    """
+    _, fake_plan = _fake_runner(0)
+    patched_runners = dict(run_cmd.STAGE_RUNNERS)
+    patched_runners[Stage.PLAN] = fake_plan
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            side_effect=[Stage.PLAN, None],
+        ),
+        patch(
+            "auto_lorebook.commands.run._is_interactive",
+            return_value=False,
+        ),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        # --auto-approve satisfies REVIEW gate; --yes should NOT be needed
+        result = run_cmd.run(_args(auto_approve=True))
+
+    assert result == 0
+
+
+def test_preflight_ok_when_approve_reading_not_reachable_only_review_ahead() -> None:
+    """Resume at REVIEW: --yes not demanded, only --auto-approve needed."""
+    _, fake_review = _fake_runner(0)
+    patched_runners = dict(run_cmd.STAGE_RUNNERS)
+    patched_runners[Stage.REVIEW] = fake_review
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            side_effect=[Stage.REVIEW, None],
+        ),
+        patch(
+            "auto_lorebook.commands.run._is_interactive",
+            return_value=False,
+        ),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        # Only REVIEW gate reachable; --yes (approve-reading) should NOT be needed
+        result = run_cmd.run(_args(auto_approve=True))
+
+    assert result == 0
+
+
+def test_preflight_passes_when_flags_provided() -> None:
+    """--yes + --auto-approve supplied → pre-flight allows through."""
+    _, fake_run = _fake_runner(0)
+    patched_runners = dict(run_cmd.STAGE_RUNNERS)
+    patched_runners[Stage.GENERATE_READING] = fake_run
+
+    args = argparse.Namespace(
+        source_id="yt-abc12345678",
+        wiki=None,
+        yes=True,
+        auto_approve=True,
+    )
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            side_effect=[Stage.GENERATE_READING, None],
+        ),
+        patch(
+            "auto_lorebook.commands.run._is_interactive",
+            return_value=False,
+        ),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        result = run_cmd.run(args)
+
+    assert result == 0
+
+
+# ---------------------------------------------------------------------------
+# Flag forwarding
+# ---------------------------------------------------------------------------
+
+
+def test_yes_flag_forwarded_to_approve_reading() -> None:
+    """--yes is forwarded to approve-reading stage namespace."""
+    call_log, fake_run = _fake_runner(0)
+    patched_runners = dict(run_cmd.STAGE_RUNNERS)
+    patched_runners[Stage.APPROVE_READING] = fake_run
+
+    args = argparse.Namespace(
+        source_id="yt-abc12345678",
+        wiki=None,
+        yes=True,
+        auto_approve=False,
+    )
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            side_effect=[Stage.APPROVE_READING, None],
+        ),
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        run_cmd.run(args)
+
+    assert len(call_log) == 1
+    assert call_log[0].yes is True
+
+
+def test_auto_approve_flag_forwarded_to_review() -> None:
+    """--auto-approve is forwarded to review stage namespace."""
+    call_log, fake_run = _fake_runner(0)
+    patched_runners = dict(run_cmd.STAGE_RUNNERS)
+    patched_runners[Stage.REVIEW] = fake_run
+
+    args = argparse.Namespace(
+        source_id="yt-abc12345678",
+        wiki=None,
+        yes=False,
+        auto_approve=True,
+    )
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            side_effect=[Stage.REVIEW, None],
+        ),
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        run_cmd.run(args)
+
+    assert len(call_log) == 1
+    assert call_log[0].auto_approve is True
+
+
+def test_yes_not_forwarded_to_other_stages() -> None:
+    """--yes flag does not appear with a truthy value in non-gate stages."""
+    call_log, fake_run = _fake_runner(0)
+    patched_runners = dict(run_cmd.STAGE_RUNNERS)
+    patched_runners[Stage.PLAN] = fake_run
+
+    args = argparse.Namespace(
+        source_id="yt-abc12345678",
+        wiki=None,
+        yes=True,
+        auto_approve=True,
+    )
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            side_effect=[Stage.PLAN, None],
+        ),
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        run_cmd.run(args)
+
+    assert len(call_log) == 1
+    # PLAN stage namespace should NOT have yes attribute from flag forwarding
+    assert not getattr(call_log[0], "yes", False)
+
+
+# ---------------------------------------------------------------------------
+# Gate-decline handling
+# ---------------------------------------------------------------------------
+
+
+def test_gate_decline_at_approve_reading(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Stage returns 0 but approve-reading still missing → stopped message, exit 0."""
+    # Stage runner returns 0 but first_missing_stage still returns APPROVE_READING
+    # (user quit without approving)
+    _, fake_run = _fake_runner(0)
+    patched_runners = dict(run_cmd.STAGE_RUNNERS)
+    patched_runners[Stage.APPROVE_READING] = fake_run
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            # first call: preflight + stage dispatch → APPROVE_READING
+            # second call: post-stage re-check → still APPROVE_READING (gate declined)
+            side_effect=[Stage.APPROVE_READING, Stage.APPROVE_READING],
+        ),
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        result = run_cmd.run(_args())
+
+    assert result == 0
+    captured = capsys.readouterr()
+    assert "approve-reading" in (captured.out + captured.err).lower()
+    assert "stopped" in (captured.out + captured.err).lower()
+
+
+def test_gate_decline_at_review(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Review stage returns 0 but still has proposals → stopped message, exit 0."""
+    _, fake_run = _fake_runner(0)
+    patched_runners = dict(run_cmd.STAGE_RUNNERS)
+    patched_runners[Stage.REVIEW] = fake_run
+
+    with (
+        patch("auto_lorebook.commands.run.cfg_mod.load_config") as mock_cfg,
+        patch(
+            "auto_lorebook.commands.run.first_missing_stage",
+            side_effect=[Stage.REVIEW, Stage.REVIEW],
+        ),
+        patch("auto_lorebook.commands.run._is_interactive", return_value=True),
+        patch.object(run_cmd, "STAGE_RUNNERS", patched_runners),
+    ):
+        mock_cfg.return_value = MagicMock()
+        result = run_cmd.run(_args())
+
+    assert result == 0
+    captured = capsys.readouterr()
+    assert "review" in (captured.out + captured.err).lower()
+    assert "stopped" in (captured.out + captured.err).lower()
+
+
+# ---------------------------------------------------------------------------
+# Parser: --yes and --auto-approve flags
+# ---------------------------------------------------------------------------
+
+
+def test_add_parser_accepts_yes_flag() -> None:
+    """Run subcommand parser accepts --yes."""
+    parser = create_parser()
+    args = parser.parse_args(["run", "--yes", "yt-abc12345678"])
+    assert args.yes is True
+
+
+def test_add_parser_accepts_auto_approve_flag() -> None:
+    """Run subcommand parser accepts --auto-approve."""
+    parser = create_parser()
+    args = parser.parse_args(["run", "--auto-approve", "yt-abc12345678"])
+    assert args.auto_approve is True

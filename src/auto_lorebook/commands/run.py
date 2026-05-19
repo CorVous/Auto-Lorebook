@@ -18,6 +18,7 @@ from auto_lorebook.commands import generate_reading as generate_reading_cmd
 from auto_lorebook.commands import ingest as ingest_cmd
 from auto_lorebook.commands import plan as plan_cmd
 from auto_lorebook.commands import review as review_cmd
+from auto_lorebook.interactive import _is_interactive
 from auto_lorebook.pipeline_state import Stage, first_missing_stage
 
 if TYPE_CHECKING:
@@ -37,13 +38,10 @@ _INGEST_ONLY_ATTRS = (
     "cookies_from_browser",
 )
 
-# Extra Namespace fields each stage's run() requires beyond source_id/wiki.
-_STAGE_DEFAULTS: dict[Stage, dict[str, object]] = {
-    Stage.GENERATE_READING: {},
-    Stage.APPROVE_READING: {"yes": False},
-    Stage.PLAN: {},
-    Stage.EXTRACT: {},
-    Stage.REVIEW: {"auto_approve": False},
+# Stages that act as human gates and their required non-interactive flags.
+_GATE_FLAGS: dict[Stage, str] = {
+    Stage.APPROVE_READING: "--yes",
+    Stage.REVIEW: "--auto-approve",
 }
 
 # Maps Stage → command run() callable; exposed for patching in tests.
@@ -75,6 +73,18 @@ def add_parser(
         "url_or_sid",
         help="Source ID (e.g. yt-abc12345678) or YouTube URL",
     )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        default=False,
+        help="Forward to approve-reading gate (auto-approve reading segments).",
+    )
+    parser.add_argument(
+        "--auto-approve",
+        action="store_true",
+        default=False,
+        help="Forward to review gate (auto-approve all proposals).",
+    )
     ingest_cmd.add_ingest_args(parser)
     parser.set_defaults(func=run)
     return parser
@@ -91,6 +101,51 @@ def _warn_ignored_ingest_flags(args: argparse.Namespace) -> None:
     if active:
         flags = ", ".join(f"--{a.replace('_', '-')}" for a in active)
         _logger.warning("ingest-only flags ignored for source-id invocation: %s", flags)
+
+
+_PIPELINE_ORDER = [
+    Stage.INGEST,
+    Stage.GENERATE_READING,
+    Stage.APPROVE_READING,
+    Stage.PLAN,
+    Stage.EXTRACT,
+    Stage.REVIEW,
+]
+
+
+def _reachable_gates(resume: Stage) -> list[Stage]:
+    """Gates at-or-after resume point in pipeline order."""
+    resume_idx = _PIPELINE_ORDER.index(resume)
+    return [g for g in _GATE_FLAGS if _PIPELINE_ORDER.index(g) >= resume_idx]
+
+
+def _preflight_check(args: argparse.Namespace, resume: Stage) -> list[str]:
+    """Return list of missing required flags for non-interactive run; empty = ok."""
+    if _is_interactive():
+        return []
+    missing = []
+    for gate in _reachable_gates(resume):
+        flag = _GATE_FLAGS[gate]
+        # map flag string to attribute name: --yes → yes, --auto-approve → auto_approve
+        attr = flag.lstrip("-").replace("-", "_")
+        if not getattr(args, attr, False):
+            missing.append(flag)
+    return missing
+
+
+def _build_stage_args(
+    stage: Stage,
+    source_id: str,
+    wiki_override: str | None,
+    args: argparse.Namespace,
+) -> argparse.Namespace:
+    """Build Namespace for a stage, forwarding gate flags as appropriate."""
+    extra: dict[str, object] = {}
+    if stage is Stage.APPROVE_READING:
+        extra["yes"] = getattr(args, "yes", False)
+    elif stage is Stage.REVIEW:
+        extra["auto_approve"] = getattr(args, "auto_approve", False)
+    return argparse.Namespace(source_id=source_id, wiki=wiki_override, **extra)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -143,22 +198,42 @@ def run(args: argparse.Namespace) -> int:
         source_id = positional
         _warn_ignored_ingest_flags(args)
 
-    while True:
-        stage = first_missing_stage(cfg, source_id, wiki_override=wiki_override)
-        if stage is None:
-            return 0
+    # Pre-flight: determine resume point and refuse early if non-TTY + gates reachable.
+    resume = first_missing_stage(cfg, source_id, wiki_override=wiki_override)
+    if resume is None:
+        return 0
+    if resume is Stage.INGEST:
+        _logger.error("Source %s still missing after ingest.", source_id)
+        return 1
+
+    missing_flags = _preflight_check(args, resume)
+    if missing_flags:
+        flags_str = " and ".join(missing_flags)
+        _logger.error(
+            "non-interactive shell: %s required to pass gate(s) unattended",
+            flags_str,
+        )
+        return 1
+
+    # Reuse resume from pre-flight as the first loop stage; avoids double call.
+    stage: Stage | None = resume
+    while stage is not None:
         if stage is Stage.INGEST:
             # Should not happen after successful ingest, but guard anyway.
             _logger.error("Source %s still missing after ingest.", source_id)
             return 1
 
         stage_runner = STAGE_RUNNERS[stage]
-        defaults = _STAGE_DEFAULTS[stage]
-        stage_args = argparse.Namespace(
-            source_id=source_id,
-            wiki=wiki_override,
-            **defaults,
-        )
+        stage_args = _build_stage_args(stage, source_id, wiki_override, args)
         exit_code = stage_runner(stage_args)
         if exit_code != 0:
             return exit_code
+
+        # Gate-decline check: if same stage still missing, user declined without error.
+        post_stage = first_missing_stage(cfg, source_id, wiki_override=wiki_override)
+        if post_stage is stage:
+            print(f"Stopped at stage {stage.value.replace('_', '-')}")  # noqa: T201
+            return 0
+        stage = post_stage
+
+    return 0
