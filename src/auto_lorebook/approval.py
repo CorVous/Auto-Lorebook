@@ -11,6 +11,7 @@ import enum
 import logging
 from typing import TYPE_CHECKING
 
+from auto_lorebook import entities as entities_mod
 from auto_lorebook import facts as facts_mod
 from auto_lorebook.timestamps import format_iso_now
 
@@ -41,13 +42,17 @@ def approve_proposal(
     edited_status: str | None = None,
     edited_status_reason: str | None = None,
     inputs_json: str | None = None,
+    confirmed_aliases_per_target: list[list[tuple[str, str]]] | None = None,
+    ingest_id: str | None = None,
 ) -> ApprovalResult:
-    """Insert fact row + N fact_targets + delete proposal; own the transaction.
+    """Insert fact + N fact_targets + aliases + delete proposal; own transaction.
 
     `targets_resolved`: list of (entity_category, entity_slug, section).
-    Issues BEGIN IMMEDIATE / COMMIT. Idempotent: if a facts row with the
-    same id already exists, skips the insert and deletes the proposal row
-    without error.
+    `confirmed_aliases_per_target`: parallel list; each inner list is
+    (name, source) tuples for that target. None / empty means no aliases.
+    `ingest_id`: passed to add_alias; defaults to proposal.source_id.
+    Issues BEGIN IMMEDIATE / COMMIT. Idempotent: fact already committed →
+    skips insert and alias upserts, deletes proposal row without error.
 
     Rolls back and re-raises on any other exception.
     """
@@ -109,6 +114,23 @@ def approve_proposal(
             corrections_applied=corrections,
             inputs_json=inputs_json,
         )
+
+        # write confirmed aliases inside same tx
+        if confirmed_aliases_per_target is not None:
+            alias_ingest_id = ingest_id or proposal.source_id
+            for (cat, slug, _section), aliases in zip(
+                targets_resolved, confirmed_aliases_per_target, strict=True
+            ):
+                for name, source in aliases:
+                    entities_mod.add_alias(
+                        conn,
+                        category=cat,
+                        slug=slug,
+                        name=name,
+                        ingest_id=alias_ingest_id,
+                        source=source,
+                        when=now,
+                    )
 
         # delete proposal row (silent if absent — filesystem proposal removed earlier)
         conn.execute("DELETE FROM proposals WHERE proposed_id=?", (fact_id,))

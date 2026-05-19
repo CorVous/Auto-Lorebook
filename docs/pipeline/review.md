@@ -138,9 +138,12 @@ seeds its dedup set from on-disk alias records whose
 
 - **Approve** — one fact row is inserted into `facts` plus one
   `fact_targets` row per checked route, all in a single SQLite
-  transaction. Entity rows are created if new. After commit,
-  `<category>/<slug>.md` is regenerated for each target. Unchecked
-  routes are dropped before the insert — they never reach `facts`.
+  transaction. Confirmed aliases are written to `aliases` inside the
+  same transaction — a mid-tx failure rolls back both the fact and the
+  aliases. Declined aliases produce zero DB writes. Entity rows are
+  created if new. After commit, `<category>/<slug>.md` is regenerated
+  for each target. Unchecked routes are dropped before the insert —
+  they never reach `facts`.
 - **Edit** — bundle-level edits to `text`, `status`, and
   `status_reason` propagate to every checked route. Per-target
   `section` / `speaker` overrides are set in `[t]argets`. Tracks

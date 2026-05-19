@@ -993,6 +993,53 @@ class TestNewEntityStub:
         assert len(aliases) == 1
         assert aliases[0].source == "alias-confirmation"
 
+    def test_orphan_alias_prevented_when_fact_insert_fails(
+        self, cfg: cfg_mod.Config, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Alias must not persist if fact insert fails mid-tx."""
+        source_id = "yt-x"
+        _write_info(cfg.resolve_active_wiki(None), source_id)
+        proposal = _make_proposal(target="Aldara", proposed_id="aldara-f001")
+        _write_plan(
+            cfg.resolve_active_wiki(None),
+            source_id,
+            new_entities=[
+                plan_yaml.NewEntityProposal(
+                    name="Aldara",
+                    category="locations",
+                    aliases_suggested=["the Realm"],
+                ),
+            ],
+            planned_claims=[
+                _make_claim(
+                    targets=[
+                        plan_yaml.ClaimTarget(
+                            entity="Aldara",
+                            entity_state="new",
+                            proposed_section="founding",
+                            proposed_category="locations",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        _write_proposal(cfg.resolve_active_wiki(None), source_id, proposal)
+
+        def _raise(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("injected")
+
+        monkeypatch.setattr(facts_mod, "create_fact_with_targets", _raise)
+
+        with pytest.raises(RuntimeError, match="injected"):
+            review.run(
+                cfg=cfg,
+                source_id=source_id,
+                reviewer=ScriptedReviewer([ApproveDecision()], alias_responses=[True]),
+            )
+
+        aliases = _db_aliases(cfg.resolve_active_wiki(None), "locations", "aldara")
+        assert len(aliases) == 0
+
 
 # ---------------------------------------------------------------------------
 # Reject

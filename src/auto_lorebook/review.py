@@ -624,8 +624,10 @@ def _process_bundle(
 
     # approve selected targets, building resolved list
     targets_resolved: list[tuple[str, str, str]] = []
+    confirmed_aliases_per_target: list[list[tuple[str, str]]] = []
     confirmed_per_target: list[list[str]] = []
     edits_per_target: list[MergedEdits | None] = []
+    selected_target_keys: list[str] = []
 
     for i, target in enumerate(targets):
         if i not in selected:
@@ -650,30 +652,19 @@ def _process_bundle(
             bundle_decision.per_target_overrides.get(i),
         )
 
-        # resolve entity and apply edits
+        # resolve entity
         category, slug = _resolve_target(ctx, proposal, target)
-        now = format_iso_now()
-        for alias in confirmed:
-            entities_mod.add_alias(
-                ctx.conn,
-                category=category,
-                slug=slug,
-                name=alias,
-                ingest_id=ctx.source_id,
-                source="stub-creation"
-                if target.proposal_type == "new_entity_with_facts"
-                else "alias-confirmation",
-                when=now,
-            )
-
+        source_tag = (
+            "stub-creation"
+            if target.proposal_type == "new_entity_with_facts"
+            else "alias-confirmation"
+        )
         section = edits.new_section if edits and edits.new_section else target.section
         targets_resolved.append((category, slug, section))
+        confirmed_aliases_per_target.append([(a, source_tag) for a in confirmed])
         confirmed_per_target.append(confirmed)
         edits_per_target.append(edits)
-
-        # record merged aliases
-        for alias in confirmed:
-            ctx.merged_aliases.add((target_key, normalize_alias_name(alias)))
+        selected_target_keys.append(target_key)
 
     if not targets_resolved:
         # all targets dropped — treat as reject
@@ -701,7 +692,16 @@ def _process_bundle(
         edited_text=bundle_edits.new_text if bundle_edits else None,
         edited_status=bundle_edits.new_status if bundle_edits else None,
         edited_status_reason=bundle_edits.new_status_reason if bundle_edits else None,
+        confirmed_aliases_per_target=confirmed_aliases_per_target,
+        ingest_id=ctx.source_id,
     )
+
+    # update merged_aliases cache after approval (APPROVED or SKIPPED_IDEMPOTENT)
+    for target_key, target_aliases in zip(
+        selected_target_keys, confirmed_aliases_per_target, strict=True
+    ):
+        for alias_name, _source_tag in target_aliases:
+            ctx.merged_aliases.add((target_key, normalize_alias_name(alias_name)))
 
     if approval_result == ApprovalResult.APPROVED:
         # regen .md per target only after the fact is committed

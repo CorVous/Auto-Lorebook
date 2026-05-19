@@ -8,7 +8,9 @@ from unittest.mock import patch
 import pytest
 
 from auto_lorebook import db
+from auto_lorebook import entities as entities_mod
 from auto_lorebook.approval import ApprovalResult, approve_proposal
+from auto_lorebook.entities import normalize_name
 from auto_lorebook.proposal_yaml import Proposal, ProposalTarget
 
 if TYPE_CHECKING:
@@ -256,3 +258,120 @@ class TestTwoEntityApprove:
             "SELECT COUNT(*) FROM fact_targets WHERE fact_id='f-001'"
         ).fetchone()[0]
         assert ft_count == 2
+
+
+class TestApproveWithAliases:
+    def test_confirmed_aliases_inserted_with_fact(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        proposal = _make_proposal()
+        result = approve_proposal(
+            conn,
+            proposal=proposal,
+            targets_resolved=[("characters", "theron", "biography")],
+            by="test-user",
+            confirmed_aliases_per_target=[[("Iron King", "alias-confirmation")]],
+            ingest_id="ing-001",
+        )
+        assert result == ApprovalResult.APPROVED
+        row = conn.execute(
+            "SELECT name, source, added_by_ingest FROM aliases"
+            " WHERE entity_category='characters' AND entity_slug='theron'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "Iron King"
+        assert row[1] == "alias-confirmation"
+        assert row[2] == "ing-001"
+
+    def test_alias_failure_rolls_back_fact(self, conn: sqlite3.Connection) -> None:
+        proposal = _make_proposal()
+        with pytest.raises(entities_mod.EntityError):
+            approve_proposal(
+                conn,
+                proposal=proposal,
+                targets_resolved=[("characters", "theron", "biography")],
+                by="test-user",
+                confirmed_aliases_per_target=[[("Iron King", "bogus-source")]],
+                ingest_id="ing-001",
+            )
+        assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM fact_targets").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM aliases").fetchone()[0] == 0
+        # proposal row still present (was never deleted)
+        conn.execute(
+            "INSERT INTO proposals(proposal_id, ingest_id, proposed_id, claim_group_id,"
+            " text, raw_transcript_span, text_corrects_transcript,"
+            " corrections_applied_json, source_id, locator, status,"
+            " reading_section, reading_bullet_index)"
+            " VALUES ('f-001','ing-001','f-001','cg-001',"
+            " 'Theron founded Aldara.','Theron founded all-dara.',1,"
+            " '[]','src-001','0:04:32','authoritative','[4:30-8:00]',0)"
+        )
+        conn.commit()
+        # verify no orphan proposals were left in a broken state by the rollback
+        count = conn.execute(
+            "SELECT COUNT(*) FROM proposals WHERE proposal_id='f-001'"
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_idempotent_reapprove_does_not_duplicate_aliases(
+        self, conn: sqlite3.Connection
+    ) -> None:
+        proposal = _make_proposal()
+        first = approve_proposal(
+            conn,
+            proposal=proposal,
+            targets_resolved=[("characters", "theron", "biography")],
+            by="test-user",
+            confirmed_aliases_per_target=[[("Iron King", "alias-confirmation")]],
+            ingest_id="ing-001",
+        )
+        assert first == ApprovalResult.APPROVED
+
+        # pre-seed a different alias between calls
+        conn.execute(
+            "INSERT INTO aliases(entity_category, entity_slug, name, name_normalized,"
+            " added_by_ingest, added_at, source)"
+            " VALUES ('characters','theron','the Realm',?,'ing-001',"
+            " '2026-01-01T00:00:00Z','hand-edited')",
+            (normalize_name("the Realm"),),
+        )
+        conn.commit()
+
+        second = approve_proposal(
+            conn,
+            proposal=proposal,
+            targets_resolved=[("characters", "theron", "biography")],
+            by="test-user",
+            confirmed_aliases_per_target=[[("New Name", "alias-confirmation")]],
+            ingest_id="ing-001",
+        )
+        assert second == ApprovalResult.SKIPPED_IDEMPOTENT
+        # only "Iron King" + "the Realm" — "New Name" NOT inserted (skip path)
+        count = conn.execute("SELECT COUNT(*) FROM aliases").fetchone()[0]
+        assert count == 2
+
+    def test_dedup_collision_is_silent_no_op(self, conn: sqlite3.Connection) -> None:
+        # pre-seed alias with different casing
+        conn.execute(
+            "INSERT INTO aliases(entity_category, entity_slug, name, name_normalized,"
+            " added_by_ingest, added_at, source)"
+            " VALUES ('characters','theron','Iron King',?,'ing-001',"
+            " '2026-01-01T00:00:00Z','hand-edited')",
+            (normalize_name("Iron King"),),
+        )
+        conn.commit()
+
+        proposal = _make_proposal()
+        result = approve_proposal(
+            conn,
+            proposal=proposal,
+            targets_resolved=[("characters", "theron", "biography")],
+            by="test-user",
+            # different casing, same normalized form
+            confirmed_aliases_per_target=[[("iron king", "alias-confirmation")]],
+            ingest_id="ing-001",
+        )
+        assert result == ApprovalResult.APPROVED
+        count = conn.execute("SELECT COUNT(*) FROM aliases").fetchone()[0]
+        assert count == 1  # pre-seeded row survives, no duplicate
