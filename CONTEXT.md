@@ -64,6 +64,12 @@ Per-route sub-prompt that fires after approve/edit, before any writes, asking wh
 **Ingest**:
 One end-to-end run from source to (possibly partial) approved facts. Identified by `ingest_id`; recorded on every entity stub and alias as `created_by_ingest` / `added_by_ingest`.
 
+### Summarizer-stage terms
+
+**Linked entity**:
+Entity sharing at least one fact with a given entity via `fact_targets`. Symmetric relation. A summary regeneration of an entity propagates to its linked entities.
+_Avoid_: connected entity, related entity, neighbour.
+
 ## Relationships
 
 - A **Reading** produces zero or more **Plans** (one per replan).
@@ -71,6 +77,7 @@ One end-to-end run from source to (possibly partial) approved facts. Identified 
 - Extraction emits one **Proposal** per **Route**.
 - A **Bundle** is the runtime view of one **Claim group** during review.
 - Approving a **Bundle** creates one **Fact** plus N **Fact targets** (one per checked route) in a single DB transaction.
+- Two entities are **linked** when a **Fact** targets both; regenerating one entity's summary propagates to its **linked entities**.
 
 ## Invariants
 
