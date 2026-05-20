@@ -12,7 +12,7 @@ import yaml
 
 from auto_lorebook import config as cfg_mod
 from auto_lorebook import reading_pipeline as pipeline
-from auto_lorebook import segment_file as segment_file_mod
+from auto_lorebook import structure_store as structure_store_mod
 from auto_lorebook.commands.approve_reading import AutoAcceptReviewer
 from auto_lorebook.openrouter import OpenRouterResponse
 from auto_lorebook.reading_review import (
@@ -26,7 +26,7 @@ from auto_lorebook.reading_review import (
     run,
 )
 from auto_lorebook.wiki_registry import WikiEntry
-from tests._reading_fixtures import _info, _segment_files, _sidecar
+from tests._reading_fixtures import _info, _seed_ingest_in_db
 from tests.test_reading_commands import _SRT, _wire_client_responses
 
 # ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ def _write_info(wiki: Path) -> None:
                 "duration_seconds": info.duration_seconds,
                 "fetched_at": info.fetched_at,
                 "session_date": None,
-                "transcript_filename": info.transcript_filename,
+                "transcript_filename": "transcript.en.srt",
                 "caption_type": "manual",
                 "context": {
                     "perspective": None,
@@ -72,27 +72,16 @@ def _write_info(wiki: Path) -> None:
     )
 
 
-def _write_pending() -> None:
-    """Write sidecar + three segment files under pending."""
-    sc = _sidecar()
-    sidecar_path = pipeline.pending_sidecar_path(_SOURCE_ID)
-    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
-    sidecar_path.write_text(
-        yaml.safe_dump(
-            {
-                "schema_version": 1,
-                "default_speaker": sc.default_speaker,
-                "name_corrections": sc.name_corrections,
-                "session_date": sc.session_date,
-            },
-            sort_keys=False,
-        ),
-        encoding="utf-8",
-    )
-    segs_dir = pipeline.pending_segments_dir(_SOURCE_ID)
-    segs_dir.mkdir(parents=True, exist_ok=True)
-    for sf in _segment_files():
-        segment_file_mod.write(sf, segs_dir / f"{sf.frontmatter.segment_id}.md")
+def _seed_db(wiki: Path, sid: str = _SOURCE_ID) -> None:
+    """Seed DB with sources + ingests + structure + bullets rows."""
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
+    from auto_lorebook import wiki_state  # noqa: PLC0415
+
+    conn = db_mod.open(wiki_state.wiki_db_path(wiki))
+    try:
+        _seed_ingest_in_db(conn, sid)
+    finally:
+        conn.close()
 
 
 def _write_config(home: Path, wiki: Path) -> None:
@@ -109,15 +98,46 @@ def env(
     tmp_wiki: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[cfg_mod.Config, Path]:
-    """Write config + info.yaml + pending segment files; return (cfg, wiki)."""
+    """Write config + info.yaml + DB rows; return (cfg, wiki)."""
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
     _write_config(home, tmp_wiki)
     cfg = cfg_mod.Config(wikis=[WikiEntry("test", tmp_wiki)], active_wiki="test")
     _write_info(tmp_wiki)
-    _write_pending()
+    _seed_db(tmp_wiki)
     return cfg, tmp_wiki
+
+
+# ---------------------------------------------------------------------------
+# Helpers to read DB state in tests
+# ---------------------------------------------------------------------------
+
+
+def _get_segment_status(wiki: Path, sid: str, segment_id: str) -> str:
+    """Return segment_status from DB for the given segment_id."""
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
+    from auto_lorebook import wiki_state  # noqa: PLC0415
+
+    conn = db_mod.open(wiki_state.wiki_db_path(wiki))
+    try:
+        seg = structure_store_mod.get_segment(conn, sid, segment_id)
+        return seg.segment_status if seg else "missing"
+    finally:
+        conn.close()
+
+
+def _get_all_statuses(wiki: Path, sid: str) -> dict[str, str]:
+    """Return {segment_id: segment_status} for all segments."""
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
+    from auto_lorebook import wiki_state  # noqa: PLC0415
+
+    conn = db_mod.open(wiki_state.wiki_db_path(wiki))
+    try:
+        rows = structure_store_mod.list_segments(conn, sid)
+        return {r.segment_id: r.segment_status for r in rows}
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +199,7 @@ class TestAcceptAll:
     def test_fires_gate_and_writes_wiki_reading(
         self, env: tuple[cfg_mod.Config, Path]
     ) -> None:
-        cfg, _ = env
+        cfg, wiki = env
         reviewer = _scripted([AcceptDecision(), AcceptDecision(), AcceptDecision()])
         result = run(cfg=cfg, source_id=_SOURCE_ID, reviewer=reviewer)
 
@@ -189,11 +209,9 @@ class TestAcceptAll:
         assert result.accepted == 3
         assert result.skipped == 0
         assert result.regenerating == 0
-        # segment files on disk show accepted
-        segs_dir = pipeline.pending_segments_dir(_SOURCE_ID)
-        for sf_path in sorted(segs_dir.glob("*.md")):
-            sf = segment_file_mod.read(sf_path)
-            assert sf.frontmatter.segment_status == "accepted"
+        # DB shows all accepted
+        statuses = _get_all_statuses(wiki, _SOURCE_ID)
+        assert all(s == "accepted" for s in statuses.values())
         # wiki reading.md has expected content
         text = result.wiki_reading_path.read_text(encoding="utf-8")
         assert "# Reading: Session 3" in text
@@ -204,7 +222,7 @@ class TestSkipBullets:
     def test_empty_marker_rendered_in_assembly(
         self, env: tuple[cfg_mod.Config, Path]
     ) -> None:
-        cfg, _ = env
+        cfg, wiki = env
         reviewer = _scripted([
             AcceptDecision(),
             SkipBulletsDecision(),
@@ -216,13 +234,10 @@ class TestSkipBullets:
         assert result.skipped == 1
         assert result.accepted == 2
 
-        # seg-002 on disk: body is the empty-bullets marker
-        seg002_path = pipeline.pending_segment_path(_SOURCE_ID, "seg-002")
-        sf002 = segment_file_mod.read(seg002_path)
-        assert sf002.frontmatter.segment_status == "skipped"
-        assert _EMPTY_MARKER in sf002.body
+        # seg-002 DB status: skipped
+        assert _get_segment_status(wiki, _SOURCE_ID, "seg-002") == "skipped"
 
-        # assembled wiki reading contains the marker for seg-002
+        # assembled wiki reading contains the empty marker for seg-002
         assert result.wiki_reading_path is not None
         text = result.wiki_reading_path.read_text(encoding="utf-8")
         assert _EMPTY_MARKER in text
@@ -230,7 +245,7 @@ class TestSkipBullets:
 
 class TestRegeneratingBlocksGate:
     def test_gate_does_not_fire(self, env: tuple[cfg_mod.Config, Path]) -> None:
-        cfg, _ = env
+        cfg, wiki = env
         reviewer = _scripted([
             AcceptDecision(),
             RegenerateAgainDecision(),
@@ -242,46 +257,36 @@ class TestRegeneratingBlocksGate:
         assert result.wiki_reading_path is None
         assert result.regenerating == 1
 
-        seg002_path = pipeline.pending_segment_path(_SOURCE_ID, "seg-002")
-        sf002 = segment_file_mod.read(seg002_path)
-        assert sf002.frontmatter.segment_status == "regenerating"
-
-        seg001_path = pipeline.pending_segment_path(_SOURCE_ID, "seg-001")
-        sf001 = segment_file_mod.read(seg001_path)
-        assert sf001.frontmatter.segment_status == "accepted"
+        assert _get_segment_status(wiki, _SOURCE_ID, "seg-002") == "regenerating"
+        assert _get_segment_status(wiki, _SOURCE_ID, "seg-001") == "accepted"
 
 
 class TestUndoSegmentScoped:
     def test_undo_clears_one_segment_only(
         self, env: tuple[cfg_mod.Config, Path]
     ) -> None:
-        cfg, _ = env
+        cfg, wiki = env
         # UndoDecision for seg-002's slot — its pending mark is cleared
         reviewer = _scripted([AcceptDecision(), UndoDecision(), AcceptDecision()])
         result = run(cfg=cfg, source_id=_SOURCE_ID, reviewer=reviewer)
 
-        # seg-002 stays draft (no pending mark → unchanged → disk not touched)
-        seg002_path = pipeline.pending_segment_path(_SOURCE_ID, "seg-002")
-        sf002 = segment_file_mod.read(seg002_path)
-        assert sf002.frontmatter.segment_status == "draft"
+        # seg-002 stays draft (no pending mark → unchanged)
+        assert _get_segment_status(wiki, _SOURCE_ID, "seg-002") == "draft"
 
         # gate does not fire — seg-002 still draft
         assert result.gate_fired is False
         assert result.accepted == 2
         assert result.unchanged == 1
 
-        for sid in ("seg-001", "seg-003"):
-            sf = segment_file_mod.read(pipeline.pending_segment_path(_SOURCE_ID, sid))
-            assert sf.frontmatter.segment_status == "accepted"
+        for seg_id in ("seg-001", "seg-003"):
+            assert _get_segment_status(wiki, _SOURCE_ID, seg_id) == "accepted"
 
 
 class TestEngineWritesNothingUntilCommit:
-    def test_disk_unchanged_during_walk(self, env: tuple[cfg_mod.Config, Path]) -> None:
-        cfg, _ = env
-        segs_dir = pipeline.pending_segments_dir(_SOURCE_ID)
-
-        snapshots_before = {p: p.read_bytes() for p in sorted(segs_dir.glob("*.md"))}
-        snapshots_mid: dict[Path, bytes] = {}
+    def test_db_unchanged_during_walk(self, env: tuple[cfg_mod.Config, Path]) -> None:
+        cfg, wiki = env
+        statuses_before = _get_all_statuses(wiki, _SOURCE_ID)
+        statuses_mid: dict[str, str] = {}
         captured = False
 
         class SnapshotReviewer:
@@ -297,16 +302,15 @@ class TestEngineWritesNothingUntilCommit:
                 self,
                 pending: tuple[SegmentView, ...],  # noqa: ARG002
             ) -> CommitDecision:
-                nonlocal snapshots_mid, captured
-                snapshots_mid = {
-                    p: p.read_bytes() for p in sorted(segs_dir.glob("*.md"))
-                }
+                nonlocal statuses_mid, captured
+                statuses_mid = _get_all_statuses(wiki, _SOURCE_ID)
                 captured = True
                 return CommitDecision()
 
         run(cfg=cfg, source_id=_SOURCE_ID, reviewer=SnapshotReviewer())
         assert captured
-        assert snapshots_mid == snapshots_before
+        # During the walk (before decide_quit returns), DB is still draft
+        assert statuses_mid == statuses_before
 
 
 class TestAbortOnNoneCommit:
@@ -322,10 +326,9 @@ class TestAbortOnNoneCommit:
         assert result.gate_fired is False
         assert result.wiki_reading_path is None
         assert not (tmp_wiki / "sources" / _SOURCE_ID / "reading.md").exists()
-        segs_dir = pipeline.pending_segments_dir(_SOURCE_ID)
-        for sf_path in sorted(segs_dir.glob("*.md")):
-            sf = segment_file_mod.read(sf_path)
-            assert sf.frontmatter.segment_status == "draft"
+        # DB statuses still draft (no commit happened)
+        statuses = _get_all_statuses(tmp_wiki, _SOURCE_ID)
+        assert all(s == "draft" for s in statuses.values())
 
 
 class TestYesShortcut:
@@ -491,7 +494,7 @@ class TestRegenBatchAtCommit:
 
 
 class TestRegenAfterReviewIntegrates:
-    """End-to-end: quit with regen → regenerate_after_review → segment back to draft."""
+    """End-to-end: generate → review → regen → back to draft."""
 
     def test_regenerated_segment_returns_to_draft(
         self,
@@ -532,36 +535,43 @@ class TestRegenAfterReviewIntegrates:
         ):
             generate_reading_cmd.run(_args(source_id=source_id))
 
-        # manually mark seg-001 as accepted on disk, seg-002 as regenerating
-        seg001_path = pipeline.pending_segment_path(source_id, "seg-001")
-        seg002_path = pipeline.pending_segment_path(source_id, "seg-002")
-        segment_file_mod.set_status(seg001_path, "accepted")
-        segment_file_mod.set_status(seg002_path, "regenerating")
+        # Mark seg-001 accepted, seg-002 regenerating via review engine
+        from auto_lorebook import db as db_mod  # noqa: PLC0415
+        from auto_lorebook import wiki_state  # noqa: PLC0415
 
-        # build regen batch directly and call regenerate_after_review
+        conn = db_mod.open(wiki_state.wiki_db_path(tmp_wiki))
+        try:
+            structure_store_mod.set_segment_status(
+                conn, source_id, "seg-001", "accepted"
+            )
+            structure_store_mod.set_segment_status(
+                conn, source_id, "seg-002", "regenerating"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Build regen batch + call regenerate_after_review
         from auto_lorebook import reading_review as rr_mod  # noqa: PLC0415
         from auto_lorebook.stage1b import AcceptedContextEntry  # noqa: PLC0415
-
-        sf_001 = segment_file_mod.read(seg001_path)
 
         batch = rr_mod.RegenBatch(
             source_id=source_id,
             regen_segment_ids=("seg-002",),
             accepted_context=(
                 AcceptedContextEntry(
-                    segment_id=sf_001.frontmatter.segment_id,
-                    start=sf_001.frontmatter.start,
-                    end=sf_001.frontmatter.end,
-                    title=sf_001.frontmatter.title,
-                    speaker=sf_001.frontmatter.speaker,
-                    bullets_body=sf_001.body,
+                    segment_id="seg-001",
+                    start=0.0,
+                    end=120.0,
+                    title="Intro",
+                    speaker="DM",
+                    bullets_body="_No claims extracted from this segment._\n",
                 ),
             ),
         )
 
         cfg = cfg_mod.load_config()
 
-        # custom mock: always returns a bullet valid for seg-002's range
         regen_client = MagicMock()
         regen_client.complete.return_value = OpenRouterResponse(
             text=json.dumps({
@@ -578,11 +588,17 @@ class TestRegenAfterReviewIntegrates:
             pipeline.regenerate_after_review(cfg, batch)
 
         # seg-002 should be draft after regen
-        sf_002_after = segment_file_mod.read(seg002_path)
-        assert sf_002_after.frontmatter.segment_status == "draft"
-
-        # body rewritten (contains new regen bullet)
-        assert "Regen bullet" in sf_002_after.body
+        conn2 = db_mod.open(wiki_state.wiki_db_path(tmp_wiki))
+        try:
+            seg002 = structure_store_mod.get_segment(conn2, source_id, "seg-002")
+            assert seg002 is not None
+            assert seg002.segment_status == "draft"
+            # bullets rewritten
+            bullets_map = structure_store_mod.read_bullets(conn2, source_id)
+            seg002_bullets = bullets_map.segments.get("seg-002", [])
+            assert any("Regen bullet" in b.text for b in seg002_bullets)
+        finally:
+            conn2.close()
 
         # no wiki reading.md written (gate not fired)
         wiki_reading = tmp_wiki / "sources" / source_id / "reading.md"

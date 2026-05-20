@@ -248,8 +248,8 @@ def _gather_target_toggles(
     for i, target in enumerate(view.targets):
         mark = "[x]" if selected[i] else "[ ]"
         print(  # noqa: T201
-            f"    {i + 1}. {mark} {target.proposal.target_entity}  "
-            f"(section={target.proposal.section}, speaker={target.proposal.speaker})"
+            f"    {i + 1}. {mark} {target.target.entity}  "
+            f"(section={target.target.section}, speaker={target.target.speaker})"
         )
     while True:
         try:
@@ -265,7 +265,7 @@ def _gather_target_toggles(
                 selected[idx] = not selected[idx]
                 mark = "[x]" if selected[idx] else "[ ]"
                 print(  # noqa: T201
-                    f"    {mark} {view.targets[idx].proposal.target_entity}"
+                    f"    {mark} {view.targets[idx].target.entity}"
                 )
             continue
         if len(parts) == 2 and parts[0] in {"edit", "e"} and parts[1].isdigit():
@@ -280,15 +280,15 @@ def _edit_target_override(
     target: TargetView, idx: int, overrides: dict[int, TargetEdits]
 ) -> None:
     """Prompt for per-target section / speaker; merge into overrides."""
-    p = target.proposal
+    t = target.target
     current = overrides.get(idx)
     new_section = _prompt_optional(
         "section",
-        current.new_section if current and current.new_section else p.section,
+        current.new_section if current and current.new_section else t.section,
     )
     new_speaker = _prompt_optional(
         "speaker",
-        current.new_speaker if current and current.new_speaker else p.speaker,
+        current.new_speaker if current and current.new_speaker else t.speaker,
     )
     edits = TargetEdits(new_section=new_section, new_speaker=new_speaker)
     if edits.is_noop():
@@ -380,8 +380,8 @@ def _render_bundle(
     for i, target in enumerate(view.targets):
         mark = "[x]" if selected[i] else "[ ]"
         ov = overrides.get(i)
-        section = ov.new_section if ov and ov.new_section else target.proposal.section
-        speaker = ov.new_speaker if ov and ov.new_speaker else target.proposal.speaker
+        section = ov.new_section if ov and ov.new_section else target.target.section
+        speaker = ov.new_speaker if ov and ov.new_speaker else target.target.speaker
         prefix = "  " if is_singleton else f"  {i + 1}. "
         print(  # noqa: T201
             f"{prefix}{mark} {_route_label(target)}  "
@@ -396,7 +396,7 @@ def _render_bundle(
 
 
 def _route_label(target: TargetView) -> str:
-    name = target.proposal.target_entity
+    name = target.target.entity
     if target.is_new_entity:
         cat = target.new_entity_category or "?"
         if target.created_earlier_in_session:

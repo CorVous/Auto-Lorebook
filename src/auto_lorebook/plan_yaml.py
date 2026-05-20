@@ -1,12 +1,18 @@
-"""Stage 2 `plan.yaml`: schema, read/write.
+"""Stage 2 plan: schema, parse helpers, DB I/O, file I/O (legacy).
 
-Mirrors `structure.py` shape: dataclasses + ``_to_dict`` + ``_parse_*``
-+ ``read``/``write``. Optional fields are written only when set so the
-on-disk YAML stays close to the spec in ``docs/pipeline/planner.md``.
+DB API (conn-first):
+    write_plan_routes(conn, ingest_id, plan) -- DELETE+INSERT plan_metadata+plan_routes
+    read_plan_routes(conn, ingest_id) -> Plan | None
+    list_plans(conn) -> list[tuple[str,str,int,int]]
+
+File I/O (legacy, kept for tests that pre-date DB migration):
+    read(path), write(plan, path)
 """
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -17,7 +23,10 @@ from auto_lorebook.entity_yaml import CATEGORIES
 from auto_lorebook.schema import SchemaVersionError, read_schema_version
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 _MAX_SCHEMA = 1
 
@@ -391,3 +400,199 @@ def write(plan: Plan, path: Path) -> None:
         default_flow_style=False,
     )
     atomic_write_text(path, text)
+
+
+# ------------- DB API -------------------------------------------------------
+
+
+def write_plan_routes(
+    conn: sqlite3.Connection,
+    ingest_id: str,
+    plan: Plan,
+) -> None:
+    """DELETE+INSERT plan_metadata + plan_routes for ingest_id. Caller owns tx."""
+    conn.execute("DELETE FROM plan_routes WHERE ingest_id=?", (ingest_id,))
+    conn.execute("DELETE FROM plan_metadata WHERE ingest_id=?", (ingest_id,))
+
+    conn.execute(
+        """
+        INSERT INTO plan_metadata
+            (ingest_id, planned_at, source_id,
+             entity_resolutions_json, new_entities_json, unresolved_json)
+        VALUES (?,?,?,?,?,?)
+        """,
+        (
+            ingest_id,
+            plan.planned_at,
+            plan.source_id,
+            json.dumps([_resolution_to_dict(r) for r in plan.entity_resolutions]),
+            json.dumps([_new_entity_to_dict(n) for n in plan.new_entities]),
+            json.dumps([_unresolved_to_dict(u) for u in plan.unresolved]),
+        ),
+    )
+
+    for claim in plan.planned_claims:
+        for target in claim.targets:
+            conn.execute(
+                """
+                INSERT INTO plan_routes (
+                    ingest_id, claim_group_id,
+                    target_entity_category, target_entity_slug,
+                    target_entity_name, entity_state, proposed_section,
+                    proposed_speaker, proposed_status, proposed_status_reason,
+                    locator, locator_hint, reading_section, reading_bullet_index,
+                    rationale, matched_via
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+                """,
+                (
+                    ingest_id,
+                    claim.claim_group_id,
+                    target.proposed_category if target.entity_state == "new" else None,
+                    None,  # slug resolved later
+                    target.entity,
+                    target.entity_state,
+                    target.proposed_section,
+                    claim.proposed_speaker or None,
+                    claim.proposed_status,
+                    claim.proposed_status_reason,
+                    claim.locator,
+                    claim.locator_hint,
+                    claim.reading_section,
+                    claim.reading_bullet_index,
+                    target.rationale or None,
+                ),
+            )
+
+
+def read_plan_routes(
+    conn: sqlite3.Connection,
+    ingest_id: str,
+) -> Plan | None:
+    """Return Plan from DB or None if no plan_metadata row."""
+    row = conn.execute(
+        "SELECT planned_at, source_id, entity_resolutions_json,"
+        " new_entities_json, unresolved_json"
+        " FROM plan_metadata WHERE ingest_id=?",
+        (ingest_id,),
+    ).fetchone()
+    if row is None:
+        return None
+
+    planned_at, source_id, er_json, ne_json, u_json = row
+    try:
+        entity_resolutions = [
+            parse_resolution(r) for r in (json.loads(er_json or "[]") or [])
+        ]
+        new_entities = [
+            parse_new_entity(n) for n in (json.loads(ne_json or "[]") or [])
+        ]
+        unresolved = [parse_unresolved(u) for u in (json.loads(u_json or "[]") or [])]
+    except (PlanError, json.JSONDecodeError) as exc:
+        _logger.warning(
+            "read_plan_routes: malformed metadata for %s: %s", ingest_id, exc
+        )
+        entity_resolutions = []
+        new_entities = []
+        unresolved = []
+
+    routes = conn.execute(
+        """
+        SELECT claim_group_id, target_entity_name, entity_state, proposed_section,
+               proposed_speaker, proposed_status, proposed_status_reason,
+               locator, locator_hint, reading_section, reading_bullet_index,
+               rationale, target_entity_category
+        FROM plan_routes
+        WHERE ingest_id=?
+        ORDER BY id
+        """,
+        (ingest_id,),
+    ).fetchall()
+
+    # reconstruct planned_claims: group by claim_group_id preserving order
+    claims_map: dict[str, dict[str, Any]] = {}
+    claim_order: list[str] = []
+    for r in routes:
+        (
+            cgid,
+            entity_name,
+            estate,
+            esection,
+            espeaker,
+            estatus,
+            estatus_reason,
+            locator,
+            locator_hint,
+            rsection,
+            rbullet,
+            rationale,
+            ecat,
+        ) = r
+        if cgid not in claims_map:
+            claims_map[cgid] = {
+                "claim_group_id": cgid,
+                "reading_section": rsection,
+                "reading_bullet_index": rbullet,
+                "locator": locator,
+                "locator_hint": locator_hint,
+                "proposed_speaker": espeaker or "",
+                "proposed_status": estatus,
+                "proposed_status_reason": estatus_reason,
+                "targets": [],
+            }
+            claim_order.append(cgid)
+        claims_map[cgid]["targets"].append({
+            "entity": entity_name,
+            "entity_state": estate,
+            "proposed_section": esection,
+            "rationale": rationale or "",
+            "proposed_category": ecat,
+        })
+
+    planned_claims: list[PlannedClaim] = []
+    for cgid in claim_order:
+        c = claims_map[cgid]
+        targets = [parse_target(t) for t in c["targets"]]
+        planned_claims.append(
+            PlannedClaim(
+                claim_group_id=c["claim_group_id"],
+                reading_section=c["reading_section"],
+                reading_bullet_index=c["reading_bullet_index"],
+                locator=c["locator"],
+                locator_hint=c["locator_hint"],
+                proposed_speaker=c["proposed_speaker"],
+                proposed_status=c["proposed_status"],
+                proposed_status_reason=c["proposed_status_reason"],
+                targets=targets,
+            )
+        )
+
+    return Plan(
+        source_id=source_id,
+        planned_at=planned_at,
+        entity_resolutions=entity_resolutions,
+        new_entities=new_entities,
+        planned_claims=planned_claims,
+        unresolved=unresolved,
+    )
+
+
+def list_plans(
+    conn: sqlite3.Connection,
+) -> list[tuple[str, str, int, int]]:
+    """Return [(source_id, planned_at, claim_count, new_entity_count), ...]."""
+    rows = conn.execute(
+        "SELECT ingest_id, planned_at, source_id, new_entities_json FROM plan_metadata"
+        " ORDER BY planned_at"
+    ).fetchall()
+    result: list[tuple[str, str, int, int]] = []
+    for ingest_id, planned_at, source_id, ne_json in rows:
+        claim_count = conn.execute(
+            "SELECT COUNT(DISTINCT claim_group_id) FROM plan_routes WHERE ingest_id=?",
+            (ingest_id,),
+        ).fetchone()[0]
+        try:
+            ne_count = len(json.loads(ne_json or "[]"))
+        except json.JSONDecodeError:
+            ne_count = 0
+        result.append((source_id, planned_at, claim_count, ne_count))
+    return result

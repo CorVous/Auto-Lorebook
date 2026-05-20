@@ -10,7 +10,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from auto_lorebook import entity_yaml, reading_pipeline
+from auto_lorebook import db as db_mod
+from auto_lorebook import entities as entities_mod
+from auto_lorebook import reading_pipeline
+from auto_lorebook import wiki_state as wiki_state_mod
 from auto_lorebook.commands import (
     approve_reading_cmd,
     extract_cmd,
@@ -22,7 +25,20 @@ from auto_lorebook.commands import (
 from auto_lorebook.openrouter import OpenRouterResponse
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
+
+
+def _open_db(wiki: Path) -> sqlite3.Connection:
+    return db_mod.open(wiki_state_mod.wiki_db_path(wiki))
+
+
+def _db_entity(wiki: Path, category: str, slug: str) -> entities_mod.EntityRow | None:
+    conn = _open_db(wiki)
+    try:
+        return entities_mod.get_entity(conn, category, slug)
+    finally:
+        conn.close()
 
 
 _SRT = (
@@ -234,13 +250,14 @@ class TestRejectIngest:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         _approve_one(tmp_home, ingested_wiki, monkeypatch)
-        aldara_path = ingested_wiki / "locations" / "aldara.yaml"
-        assert aldara_path.exists()
+        aldara_md = ingested_wiki / "locations" / "aldara.md"
+        assert aldara_md.exists()
         rc = reject_ingest_cmd.run(_args(source_id=SOURCE_ID, yes=True))
         assert rc == 0
         out = capsys.readouterr().out
         assert "Rejected ingest" in out
-        assert not aldara_path.exists()
+        assert not aldara_md.exists()
+        assert _db_entity(ingested_wiki, "locations", "aldara") is None
 
     def test_tty_guard_refuses_without_yes(
         self,
@@ -256,7 +273,8 @@ class TestRejectIngest:
             rc = reject_ingest_cmd.run(_args(source_id=SOURCE_ID, yes=False))
         assert rc == 1
         # Entity still in place — guard prevented the destructive op.
-        assert (ingested_wiki / "locations" / "aldara.yaml").exists()
+        assert (ingested_wiki / "locations" / "aldara.md").exists()
+        assert _db_entity(ingested_wiki, "locations", "aldara") is not None
 
     def test_confirmation_y_runs(
         self,
@@ -265,7 +283,7 @@ class TestRejectIngest:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _approve_one(tmp_home, ingested_wiki, monkeypatch)
-        aldara_path = ingested_wiki / "locations" / "aldara.yaml"
+        aldara_md = ingested_wiki / "locations" / "aldara.md"
         with (
             patch(
                 "auto_lorebook.commands.reject_ingest._is_interactive",
@@ -275,7 +293,7 @@ class TestRejectIngest:
         ):
             rc = reject_ingest_cmd.run(_args(source_id=SOURCE_ID, yes=False))
         assert rc == 0
-        assert not aldara_path.exists()
+        assert not aldara_md.exists()
 
     def test_confirmation_n_keeps_state(
         self,
@@ -285,7 +303,7 @@ class TestRejectIngest:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         _approve_one(tmp_home, ingested_wiki, monkeypatch)
-        aldara_path = ingested_wiki / "locations" / "aldara.yaml"
+        aldara_md = ingested_wiki / "locations" / "aldara.md"
         with (
             patch(
                 "auto_lorebook.commands.reject_ingest._is_interactive",
@@ -295,7 +313,8 @@ class TestRejectIngest:
         ):
             rc = reject_ingest_cmd.run(_args(source_id=SOURCE_ID, yes=False))
         assert rc == 0
-        assert aldara_path.exists()
+        assert aldara_md.exists()
+        assert _db_entity(ingested_wiki, "locations", "aldara") is not None
         out = capsys.readouterr().out
         assert "Cancelled" in out
 
@@ -307,11 +326,12 @@ class TestRejectIngest:
     ) -> None:
         _approve_one(tmp_home, ingested_wiki, monkeypatch)
         # Pre-conditions: stub exists, pending plan + (drained) proposals dir
-        aldara_path = ingested_wiki / "locations" / "aldara.yaml"
+        aldara_md = ingested_wiki / "locations" / "aldara.md"
         plan_path = reading_pipeline.pending_plan_path(SOURCE_ID)
         proposals_dir = reading_pipeline.pending_proposals_dir(SOURCE_ID)
         sources_dir = ingested_wiki / "sources" / SOURCE_ID
-        assert aldara_path.exists()
+        assert aldara_md.exists()
+        assert _db_entity(ingested_wiki, "locations", "aldara") is not None
         assert plan_path.exists()
         # proposals dir exists but is empty (auto-approve drained it)
         assert proposals_dir.is_dir()
@@ -319,14 +339,24 @@ class TestRejectIngest:
 
         rc = reject_ingest_cmd.run(_args(source_id=SOURCE_ID, yes=True))
         assert rc == 0
-        assert not aldara_path.exists()
+        assert not aldara_md.exists()
+        assert _db_entity(ingested_wiki, "locations", "aldara") is None
         assert not plan_path.exists()
         assert not proposals_dir.exists()
         # sources/ untouched
         assert (sources_dir / "info.yaml").exists()
         assert (sources_dir / "transcript.en.srt").exists()
-        # reading-stage pending artifacts survive
-        assert reading_pipeline.pending_structure_path(SOURCE_ID).exists()
+        # reading-stage DB state survives (segments left intact for re-run)
+        from auto_lorebook import db as db_mod  # noqa: PLC0415
+        from auto_lorebook import structure_store as ss_mod  # noqa: PLC0415
+        from auto_lorebook import wiki_state as ws_mod  # noqa: PLC0415
+
+        conn = db_mod.open(ws_mod.wiki_db_path(ingested_wiki))
+        try:
+            segs = ss_mod.list_segments(conn, SOURCE_ID)
+        finally:
+            conn.close()
+        assert segs
 
     def test_nothing_to_reject(
         self,
@@ -341,25 +371,32 @@ class TestRejectIngest:
         out = capsys.readouterr().out
         assert "Nothing to reject" in out
 
-    def test_proper_entity_yaml_round_trip(
+    def test_proper_entity_db_round_trip(
         self,
         tmp_home: Path,
         ingested_wiki: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """After yes-rejection, no entity YAMLs survive that referenced this ingest."""
+        """After yes-rejection, no DB rows or .md files reference this ingest."""
         _approve_one(tmp_home, ingested_wiki, monkeypatch)
         rc = reject_ingest_cmd.run(_args(source_id=SOURCE_ID, yes=True))
         assert rc == 0
-        # Walk every category dir; assert nothing refers to SOURCE_ID
-        for cat in entity_yaml.CATEGORIES:
-            for path in (ingested_wiki / cat).glob("*.yaml"):
-                e = entity_yaml.read(path)
-                assert e.created_by_ingest != SOURCE_ID
-                for f in e.facts:
-                    assert f.get("created_by_ingest") != SOURCE_ID
-                for a in e.aliases:
-                    assert a.added_by_ingest != SOURCE_ID
+        conn = _open_db(ingested_wiki)
+        try:
+            # no entities created by this ingest
+            entity_count = conn.execute(
+                "SELECT COUNT(*) FROM entities WHERE created_by_ingest=?",
+                (SOURCE_ID,),
+            ).fetchone()[0]
+            assert entity_count == 0
+            # no facts created by this ingest
+            fact_count = conn.execute(
+                "SELECT COUNT(*) FROM facts WHERE created_by_ingest=?",
+                (SOURCE_ID,),
+            ).fetchone()[0]
+            assert fact_count == 0
+        finally:
+            conn.close()
 
 
 class TestRejectIngestIsolation:

@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from auto_lorebook.info_yaml import transcript_filename_for
 from auto_lorebook.srt import Cue
 from auto_lorebook.srt import parse as parse_srt
 from auto_lorebook.timestamps import format_timestamp
@@ -62,7 +63,7 @@ def load(
     corrections: Corrections,
 ) -> LoadedTranscript:
     """Read the stored transcript for `info` under `wiki_repo`."""
-    fname = info.transcript_filename or _default_filename(info.source_type)
+    fname = transcript_filename_for(info.source_type)
     path = wiki_repo / "sources" / info.source_id / fname
     if not path.exists():
         msg = f"transcript not found: {path}"
@@ -94,14 +95,6 @@ def transcript_window(
         raise TranscriptError(msg)
     kept = [c for c in transcript.cues if start <= c.start < end]
     return _render_cues(tuple(kept)), kept
-
-
-def _default_filename(source_type: str) -> str:
-    if source_type in {"srt", "youtube"}:
-        return "transcript.en.srt"
-    if source_type == "markdown":
-        return "transcript.md"
-    return "transcript.txt"
 
 
 def _render_cues(cues: tuple[Cue, ...]) -> str:

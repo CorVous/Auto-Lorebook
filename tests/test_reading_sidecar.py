@@ -1,167 +1,135 @@
-"""Tests for reading_sidecar.py — reading.yaml I/O."""
+"""Tests for reading_sidecar.py — DB-backed reading session state."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 import pytest
-import yaml
 
-from auto_lorebook.gap_check import GapWarning
-from auto_lorebook.reading_sidecar import ReadingSidecarError, Sidecar, read, write
+from auto_lorebook.reading_sidecar import (
+    IngestState,
+    ReadingSidecarError,
+    Sidecar,
+    exists,
+    read_state,
+    write_state,
+)
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    import sqlite3
 
 
-def _full_sidecar() -> Sidecar:
-    return Sidecar(
-        default_speaker="DM",
-        name_corrections={"Fair-on": "Theron", "Aldera": "Aldara"},
-        session_date="2026-01-15",
+def _seed_ingest(conn: sqlite3.Connection, ingest_id: str = "src-001") -> None:
+    """Insert minimal sources + ingests rows."""
+    conn.execute(
+        "INSERT OR IGNORE INTO sources "
+        "(source_id, source_type, fetched_at, context_json) "
+        "VALUES (?,?,?,?)",
+        (ingest_id, "youtube", "2026-01-01T00:00:00Z", "{}"),
     )
+    conn.execute(
+        "INSERT OR IGNORE INTO ingests "
+        "(ingest_id, source_id, started_at, state, default_speaker, "
+        " name_corrections_json, session_date) "
+        "VALUES (?,?,?,'reading',NULL,'{}',NULL)",
+        (ingest_id, ingest_id, "2026-01-01T00:00:00Z"),
+    )
+    conn.commit()
 
 
-def _two_warnings() -> list[GapWarning]:
-    return [
-        GapWarning(
-            start=2050.0,
-            end=2902.0,
-            segment_ids=("seg-005", "seg-006", "seg-007"),
-            segment_titles=("Pizza discussion", "Break", "Rules: initiative"),
-        ),
-        GapWarning(
-            start=5400.0,
-            end=6100.0,
-            segment_ids=("seg-012",),
-            segment_titles=("Silence",),
-        ),
-    ]
-
-
-class TestRoundTripFull:
-    def test_round_trip(self, tmp_path: Path) -> None:
-        sc = _full_sidecar()
-        p = tmp_path / "reading.yaml"
-        write(sc, p)
-        loaded = read(p)
-        assert loaded.default_speaker == sc.default_speaker
-        assert loaded.name_corrections == sc.name_corrections
-        assert loaded.session_date == sc.session_date
-
-    def test_schema_version_first(self, tmp_path: Path) -> None:
-        p = tmp_path / "reading.yaml"
-        write(_full_sidecar(), p)
-        first_line = p.read_text(encoding="utf-8").splitlines()[0]
-        assert first_line == "schema_version: 2"
-
-    def test_key_order(self, tmp_path: Path) -> None:
-        p = tmp_path / "reading.yaml"
-        write(_full_sidecar(), p)
-        parsed = yaml.safe_load(p.read_text(encoding="utf-8"))
-        keys = list(parsed.keys())
-        assert keys == [
-            "schema_version",
-            "default_speaker",
-            "session_date",
-            "name_corrections",
-            "gap_warnings",
-        ]
-
-    def test_byte_identical_round_trip(self, tmp_path: Path) -> None:
-        p = tmp_path / "reading.yaml"
-        write(_full_sidecar(), p)
-        first_bytes = p.read_bytes()
-        loaded = read(p)
-        write(loaded, p)
-        assert p.read_bytes() == first_bytes
-
-
-class TestEmptyCorrections:
-    def test_empty_corrections(self, tmp_path: Path) -> None:
-        sc = Sidecar(default_speaker="GM", name_corrections={}, session_date=None)
-        p = tmp_path / "reading.yaml"
-        write(sc, p)
-        loaded = read(p)
-        assert loaded.name_corrections == {}
-        assert loaded.session_date is None
-
-
-class TestNullSessionDate:
-    def test_null_session_date(self, tmp_path: Path) -> None:
-        sc = Sidecar(default_speaker="GM")
-        p = tmp_path / "reading.yaml"
-        write(sc, p)
-        loaded = read(p)
-        assert loaded.session_date is None
-
-
-class TestMissingFileRaises:
-    def test_missing_file(self, tmp_path: Path) -> None:
-        with pytest.raises(ReadingSidecarError, match="not found"):
-            read(tmp_path / "nope.yaml")
-
-
-class TestMissingSchemaVersionRaises:
-    def test_missing_schema_version(self, tmp_path: Path) -> None:
-        p = tmp_path / "reading.yaml"
-        p.write_text("default_speaker: DM\nname_corrections: {}\n", encoding="utf-8")
-        with pytest.raises(ReadingSidecarError, match="schema_version"):
-            read(p)
-
-
-class TestFutureSchemaRaises:
-    def test_future_schema(self, tmp_path: Path) -> None:
-        p = tmp_path / "reading.yaml"
-        p.write_text(
-            "schema_version: 99\ndefault_speaker: DM\n"
-            "session_date: null\nname_corrections: {}\n",
-            encoding="utf-8",
+class TestWriteAndReadRoundTrip:
+    def test_round_trip_full(self, db_conn: sqlite3.Connection) -> None:
+        _seed_ingest(db_conn)
+        write_state(
+            db_conn,
+            "src-001",
+            default_speaker="DM",
+            name_corrections={"Fair-on": "Theron", "Aldera": "Aldara"},
+            session_date="2026-01-15",
         )
-        with pytest.raises(ReadingSidecarError, match="schema_version"):
-            read(p)
+        db_conn.commit()
+        sc = read_state(db_conn, "src-001")
+        assert sc.default_speaker == "DM"
+        assert sc.name_corrections == {"Fair-on": "Theron", "Aldera": "Aldara"}
+        assert sc.session_date == "2026-01-15"
+        assert sc.ingest_id == "src-001"
+        assert sc.source_id == "src-001"
 
-
-class TestGapWarnings:
-    def test_round_trip_two_warnings(self, tmp_path: Path) -> None:
-        warnings = _two_warnings()
-        sc = Sidecar(default_speaker="DM", gap_warnings=warnings)
-        p = tmp_path / "reading.yaml"
-        write(sc, p)
-        loaded = read(p)
-        assert len(loaded.gap_warnings) == 2
-        w0 = loaded.gap_warnings[0]
-        assert w0.start == pytest.approx(2050.0)
-        assert w0.end == pytest.approx(2902.0)
-        assert w0.segment_ids == ("seg-005", "seg-006", "seg-007")
-        assert w0.segment_titles == ("Pizza discussion", "Break", "Rules: initiative")
-        w1 = loaded.gap_warnings[1]
-        assert w1.start == pytest.approx(5400.0)
-        assert w1.end == pytest.approx(6100.0)
-        assert w1.segment_ids == ("seg-012",)
-        assert w1.segment_titles == ("Silence",)
-
-    def test_schema_version_is_2(self, tmp_path: Path) -> None:
-        sc = Sidecar(default_speaker="DM", gap_warnings=_two_warnings())
-        p = tmp_path / "reading.yaml"
-        write(sc, p)
-        first_line = p.read_text(encoding="utf-8").splitlines()[0]
-        assert first_line == "schema_version: 2"
-
-    def test_key_order_ends_with_gap_warnings(self, tmp_path: Path) -> None:
-        sc = Sidecar(default_speaker="DM", gap_warnings=_two_warnings())
-        p = tmp_path / "reading.yaml"
-        write(sc, p)
-        parsed = yaml.safe_load(p.read_text(encoding="utf-8"))
-        assert list(parsed.keys())[-1] == "gap_warnings"
-
-    def test_v1_back_compat_reads_empty_gap_warnings(self, tmp_path: Path) -> None:
-        # v1 YAML without gap_warnings key — should read as []
-        p = tmp_path / "reading.yaml"
-        p.write_text(
-            "schema_version: 1\ndefault_speaker: DM\n"
-            "session_date: null\nname_corrections: {}\n",
-            encoding="utf-8",
+    def test_empty_corrections(self, db_conn: sqlite3.Connection) -> None:
+        _seed_ingest(db_conn)
+        write_state(
+            db_conn,
+            "src-001",
+            default_speaker="GM",
+            name_corrections={},
+            session_date=None,
         )
-        loaded = read(p)
-        assert loaded.gap_warnings == []
+        db_conn.commit()
+        sc = read_state(db_conn, "src-001")
+        assert sc.name_corrections == {}
+        assert sc.session_date is None
+
+    def test_null_session_date(self, db_conn: sqlite3.Connection) -> None:
+        _seed_ingest(db_conn)
+        write_state(
+            db_conn,
+            "src-001",
+            default_speaker="GM",
+            name_corrections={},
+            session_date=None,
+        )
+        db_conn.commit()
+        sc = read_state(db_conn, "src-001")
+        assert sc.session_date is None
+
+    def test_gap_warnings_empty_when_no_structure(
+        self, db_conn: sqlite3.Connection
+    ) -> None:
+        _seed_ingest(db_conn)
+        write_state(
+            db_conn,
+            "src-001",
+            default_speaker="DM",
+            name_corrections={},
+            session_date=None,
+        )
+        db_conn.commit()
+        sc = read_state(db_conn, "src-001")
+        # no segments written → no gap warnings
+        assert sc.gap_warnings == []
+
+
+class TestMissingRowRaises:
+    def test_missing_ingest_row(self, db_conn: sqlite3.Connection) -> None:
+        with pytest.raises(ReadingSidecarError, match="no ingests row"):
+            read_state(db_conn, "nonexistent")
+
+
+class TestExists:
+    def test_false_before_seed(self, db_conn: sqlite3.Connection) -> None:
+        assert not exists(db_conn, "src-001")
+
+    def test_true_after_seed(self, db_conn: sqlite3.Connection) -> None:
+        _seed_ingest(db_conn)
+        assert exists(db_conn, "src-001")
+
+
+class TestSidecarAlias:
+    """Sidecar is an alias for IngestState for back-compat."""
+
+    def test_alias(self) -> None:
+        assert Sidecar is IngestState
+
+    def test_ingest_state_fields(self, db_conn: sqlite3.Connection) -> None:
+        _seed_ingest(db_conn)
+        write_state(
+            db_conn,
+            "src-001",
+            default_speaker="DM",
+            name_corrections={"A": "B"},
+            session_date="2026-03-01",
+        )
+        db_conn.commit()
+        sc = read_state(db_conn, "src-001")
+        assert isinstance(sc, IngestState)
+        assert sc.state == "reading"

@@ -194,8 +194,16 @@ def test_pending_state_lives_under_wiki(
     assert rc == 0
 
     sid = "qa-inttest"
-    # reading/structure.yaml lives under <wiki>/.wiki-state/pending/
-    assert (wiki_state.pending_reading_dir(wiki, sid) / "structure.yaml").exists()
+    # reading-stage state is in wiki DB, not home
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
+    from auto_lorebook import structure_store as ss_mod  # noqa: PLC0415
+
+    conn = db_mod.open(wiki_state.wiki_db_path(wiki))
+    try:
+        segs = ss_mod.list_segments(conn, sid)
+    finally:
+        conn.close()
+    assert segs
     # .gitignore exists and contains pending/
     gi = wiki_state.gitignore_path(wiki)
     assert gi.exists()

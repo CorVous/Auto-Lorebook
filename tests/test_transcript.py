@@ -41,9 +41,6 @@ def _info(
         fetched_at="2026-04-20T00:00:00Z",
         title="t",
         duration_seconds=duration,
-        transcript_filename="transcript.en.srt"
-        if source_type in {"srt", "youtube"}
-        else "transcript.txt",
         context=SourceContext(),
     )
 
@@ -108,7 +105,6 @@ class TestLoad:
             "Hello world.\nAnother line.\n", encoding="utf-8"
         )
         info = _info("text", duration=600, source_id="txt-x")
-        info.transcript_filename = "transcript.txt"
         loaded = load(tmp_wiki, info, Corrections())
         assert "Hello world." in loaded.text_for_llm
         assert loaded.total_duration == pytest.approx(600.0)

@@ -1,4 +1,4 @@
-"""Tests for proposal_yaml.py — Stage 3 proposal read/write."""
+"""Tests for proposal_yaml.py — Stage 3 proposal file I/O + DB API."""
 
 from __future__ import annotations
 
@@ -8,28 +8,56 @@ from typing import TYPE_CHECKING, Any
 import pytest
 import yaml
 
+from auto_lorebook import db
 from auto_lorebook.proposal_yaml import (
     Correction,
     Proposal,
     ProposalError,
-    Sibling,
+    ProposalTarget,
+    count_proposals,
+    delete_all_for_ingest,
+    delete_proposal,
+    list_proposals,
+    proposals_exist,
     read,
+    read_proposal,
     write,
+    write_proposal,
 )
 
 if TYPE_CHECKING:
+    import sqlite3
+    from collections.abc import Generator
     from pathlib import Path
+
+
+def _make_target(
+    entity: str = "Aldara",
+    section: str = "founding",
+    speaker: str = "DM",
+    proposal_type: str = "new_entity_with_facts",
+    proposed_category: str | None = "locations",
+) -> ProposalTarget:
+    return ProposalTarget(
+        entity=entity,
+        section=section,
+        speaker=speaker,
+        proposal_type=proposal_type,
+        proposed_category=proposed_category,
+    )
 
 
 def _full_proposal(**overrides: Any) -> Proposal:  # noqa: ANN401
     base = Proposal(
-        proposal_type="new_fact",
-        target_entity="Aldara",
         proposed_id="aldara-f004",
         claim_group_id="cg-001",
-        claim_group_siblings=[
-            Sibling(entity="Theron", proposed_id="theron-f011"),
-            Sibling(entity="Second Age", proposed_id="second-age-f001"),
+        targets=[
+            _make_target(
+                "Aldara", "founding", "DM", "new_entity_with_facts", "locations"
+            ),
+            _make_target(
+                "Theron", "lineage", "DM", "new_entity_with_facts", "characters"
+            ),
         ],
         text="Theron's grandfather founded Aldara in the Second Age.",
         raw_transcript_span=(
@@ -50,12 +78,10 @@ def _full_proposal(**overrides: Any) -> Proposal:  # noqa: ANN401
         ],
         source_id="yt-abc123",
         locator="0:04:32-0:04:41",
-        speaker="DM",
         reading_section="[4:30-8:00] Founding of Aldara",
         reading_bullet_index=0,
         status="authoritative",
         session_date="2026-01-15",
-        section="founding",
         context_before="So let's talk about the founding of Aldara.",
         context_after="And that's why the Theron name matters so much now.",
     )
@@ -91,11 +117,16 @@ class TestRoundTrip:
         path = tmp_path / "p.yaml"
         data = {
             "schema_version": 1,
-            "proposal_type": "new_fact",
-            "target_entity": "Aldara",
             "proposed_id": "aldara-f001",
             "claim_group_id": "cg-001",
-            "claim_group_siblings": [],
+            "targets": [
+                {
+                    "entity": "Aldara",
+                    "section": "founding",
+                    "speaker": "DM",
+                    "proposal_type": "new_fact",
+                },
+            ],
             "text": "x",
             "raw_transcript_span": "x",
             "text_corrects_transcript": False,
@@ -104,10 +135,8 @@ class TestRoundTrip:
             ],
             "source_id": "yt-x",
             "locator": "0:00:01-0:00:02",
-            "speaker": "DM",
             "status": "authoritative",
             "session_date": "2026-01-15",
-            "section": "founding",
             "reading_section": "[0:00-1:00] s",
             "reading_bullet_index": 0,
             "context_before": "",
@@ -147,26 +176,29 @@ class TestOptionalFields:
 
 
 class TestValidation:
-    def test_unknown_proposal_type_raises(self, tmp_path: Path) -> None:
+    def test_unknown_proposal_type_in_target_raises(self, tmp_path: Path) -> None:
         path = tmp_path / "p.yaml"
         path.write_text(
             yaml.safe_dump({
                 "schema_version": 1,
-                "proposal_type": "weird",
-                "target_entity": "x",
                 "proposed_id": "x-f001",
                 "claim_group_id": "cg-001",
-                "claim_group_siblings": [],
+                "targets": [
+                    {
+                        "entity": "x",
+                        "section": "x",
+                        "speaker": "DM",
+                        "proposal_type": "weird",
+                    },
+                ],
                 "text": "x",
                 "raw_transcript_span": "x",
                 "text_corrects_transcript": False,
                 "corrections_applied": [],
                 "source_id": "yt-x",
                 "locator": "0:00:01-0:00:02",
-                "speaker": "DM",
                 "status": "authoritative",
                 "session_date": "2026-01-15",
-                "section": "x",
                 "reading_section": "x",
                 "reading_bullet_index": 0,
                 "context_before": "",
@@ -181,11 +213,16 @@ class TestValidation:
         path = tmp_path / "p.yaml"
         data = {
             "schema_version": 1,
-            "proposal_type": "new_fact",
-            "target_entity": "Aldara",
             "proposed_id": "aldara-f001",
             "claim_group_id": "cg-001",
-            "claim_group_siblings": [],
+            "targets": [
+                {
+                    "entity": "Aldara",
+                    "section": "founding",
+                    "speaker": "DM",
+                    "proposal_type": "new_fact",
+                },
+            ],
             "text": "x",
             "raw_transcript_span": "x",
             "text_corrects_transcript": True,
@@ -194,10 +231,8 @@ class TestValidation:
             ],
             "source_id": "yt-x",
             "locator": "0:00:01-0:00:02",
-            "speaker": "DM",
             "status": "authoritative",
             "session_date": "2026-01-15",
-            "section": "x",
             "reading_section": "x",
             "reading_bullet_index": 0,
             "context_before": "",
@@ -211,11 +246,16 @@ class TestValidation:
         path = tmp_path / "p.yaml"
         data = {
             "schema_version": 1,
-            "proposal_type": "new_fact",
-            "target_entity": "Aldara",
             "proposed_id": "aldara-f001",
             "claim_group_id": "cg-001",
-            "claim_group_siblings": [],
+            "targets": [
+                {
+                    "entity": "Aldara",
+                    "section": "founding",
+                    "speaker": "DM",
+                    "proposal_type": "new_fact",
+                },
+            ],
             "text": "x",
             "raw_transcript_span": "x",
             "text_corrects_transcript": True,
@@ -224,10 +264,8 @@ class TestValidation:
             ],
             "source_id": "yt-x",
             "locator": "0:00:01-0:00:02",
-            "speaker": "DM",
             "status": "authoritative",
             "session_date": "2026-01-15",
-            "section": "x",
             "reading_section": "x",
             "reading_bullet_index": 0,
             "context_before": "",
@@ -240,7 +278,7 @@ class TestValidation:
     def test_missing_required_field_raises(self, tmp_path: Path) -> None:
         path = tmp_path / "p.yaml"
         path.write_text(
-            yaml.safe_dump({"schema_version": 1, "proposal_type": "new_fact"}),
+            yaml.safe_dump({"schema_version": 1, "proposed_id": "x-f001"}),
             encoding="utf-8",
         )
         with pytest.raises(ProposalError):
@@ -249,7 +287,7 @@ class TestValidation:
     def test_bad_schema_version_raises(self, tmp_path: Path) -> None:
         path = tmp_path / "p.yaml"
         path.write_text(
-            yaml.safe_dump({"schema_version": 99, "proposal_type": "new_fact"}),
+            yaml.safe_dump({"schema_version": 99, "proposed_id": "x-f001"}),
             encoding="utf-8",
         )
         with pytest.raises(ProposalError):
@@ -258,3 +296,205 @@ class TestValidation:
     def test_missing_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(ProposalError, match="file not found"):
             read(tmp_path / "nope.yaml")
+
+
+# ---------------------------------------------------------------------------
+# DB API tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def db_conn() -> Generator[sqlite3.Connection]:
+    """In-memory DB with seed source + ingest rows.
+
+    Yields:
+        open in-memory connection.
+
+    """
+    conn = db.open(":memory:")
+    conn.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at, context_json)"
+        " VALUES ('yt-x', 'youtube', '2026-01-01T00:00:00Z', '{}')"
+    )
+    conn.execute(
+        "INSERT INTO ingests(ingest_id, source_id, started_at, state)"
+        " VALUES ('ing-001', 'yt-x', '2026-01-01T00:00:00Z', 'extracted')"
+    )
+    conn.commit()
+    yield conn
+    conn.close()
+
+
+def _make_db_proposal(**overrides: Any) -> Proposal:  # noqa: ANN401
+    base: dict[str, Any] = {
+        "proposed_id": "aldara-f001",
+        "claim_group_id": "cg-001",
+        "targets": [
+            ProposalTarget(
+                entity="Aldara",
+                section="founding",
+                speaker="DM",
+                proposal_type="new_entity_with_facts",
+                proposed_category="locations",
+            ),
+        ],
+        "text": "Aldara was founded in the Second Age.",
+        "raw_transcript_span": "Aldara was founded in the Second Age.",
+        "text_corrects_transcript": False,
+        "source_id": "yt-x",
+        "locator": "0:04:32-0:04:41",
+        "reading_section": "[4:30-8:00] Founding",
+        "reading_bullet_index": 0,
+        "status": "authoritative",
+        "session_date": "2026-01-15",
+        "context_before": "",
+        "context_after": "",
+    }
+    base.update(overrides)
+    return Proposal(**base)
+
+
+class TestWriteReadProposal:
+    def test_read_returns_none_when_absent(self, db_conn: sqlite3.Connection) -> None:
+        assert read_proposal(db_conn, "no-such") is None
+
+    def test_round_trip(self, db_conn: sqlite3.Connection) -> None:
+        p = _make_db_proposal()
+        write_proposal(db_conn, "ing-001", p)
+        db_conn.commit()
+        loaded = read_proposal(db_conn, "aldara-f001")
+        assert loaded is not None
+        assert loaded.proposed_id == "aldara-f001"
+        assert loaded.text == "Aldara was founded in the Second Age."
+        assert loaded.status == "authoritative"
+        assert len(loaded.targets) == 1
+        assert loaded.targets[0].entity == "Aldara"
+
+    def test_write_proposal_persists_targets_in_order(
+        self, db_conn: sqlite3.Connection
+    ) -> None:
+        targets = [
+            ProposalTarget(
+                entity="Aldara",
+                section="founding",
+                speaker="DM",
+                proposal_type="new_entity_with_facts",
+                proposed_category="locations",
+            ),
+            ProposalTarget(
+                entity="Theron",
+                section="lineage",
+                speaker="DM",
+                proposal_type="new_entity_with_facts",
+                proposed_category="characters",
+            ),
+        ]
+        p = _make_db_proposal(proposed_id="multi-f001", targets=targets)
+        write_proposal(db_conn, "ing-001", p)
+        db_conn.commit()
+        rows = db_conn.execute(
+            "SELECT entity_name, position FROM proposal_targets"
+            " WHERE proposal_id='multi-f001' ORDER BY position"
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0][0] == "Aldara"
+        assert rows[0][1] == 0
+        assert rows[1][0] == "Theron"
+        assert rows[1][1] == 1
+
+    def test_read_proposal_reconstructs_targets(
+        self, db_conn: sqlite3.Connection
+    ) -> None:
+        targets = [
+            ProposalTarget(
+                entity="Aldara",
+                section="founding",
+                speaker="DM",
+                proposal_type="new_entity_with_facts",
+                proposed_category="locations",
+            ),
+            ProposalTarget(
+                entity="Theron",
+                section="lineage",
+                speaker="DM",
+                proposal_type="new_entity_with_facts",
+                proposed_category="characters",
+            ),
+        ]
+        p = _make_db_proposal(proposed_id="multi-f001", targets=targets)
+        write_proposal(db_conn, "ing-001", p)
+        db_conn.commit()
+        loaded = read_proposal(db_conn, "multi-f001")
+        assert loaded is not None
+        assert len(loaded.targets) == 2
+        assert loaded.targets[0].entity == "Aldara"
+        assert loaded.targets[1].entity == "Theron"
+
+    def test_list_proposals_returns_all(self, db_conn: sqlite3.Connection) -> None:
+        p1 = _make_db_proposal(proposed_id="aldara-f001")
+        write_proposal(db_conn, "ing-001", p1)
+        db_conn.commit()
+        result = list_proposals(db_conn, "ing-001")
+        assert len(result) == 1
+        assert result[0].proposed_id == "aldara-f001"
+
+    def test_list_proposals_empty_when_none(self, db_conn: sqlite3.Connection) -> None:
+        assert list_proposals(db_conn, "ing-001") == []
+
+    def test_delete_proposal(self, db_conn: sqlite3.Connection) -> None:
+        p = _make_db_proposal()
+        write_proposal(db_conn, "ing-001", p)
+        db_conn.commit()
+        delete_proposal(db_conn, "aldara-f001")
+        db_conn.commit()
+        assert read_proposal(db_conn, "aldara-f001") is None
+
+    def test_delete_proposal_silent_if_absent(
+        self, db_conn: sqlite3.Connection
+    ) -> None:
+        delete_proposal(db_conn, "no-such-id")  # must not raise
+
+    def test_count_proposals(self, db_conn: sqlite3.Connection) -> None:
+        assert count_proposals(db_conn, "ing-001") == 0
+        p = _make_db_proposal()
+        write_proposal(db_conn, "ing-001", p)
+        db_conn.commit()
+        assert count_proposals(db_conn, "ing-001") == 1
+
+    def test_proposals_exist(self, db_conn: sqlite3.Connection) -> None:
+        assert not proposals_exist(db_conn, "ing-001")
+        p = _make_db_proposal()
+        write_proposal(db_conn, "ing-001", p)
+        db_conn.commit()
+        assert proposals_exist(db_conn, "ing-001")
+
+    def test_delete_all_for_ingest(self, db_conn: sqlite3.Connection) -> None:
+        p = _make_db_proposal()
+        write_proposal(db_conn, "ing-001", p)
+        db_conn.commit()
+        delete_all_for_ingest(db_conn, "ing-001")
+        db_conn.commit()
+        assert count_proposals(db_conn, "ing-001") == 0
+
+    def test_corrections_applied_round_trip(self, db_conn: sqlite3.Connection) -> None:
+        p = _make_db_proposal(
+            corrections_applied=[
+                Correction(
+                    from_="all-dara", to="Aldara", source="reading-name-correction"
+                )
+            ]
+        )
+        write_proposal(db_conn, "ing-001", p)
+        db_conn.commit()
+        loaded = read_proposal(db_conn, "aldara-f001")
+        assert loaded is not None
+        assert len(loaded.corrections_applied) == 1
+        assert loaded.corrections_applied[0].from_ == "all-dara"
+
+    def test_flag_reason_persisted(self, db_conn: sqlite3.Connection) -> None:
+        p = _make_db_proposal(extractor_flagged=True, flag_reason="suspicious span")
+        write_proposal(db_conn, "ing-001", p)
+        db_conn.commit()
+        loaded = read_proposal(db_conn, "aldara-f001")
+        assert loaded is not None
+        assert loaded.flag_reason == "suspicious span"

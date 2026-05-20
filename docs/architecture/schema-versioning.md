@@ -1,59 +1,77 @@
 # Schema versioning
 
-Every YAML file the tool produces carries a top-level `schema_version`
-as its first key, so that future changes to file shapes can be detected
-and migrated rather than silently misread.
+The tool tracks schema versions in two separate places with different
+mechanisms because they serve different purposes.
+
+## Wiki SQLite database (`wiki.db`)
+
+`<wiki>/.wiki-state/wiki.db` holds a single `schema_version` table with
+one row:
+
+```sql
+SELECT version FROM schema_version;  -- e.g. 1
+```
+
+This is the authoritative version for the relational schema. It covers
+all 16 tables that store entities, facts, ingests, proposals, and related
+metadata.
+
+### Versioning rules
+
+- Version is a positive integer, starting at 1.
+- Monotonically increasing; no skips; no semver.
+- Each schema change appends one numbered migration function to `MIGRATIONS`
+  in `auto_lorebook/db/migrations.py`. Never edit a prior migration.
+- `CURRENT_SCHEMA_VERSION = len(MIGRATIONS)` updates automatically.
+
+### Opening a database
+
+`db.open(path)` migrates lazily:
+
+1. Detect current version from `schema_version` table (0 if table absent).
+2. If `db_version > CURRENT`: raise `SchemaVersionTooNewError` — message
+   includes "upgrade the tool".
+3. If `db_version == CURRENT`: return as-is (no-op).
+4. Otherwise: run migrations `db_version+1 … CURRENT` inside a single
+   `BEGIN IMMEDIATE … COMMIT` transaction; roll back on failure.
+
+Fresh databases go from 0 → latest in one call. Already-current databases
+open with zero overhead.
+
+### Cross-reference
+
+See [ADR-0004](../adr/0004-sqlite-replaces-yaml-wiki-store.md) for the rationale
+behind choosing SQLite over YAML for mutable tool state.
+
+## YAML artifacts
+
+Every YAML file the tool reads or writes carries a `schema_version` key
+as its first field. This is an independent integer per file type — bumping
+`info.yaml`'s schema doesn't affect `plan.yaml`'s.
 
 ```yaml
 schema_version: 1
 # ...rest of the file
 ```
 
-## Where it applies
+YAML `schema_version` applies to all tool-produced YAML and to
+hand-maintained files (`.wiki-context.yaml`,
+`.transcription-corrections.yaml`). Config (`~/.auto-lorebook/config.yaml`)
+also uses a YAML `schema_version` because it isn't relational.
 
-All YAML artifacts the tool writes:
+### YAML versioning rules
 
-- `sources/<source_id>/info.yaml`
-- `pending/<ingest_id>/reading/structure.yaml`
-- `pending/<ingest_id>/reading/reading.yaml`
-- `pending/<ingest_id>/reading/segments/<segment_id>.md` (frontmatter)
-- `pending/<ingest_id>/plan.yaml`
-- `pending/<ingest_id>/proposals/<proposal_id>.yaml`
-- `<category>/<slug>.yaml` (entity YAMLs)
-- `~/.auto-lorebook/config.yaml`
-
-Hand-maintained files (`.wiki-context.yaml`,
-`.transcription-corrections.yaml`) also carry `schema_version`. The
-tool writes it when it first touches an empty or missing file and
-preserves it on write-back. A missing `schema_version` on a
-hand-maintained file is read as `schema_version: 1` with a warning
-suggesting the user add it.
-
-Markdown artifacts with YAML frontmatter (`reading.md`, entity `.md`
-summaries) carry `schema_version` in their frontmatter.
-
-## Versioning rules
-
-- `schema_version` is a positive integer, starting at 1 for the MVP.
-  No semver, no dates — one monotonically increasing number per file
-  type.
-- Each file type versions independently. Bumping `info.yaml`'s schema
-  does not bump `plan.yaml`'s.
-- The tool refuses to read a file whose `schema_version` is greater
-  than any version it knows about, and names the remedy (upgrade the
-  tool).
-- When a file's schema changes, the tool includes a migration path
-  from the immediately-previous version. Migrations run lazily on
-  first read, write back the upgraded form, and log what was migrated.
-- The tool does not support skipping versions. Upgrading from version
-  N to N+2 runs N→N+1 then N+1→N+2.
-- Missing `schema_version` on a tool-produced file is treated as a
-  corruption signal — the tool always writes it — so the read fails
-  loudly rather than defaulting.
+- Positive integer starting at 1.
+- Each file type versions independently.
+- The tool refuses to read a file whose `schema_version` exceeds any
+  version it knows, naming the remedy (upgrade the tool).
+- Migrations run lazily on first read, write back the upgraded form, and
+  log what was migrated.
+- Missing `schema_version` on a tool-produced file is a corruption signal;
+  the read fails loudly rather than defaulting.
 
 ## Interaction with staleness
 
-The `schema_version` field is excluded from the input hashes used for
-[staleness detection](staleness.md). Bumping a schema version should
-not invalidate every downstream artifact in the wiki. Migrations are
-orthogonal to staleness.
+`schema_version` fields are excluded from the input hashes used for
+[staleness detection](staleness.md). Schema migrations are orthogonal to
+staleness; migrating a file should not invalidate downstream artifacts.

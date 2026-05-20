@@ -70,7 +70,7 @@ def test_youtube_url_ingests_via_ytdlp(tmp_wiki: Path) -> None:
 
     source_dir = tmp_wiki / "sources" / "yt-abc12345678"
     assert (source_dir / "transcript.en.srt").exists()
-    info_data = info_yaml.read(source_dir / "info.yaml")
+    info_data = info_yaml.read_yaml(source_dir / "info.yaml")
     assert info_data.source_type == "youtube"
     assert info_data.title == "The Video"
     assert info_data.duration_seconds == 7200

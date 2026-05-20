@@ -381,6 +381,34 @@ class TestUse:
         out = capsys.readouterr().out
         assert "nope" in out
 
+    def test_use_initialises_db_for_new_wiki(
+        self,
+        configured_wiki: Path,  # noqa: ARG002
+        tmp_path: Path,
+    ) -> None:
+        from auto_lorebook import wiki_state  # noqa: PLC0415
+
+        new_wiki = tmp_path / "newwiki"
+        new_wiki.mkdir()
+        rc = wiki_cmd.run(_ns("use", target=str(new_wiki)))
+        assert rc == 0
+        assert wiki_state.wiki_db_path(new_wiki).exists()
+
+    def test_use_initialises_db_for_known_nickname_without_db(
+        self,
+        two_wiki_config: tuple[Path, Path],
+    ) -> None:
+        from auto_lorebook import wiki_state  # noqa: PLC0415
+
+        wiki1, _ = two_wiki_config
+        db_path = wiki_state.wiki_db_path(wiki1)
+        # ensure db doesn't exist yet
+        if db_path.exists():
+            db_path.unlink()
+        rc = wiki_cmd.run(_ns("use", target="main"))
+        assert rc == 0
+        assert db_path.exists()
+
 
 # ---------------------------------------------------------------------------
 # Phase 7 — top-level --wiki flag

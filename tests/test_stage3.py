@@ -148,8 +148,8 @@ class TestAllocateProposedIds:
             existing_fact_counts={"Aldara": 4},
             existing_slugs={"Aldara": "aldara"},
         )
-        assert allocations["cg-001"][0].proposed_id == "aldara-f005"
-        assert allocations["cg-002"][0].proposed_id == "aldara-f006"
+        assert allocations["cg-001"].proposed_id == "aldara-f005"
+        assert allocations["cg-002"].proposed_id == "aldara-f006"
 
     def test_new_entity_starts_at_f001_and_uses_slugify(self) -> None:
         plan = Plan(
@@ -173,9 +173,10 @@ class TestAllocateProposedIds:
         allocations = stage3.allocate_proposed_ids(
             plan, existing_fact_counts={}, existing_slugs={}
         )
-        assert allocations["cg-001"][0].proposed_id == "war-of-the-dusk-f001"
+        assert allocations["cg-001"].proposed_id == "war-of-the-dusk-f001"
 
-    def test_siblings_exclude_self(self) -> None:
+    def test_multi_target_claim_uses_first_target_slug(self) -> None:
+        """One id per claim; prefix from first target slug."""
         plan = Plan(
             source_id="yt-x",
             planned_at="2026-04-20T00:00:00Z",
@@ -204,13 +205,9 @@ class TestAllocateProposedIds:
             existing_fact_counts={"Aldara": 0, "Theron": 0},
             existing_slugs={"Aldara": "aldara", "Theron": "theron"},
         )
-        a = allocations["cg-001"][0]
-        b = allocations["cg-001"][1]
-        assert a.proposed_id == "aldara-f001"
-        assert b.proposed_id == "theron-f001"
-        assert [s.entity for s in a.siblings] == ["Theron"]
-        assert [s.entity for s in b.siblings] == ["Aldara"]
-        assert a.siblings[0].proposed_id == "theron-f001"
+        # only one allocation per claim, keyed by claim_group_id
+        assert len(allocations) == 1
+        assert allocations["cg-001"].proposed_id == "aldara-f001"
 
 
 # ---------------------------------------------------------------------------
@@ -285,17 +282,18 @@ class TestHappyPath:
         )
         assert len(proposals) == 1
         p = proposals[0]
-        assert p.target_entity == "Aldara"
+        assert len(p.targets) == 1
+        assert p.targets[0].entity == "Aldara"
         assert p.proposed_id == "aldara-f001"
-        assert p.proposal_type == "new_fact"
+        assert p.targets[0].proposal_type == "new_fact"
         assert p.text == "King Theron rules Aldara."
         assert p.raw_transcript_span == "King Theron rules Aldara."
         assert p.locator == "0:00:02-0:00:04"
         assert p.context_before == "Long ago."
         assert p.context_after == "His son is heir."
         assert p.session_date == "2026-01-15"
-        assert p.speaker == "DM"
-        assert p.section == "founding"
+        assert p.targets[0].speaker == "DM"
+        assert p.targets[0].section == "founding"
         assert p.reading_section == "[0:00:00-0:00:30] Founding of Aldara"
         assert p.hint_widened is False
         assert p.extractor_flagged is False
@@ -336,13 +334,9 @@ class TestHappyPath:
         assert proposals[0].corrections_applied[0].from_ == "Fair-on"
 
 
-# ---------------------------------------------------------------------------
-# Multi-target dedup
-# ---------------------------------------------------------------------------
-
-
-class TestMultiTargetDedup:
-    def test_one_call_n_proposals(self) -> None:
+class TestMultiTargetClaim:
+    def test_multi_target_claim_emits_one_proposal_with_n_targets(self) -> None:
+        """One claim with 3 targets → 1 proposal, 3 proposal.targets."""
         transcript, structure = _default_setup()
         claim = _claim(
             targets=[
@@ -385,28 +379,26 @@ class TestMultiTargetDedup:
             existing_fact_counts={"Aldara": 0, "Theron": 10},
             existing_slugs={"Aldara": "aldara", "Theron": "theron"},
         )
-        # one LLM call, three proposals
+        # one LLM call, one proposal
         assert client.complete.call_count == 1
-        assert len(proposals) == 3
-        # span/locator/text shared
-        spans = {p.raw_transcript_span for p in proposals}
-        assert spans == {"King Theron rules Aldara."}
-        assert {p.locator for p in proposals} == {"0:00:02-0:00:04"}
-        # ids distinct
-        assert {p.proposed_id for p in proposals} == {
-            "aldara-f001",
-            "theron-f011",
-            "second-age-f001",
-        }
+        assert len(proposals) == 1
+        p = proposals[0]
+        # id uses first target (Aldara) slug
+        assert p.proposed_id == "aldara-f001"
+        # 3 targets in plan order
+        assert len(p.targets) == 3
+        assert [t.entity for t in p.targets] == ["Aldara", "Theron", "Second Age"]
         # proposal_type per target
-        by_entity = {p.target_entity: p for p in proposals}
-        assert by_entity["Second Age"].proposal_type == "new_entity_with_facts"
-        assert by_entity["Aldara"].proposal_type == "new_fact"
-        # siblings exclude self
-        assert {s.entity for s in by_entity["Aldara"].claim_group_siblings} == {
-            "Theron",
-            "Second Age",
-        }
+        assert p.targets[0].proposal_type == "new_fact"
+        assert p.targets[2].proposal_type == "new_entity_with_facts"
+        # span/locator shared
+        assert p.raw_transcript_span == "King Theron rules Aldara."
+        assert p.locator == "0:00:02-0:00:04"
+
+
+# ---------------------------------------------------------------------------
+# Multi-target (old dedup section — now covered by TestMultiTargetClaim above)
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +492,8 @@ class TestSubstringFallback:
         # text + raw retained as model's last attempt
         assert p.raw_transcript_span == "Made up text not in transcript."
 
-    def test_flagged_proposals_emitted_per_target(self) -> None:
+    def test_flagged_proposal_with_multiple_targets(self) -> None:
+        """Flagged proposal still has all targets when span missing."""
         transcript, structure = _default_setup()
         claim = _claim(
             targets=[
@@ -541,8 +534,9 @@ class TestSubstringFallback:
             existing_fact_counts={"Aldara": 0, "Theron": 0},
             existing_slugs={"Aldara": "aldara", "Theron": "theron"},
         )
-        assert len(proposals) == 2
-        assert all(p.extractor_flagged for p in proposals)
+        assert len(proposals) == 1
+        assert proposals[0].extractor_flagged is True
+        assert len(proposals[0].targets) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -575,7 +569,7 @@ class TestParallel:
             existing_fact_counts={"Aldara": 0},
             existing_slugs={"Aldara": "aldara"},
         )
-        # 3 claims with 1 target each = 3 proposals; 3 LLM calls (one per claim).
+        # 3 claims with 1 target each = 3 proposals (1 per claim); 3 LLM calls.
         assert client.complete.call_count == 3
         assert len(proposals) == 3
 

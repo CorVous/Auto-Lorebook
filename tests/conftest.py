@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
+    import sqlite3
+    from collections.abc import Generator
     from pathlib import Path
 
 
@@ -51,6 +53,21 @@ def cli_name() -> str:
         return importlib.metadata.metadata("python-template")["Name"]
     except (importlib.metadata.PackageNotFoundError, KeyError):
         return "python-template"
+
+
+@pytest.fixture
+def db_conn() -> Generator[sqlite3.Connection]:
+    """In-memory wiki.db for entity tests; closed after each test.
+
+    Yields:
+        open in-memory connection.
+
+    """
+    from auto_lorebook import db  # noqa: PLC0415
+
+    conn = db.open(":memory:")
+    yield conn
+    conn.close()
 
 
 @pytest.fixture

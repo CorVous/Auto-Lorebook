@@ -49,7 +49,8 @@ than implicit.
 applied from `.transcription-corrections.yaml`) and the full preamble
 (including `recurring_speakers` and `interpretation_defaults`).
 
-**Output.** `pending/<ingest_id>/reading/structure.yaml`:
+**Output.** Stored in `wiki.db` (`segments` table, one row per segment).
+The structure below shows the logical shape:
 
 ```yaml
 schema_version: 1
@@ -121,9 +122,9 @@ surfaces it in reading review:
 The human confirms the stretch is genuinely low-yield or regenerates
 1a with a hint about what to look for.
 
-Warnings are persisted in reading.yaml (gap_warnings: field, schema v2) at generate
-/ regenerate time and re-rendered below the segment list in the approve-reading outer
-view, so the human sees them on every iteration without re-running the generate command.
+Gap warnings are derived at read time by running the gap check over the
+stored structure — not persisted separately. They are re-rendered below
+the segment list in the approve-reading outer view on each session.
 
 ## Stage 1b: Summarize
 
@@ -133,12 +134,13 @@ explicitly none. This is the only substage that can invent content.
 **Input.** Segmented, speaker-attributed transcript from 1a and the
 full preamble (including `interpretation_defaults`).
 
-**Output.** Per-segment files under
-`pending/<ingest_id>/reading/segments/seg-NNN.md` (one per segment,
-frontmatter + rendered bullets), plus a sidecar
-`pending/<ingest_id>/reading/reading.yaml` (default_speaker,
-name_corrections, session_date). The wiki-side `reading.md` is
-assembled from these at approval time, not written during generation.
+**Output.** Stored in `wiki.db`:
+- `segment_bullets` table (one row per bullet, keyed to the `segments` table).
+- `ingests` table row updated with `default_speaker`, `name_corrections_json`,
+  `session_date`.
+
+The wiki-side `reading.md` is assembled from these at approval time,
+not written during generation.
 
 **Per-segment extraction.** 1b processes each segment independently
 (trivially parallelizable). Empty bullet lists are allowed and
@@ -168,11 +170,9 @@ approximately where the claim lands and pads it generously
 (default ±15s). The authoritative locator on the final proposal is
 produced by [Stage 3](extractor.md), not by this hint.
 
-Hand-edits to bullet timestamps in `reading.md` sync back to the
-bullet's `anchor`; the `locator_hint` window is recentered on the
-edited anchor at save time. This preserves the hint's usefulness after
-routine timestamp corrections without requiring the human to think
-about windows.
+The `locator_hint` window is stored alongside each bullet in
+`segment_bullets.locator_hint` and passed to the extractor; it is not
+surfaced in `reading.md`.
 
 **Anchor tolerance.** When an LLM returns an anchor a few seconds
 outside a segment's bounds — common with plain-text (.txt) sources
@@ -185,9 +185,9 @@ still raise `Stage1bError`. The `anchor_tolerance_seconds` kwarg on
 
 ## Reading assembly
 
-At approval, the wiki-side `reading.md` is assembled from all segment
-files plus the sidecar. The assembled document interleaves segment
-headers (from 1a) with their bullet lists (from 1b):
+At approval, the wiki-side `reading.md` is assembled from the DB (segments
++ bullets + sidecar). The assembled document interleaves segment headers
+(from 1a) with their bullet lists (from 1b):
 
 ```markdown
 ---
@@ -240,10 +240,11 @@ render as clickable links.
 ## Name corrections
 
 When the human notices a mishearing (e.g., "Fair-on" should be
-"Theron"), they add it to the `name_corrections` map in
-`reading.yaml` rather than find-replacing throughout the reading. The
-tool applies the substitutions during rendering and passes the map to
-downstream stages. Corrections are preserved across regenerations.
+"Theron"), they add it to the `name_corrections` map via the `[m]` meta
+editor rather than find-replacing throughout the reading. The tool
+applies the substitutions during rendering and passes the map to
+downstream stages. Corrections are preserved across regenerations
+(stored in `ingests.name_corrections_json`).
 
 Corrections from approved readings can be promoted to the global
 `.transcription-corrections.yaml` so future sources benefit
@@ -264,9 +265,8 @@ context), then replaces with the correct content.
 
 ## Reading review
 
-The reading-review engine operates over per-segment files under
-`pending/<ingest_id>/reading/segments/`. Each segment carries one of
-four statuses:
+The reading-review engine operates over segments stored in `wiki.db`.
+Each segment carries one of four statuses:
 
 | Status | Meaning |
 |--------|---------|
@@ -275,10 +275,10 @@ four statuses:
 | `skipped` | Reviewer skipped; body replaced with the "no claims" marker in the assembled reading. |
 | `regenerating` | Flagged for re-summarisation (slice #5); blocks the gate. |
 
-**Deferred-commit semantics.** The engine accumulates pending marks
-during the walk — nothing is written to disk until the reviewer
-commits. On commit, changed segment files are written atomically, then
-the gate predicate is evaluated.
+**Deferred-commit semantics.** The engine accumulates pending marks in
+memory during the walk — no DB writes until the reviewer commits.
+On commit, status updates are written to the `segments` table in one
+transaction, then the gate predicate is evaluated.
 
 **Gate predicate.** Every segment is `accepted` or `skipped`. When the
 gate fires, `reading_assembly.assemble` renders the wiki-side
@@ -314,7 +314,7 @@ any pending mark for the session:
 |-----|--------|
 | `#` | Open the numbered segment in the per-segment prompt. |
 | `n` | Jump to the next undecided `draft` segment. |
-| `m` | Open `reading.yaml` (sidecar) in `$EDITOR`. |
+| `m` | Open the sidecar (`ingests` row fields) in `$EDITOR` via a temp file. |
 | `q` | Commit pending marks. If every segment is now decided, write wiki-side `reading.md` (gate fires). |
 
 Below the segment list, any persisted gap-check warnings are rendered as
@@ -328,7 +328,7 @@ pending status:
 | `a` | Accept: queue this segment for `accepted` status; return to outer. |
 | `s` | Skip-bullets: queue this segment for `skipped` status; return to outer. |
 | `g` | Regenerate-again: queue this segment for `regenerating` status; on `[q]uit`, this segment is re-summarised in parallel against a snapshot of accepted segments and returns to `draft` for re-decision. |
-| `e` | Edit: open the segment file (`seg-NNN.md`) in `$EDITOR`. Stays in per-segment prompt on return. |
+| `e` | Edit: open a display snapshot of the segment in `$EDITOR` (display only — bullets come from DB). Stays in per-segment prompt on return. |
 | `u` | Undo: clear this segment's pending mark. Stays in per-segment prompt. |
 | `b` | Back: return to outer without changing any pending mark. |
 
@@ -372,9 +372,9 @@ Transcript for this segment:
 <sliced transcript>
 ```
 
-**After regen.** Regenerated segments' `bullets.yaml` entries and
-`seg-NNN.md` files are rewritten; status is reset to `draft` for
-re-decision in the next review session.
+**After regen.** Regenerated segments' `segment_bullets` rows are
+replaced in `wiki.db`; status is reset to `draft` for re-decision in
+the next review session.
 
 **Exit message.** `[q]` with a regen batch prints "Still N undecided" —
 the gate cannot fire on the same quit that regenerates.
@@ -383,10 +383,10 @@ the gate cannot fire on the same quit that regenerates.
 (scripts, CI).
 
 After approval, the reading is committed to the wiki alongside the
-raw transcript. The intermediate `structure.yaml` is retained in the
-pending directory as an audit artifact for the lifetime of the ingest,
-then discarded when the ingest is fully completed or rejected. Future
-re-runs of extraction operate on the approved reading.
+raw transcript. The intermediate reading state (`segments`,
+`segment_bullets`, `ingests` rows) is retained in `wiki.db` so that
+`regenerate-reading` and `replan` can operate without re-running prior
+stages. Future re-runs of extraction operate on the approved reading.
 
 Running Stage 2 and Stage 3 is done via separate commands after
 approval — `auto-lorebook plan <id>` and `auto-lorebook extract <id>`.

@@ -1,10 +1,10 @@
 """Stage 3: Extractor.
 
 Locates the verbatim transcript span for each planned claim. One LLM
-call per `PlannedClaim` (not per target — siblings share the located
-span via claim-group dedup). The LLM is asked only for the literal span
-plus the corrected text and any applied corrections; locator, context,
-speaker, and section are derived mechanically from the plan, the
+call per `PlannedClaim` (not per target — targets sharing one bullet share
+the located span via claim-group dedup). The LLM is asked only for the
+literal span plus the corrected text and any applied corrections; locator,
+context, speaker, and section are derived mechanically from the plan, the
 transcript cues, and the source `Info`.
 
 No filesystem side effects in this module — orchestration writes the
@@ -26,7 +26,7 @@ from auto_lorebook.llm_helpers import build_system_prompt, parse_json_object
 from auto_lorebook.proposal_yaml import (
     Correction,
     Proposal,
-    Sibling,
+    ProposalTarget,
 )
 from auto_lorebook.timestamps import (
     TimestampError,
@@ -98,10 +98,9 @@ class Stage3Error(RuntimeError):
 
 @dataclass(frozen=True)
 class _Allocation:
-    """Pre-allocated id and sibling list for one target of a claim."""
+    """Pre-allocated id for one claim."""
 
     proposed_id: str
-    siblings: tuple[Sibling, ...]
 
 
 def find_segment_for_reading_section(
@@ -126,46 +125,35 @@ def allocate_proposed_ids(
     *,
     existing_fact_counts: dict[str, int],
     existing_slugs: dict[str, str],
-) -> dict[str, list[_Allocation]]:
-    """Assign `proposed_id` to every target of every claim, single-threaded.
+) -> dict[str, _Allocation]:
+    """Assign one `proposed_id` per claim group, single-threaded.
 
-    Returns a map keyed by `claim_group_id` of allocations parallel to
-    each claim's `targets` list. Sibling lists exclude self.
+    ID uses the first target's slug as prefix, counter from
+    `existing_fact_counts[first_target_entity]`.
+    Returns a map keyed by `claim_group_id`.
     """
     counters: dict[str, int] = {}
-    per_claim_ids: dict[str, list[tuple[str, str]]] = {}  # cg_id -> [(entity, id)]
+    allocations: dict[str, _Allocation] = {}
     for claim in plan.planned_claims:
-        ids: list[tuple[str, str]] = []
-        for target in claim.targets:
-            slug = existing_slugs.get(
-                target.entity, entity_yaml_mod.slugify(target.entity)
+        first_target = claim.targets[0]
+        slug = existing_slugs.get(
+            first_target.entity, entity_yaml_mod.slugify(first_target.entity)
+        )
+        if not slug:
+            msg = (
+                f"cannot derive slug for target entity {first_target.entity!r}; "
+                f"entity_yaml.slugify returned empty"
             )
-            if not slug:
-                msg = (
-                    f"cannot derive slug for target entity {target.entity!r}; "
-                    f"entity_yaml.slugify returned empty"
-                )
-                raise Stage3Error(msg)
-            base = counters.get(
-                target.entity, existing_fact_counts.get(target.entity, 0)
-            )
-            n = base + 1
-            counters[target.entity] = n
-            ids.append((target.entity, f"{slug}-f{n:03d}"))
-        per_claim_ids[claim.claim_group_id] = ids
-
-    allocations: dict[str, list[_Allocation]] = {}
-    for claim in plan.planned_claims:
-        ids = per_claim_ids[claim.claim_group_id]
-        per_target: list[_Allocation] = []
-        for i, (_entity, pid) in enumerate(ids):
-            siblings = tuple(
-                Sibling(entity=e, proposed_id=p)
-                for j, (e, p) in enumerate(ids)
-                if j != i
-            )
-            per_target.append(_Allocation(proposed_id=pid, siblings=siblings))
-        allocations[claim.claim_group_id] = per_target
+            raise Stage3Error(msg)
+        base = counters.get(
+            first_target.entity,
+            existing_fact_counts.get(first_target.entity, 0),
+        )
+        n = base + 1
+        counters[first_target.entity] = n
+        allocations[claim.claim_group_id] = _Allocation(
+            proposed_id=f"{slug}-f{n:03d}",
+        )
     return allocations
 
 
@@ -319,50 +307,50 @@ def _locate_span_in_cues(
     )
 
 
-def _build_proposals(
+def _build_proposal(
     *,
     claim: PlannedClaim,
-    allocations: list[_Allocation],
+    allocation: _Allocation,
     extracted: _ExtractedSpan,
     located: _LocatedSpan,
     info: Info,
     source_id: str,
     hint_widened: bool,
-) -> list[Proposal]:
-    out: list[Proposal] = []
+) -> Proposal:
     session_date = info.session_date or ""
-    for target, alloc in zip(claim.targets, allocations, strict=True):
-        proposal_type = (
-            "new_entity_with_facts" if target.entity_state == "new" else "new_fact"
+    targets = [
+        ProposalTarget(
+            entity=target.entity,
+            section=target.proposed_section,
+            speaker=claim.proposed_speaker,
+            proposal_type=(
+                "new_entity_with_facts" if target.entity_state == "new" else "new_fact"
+            ),
+            proposed_category=getattr(target, "proposed_category", None),
         )
-        out.append(
-            Proposal(
-                proposal_type=proposal_type,
-                target_entity=target.entity,
-                proposed_id=alloc.proposed_id,
-                claim_group_id=claim.claim_group_id,
-                claim_group_siblings=list(alloc.siblings),
-                text=extracted.text,
-                raw_transcript_span=extracted.raw_transcript_span,
-                text_corrects_transcript=extracted.text_corrects_transcript,
-                corrections_applied=list(extracted.corrections),
-                source_id=source_id,
-                locator=located.locator,
-                speaker=claim.proposed_speaker,
-                reading_section=claim.reading_section,
-                reading_bullet_index=claim.reading_bullet_index,
-                status=claim.proposed_status,
-                status_reason=claim.proposed_status_reason,
-                session_date=session_date,
-                section=target.proposed_section,
-                context_before=located.context_before,
-                context_after=located.context_after,
-                hint_widened=hint_widened,
-                extractor_flagged=False,
-                flag_reason=None,
-            )
-        )
-    return out
+        for target in claim.targets
+    ]
+    return Proposal(
+        proposed_id=allocation.proposed_id,
+        claim_group_id=claim.claim_group_id,
+        targets=targets,
+        text=extracted.text,
+        raw_transcript_span=extracted.raw_transcript_span,
+        text_corrects_transcript=extracted.text_corrects_transcript,
+        corrections_applied=list(extracted.corrections),
+        source_id=source_id,
+        locator=located.locator,
+        reading_section=claim.reading_section,
+        reading_bullet_index=claim.reading_bullet_index,
+        status=claim.proposed_status,
+        status_reason=claim.proposed_status_reason,
+        session_date=session_date,
+        context_before=located.context_before,
+        context_after=located.context_after,
+        hint_widened=hint_widened,
+        extractor_flagged=False,
+        flag_reason=None,
+    )
 
 
 _EMPTY_EXTRACTED = _ExtractedSpan(
@@ -373,56 +361,56 @@ _EMPTY_EXTRACTED = _ExtractedSpan(
 )
 
 
-def _build_flagged_proposals(
+def _build_flagged_proposal(
     *,
     claim: PlannedClaim,
-    allocations: list[_Allocation],
+    allocation: _Allocation,
     extracted: _ExtractedSpan,
     info: Info,
     source_id: str,
     flag_reason: str,
-) -> list[Proposal]:
-    """Emit one flagged proposal per target when the span can't be anchored."""
-    out: list[Proposal] = []
+) -> Proposal:
+    """Emit one flagged proposal when the span can't be anchored."""
     session_date = info.session_date or ""
-    for target, alloc in zip(claim.targets, allocations, strict=True):
-        proposal_type = (
-            "new_entity_with_facts" if target.entity_state == "new" else "new_fact"
+    targets = [
+        ProposalTarget(
+            entity=target.entity,
+            section=target.proposed_section,
+            speaker=claim.proposed_speaker,
+            proposal_type=(
+                "new_entity_with_facts" if target.entity_state == "new" else "new_fact"
+            ),
+            proposed_category=getattr(target, "proposed_category", None),
         )
-        out.append(
-            Proposal(
-                proposal_type=proposal_type,
-                target_entity=target.entity,
-                proposed_id=alloc.proposed_id,
-                claim_group_id=claim.claim_group_id,
-                claim_group_siblings=list(alloc.siblings),
-                text=extracted.text,
-                raw_transcript_span=extracted.raw_transcript_span,
-                text_corrects_transcript=extracted.text_corrects_transcript,
-                corrections_applied=list(extracted.corrections),
-                source_id=source_id,
-                locator=claim.locator_hint,
-                speaker=claim.proposed_speaker,
-                reading_section=claim.reading_section,
-                reading_bullet_index=claim.reading_bullet_index,
-                status=claim.proposed_status,
-                status_reason=claim.proposed_status_reason,
-                session_date=session_date,
-                section=target.proposed_section,
-                context_before="",
-                context_after="",
-                hint_widened=False,
-                extractor_flagged=True,
-                flag_reason=flag_reason,
-            )
-        )
-    return out
+        for target in claim.targets
+    ]
+    return Proposal(
+        proposed_id=allocation.proposed_id,
+        claim_group_id=claim.claim_group_id,
+        targets=targets,
+        text=extracted.text,
+        raw_transcript_span=extracted.raw_transcript_span,
+        text_corrects_transcript=extracted.text_corrects_transcript,
+        corrections_applied=list(extracted.corrections),
+        source_id=source_id,
+        locator=claim.locator_hint,
+        reading_section=claim.reading_section,
+        reading_bullet_index=claim.reading_bullet_index,
+        status=claim.proposed_status,
+        status_reason=claim.proposed_status_reason,
+        session_date=session_date,
+        context_before="",
+        context_after="",
+        hint_widened=False,
+        extractor_flagged=True,
+        flag_reason=flag_reason,
+    )
 
 
 def _extract_one(
     *,
     claim: PlannedClaim,
-    allocations: list[_Allocation],
+    allocation: _Allocation,
     transcript: LoadedTranscript,
     structure: Structure,
     info: Info,
@@ -430,8 +418,8 @@ def _extract_one(
     source_id: str,
     client: OpenRouterClient,
     model: str,
-) -> list[Proposal]:
-    """Run one LLM call per claim group; emit one Proposal per target."""
+) -> Proposal:
+    """Run one LLM call per claim group; emit one Proposal with N targets."""
     try:
         hint_start, hint_end = parse_locator_hint(claim.locator_hint)
     except TimestampError as e:
@@ -460,9 +448,9 @@ def _extract_one(
         # LLM emitted unparseable JSON. Don't kill the whole run — flag the
         # claim so the reviewer sees it and can edit/reject.
         _logger.warning("%s: malformed JSON; flagging claim group: %s", context, e)
-        return _build_flagged_proposals(
+        return _build_flagged_proposal(
             claim=claim,
-            allocations=allocations,
+            allocation=allocation,
             extracted=_EMPTY_EXTRACTED,
             info=info,
             source_id=source_id,
@@ -474,9 +462,9 @@ def _extract_one(
         # Schema-level degeneracy (missing raw_transcript_span / text). Same
         # treatment: flag and continue so other claim groups land their work.
         _logger.warning("%s: schema violation; flagging claim group: %s", context, e)
-        return _build_flagged_proposals(
+        return _build_flagged_proposal(
             claim=claim,
-            allocations=allocations,
+            allocation=allocation,
             extracted=_EMPTY_EXTRACTED,
             info=info,
             source_id=source_id,
@@ -502,9 +490,9 @@ def _extract_one(
                 _ = seg_text  # keep for symmetry / future debugging
 
     if located is None:
-        return _build_flagged_proposals(
+        return _build_flagged_proposal(
             claim=claim,
-            allocations=allocations,
+            allocation=allocation,
             extracted=extracted,
             info=info,
             source_id=source_id,
@@ -513,9 +501,9 @@ def _extract_one(
             ),
         )
 
-    return _build_proposals(
+    return _build_proposal(
         claim=claim,
-        allocations=allocations,
+        allocation=allocation,
         extracted=extracted,
         located=located,
         info=info,
@@ -540,10 +528,11 @@ def run(
 ) -> list[Proposal]:
     """Run Stage 3 against an approved plan and produce a list of Proposals.
 
+    One Proposal per claim group (with N targets). A merely-unlocatable
+    span yields an ``extractor_flagged=True`` proposal, not an exception.
+
     :raises Stage3Error: on bad LLM JSON, schema violation, or
-        unanchorable input (e.g. plain-text transcript). A merely-
-        unlocatable span yields a ``extractor_flagged=True`` proposal,
-        not an exception.
+        unanchorable input (e.g. plain-text transcript).
     """
     if transcript.cues is None:
         msg = "Stage 3 needs SRT timestamps; this source is plain text"
@@ -557,13 +546,13 @@ def run(
         existing_slugs=existing_slugs,
     )
 
-    results: list[list[Proposal]] = [[] for _ in plan.planned_claims]
+    results: list[Proposal | None] = [None] * len(plan.planned_claims)
     with ThreadPoolExecutor(max_workers=max_concurrency) as ex:
         futures = {
             ex.submit(
                 _extract_one,
                 claim=claim,
-                allocations=allocations[claim.claim_group_id],
+                allocation=allocations[claim.claim_group_id],
                 transcript=transcript,
                 structure=structure,
                 info=info,
@@ -577,4 +566,4 @@ def run(
         for future, i in futures.items():
             results[i] = future.result()
 
-    return [p for batch in results for p in batch]
+    return [p for p in results if p is not None]

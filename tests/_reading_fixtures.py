@@ -5,11 +5,18 @@ Underscore prefix prevents pytest collection.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from auto_lorebook.info_yaml import Info, SourceContext
 from auto_lorebook.reading_sidecar import Sidecar
-from auto_lorebook.segment_file import SegmentFile, SegmentFrontmatter
 from auto_lorebook.stage1b import Bullet, ReadingBullets
 from auto_lorebook.structure import Segment, Structure, UncertaintyFlag
+
+if TYPE_CHECKING:
+    import sqlite3
+
+
+_SOURCE_ID = "yt-abc12345678"
 
 
 def _info(
@@ -18,20 +25,19 @@ def _info(
     title: str | None = "Session 3",
 ) -> Info:
     return Info(
-        source_id="yt-abc12345678",
+        source_id=_SOURCE_ID,
         source_type="youtube",
         fetched_at="2026-04-20T14:35:12Z",
         source_url=source_url,
         title=title,
         duration_seconds=600,
-        transcript_filename="transcript.en.srt",
         context=SourceContext(),
     )
 
 
 def _structure() -> Structure:
     return Structure(
-        source_id="yt-abc12345678",
+        source_id=_SOURCE_ID,
         generated_at="2026-04-20T14:32:00Z",
         default_speaker="DM",
         segments=[
@@ -64,7 +70,7 @@ def _structure() -> Structure:
 
 def _bullets() -> ReadingBullets:
     return ReadingBullets(
-        source_id="yt-abc12345678",
+        source_id=_SOURCE_ID,
         generated_at="2026-04-20T14:34:00Z",
         segments={
             "seg-001": [],
@@ -87,56 +93,80 @@ def _bullets() -> ReadingBullets:
     )
 
 
-def _sidecar(name_corrections: dict[str, str] | None = None) -> Sidecar:
+def _sidecar(
+    name_corrections: dict[str, str] | None = None,
+    ingest_id: str = _SOURCE_ID,
+) -> Sidecar:
     return Sidecar(
+        ingest_id=ingest_id,
+        source_id=ingest_id,
+        state="reading",
         default_speaker="DM",
         name_corrections=name_corrections or {},
         session_date=None,
     )
 
 
-def _segment_files() -> list[SegmentFile]:
-    """Three segment files matching _structure() + _bullets()."""
-    seg001 = SegmentFile(
-        frontmatter=SegmentFrontmatter(
-            segment_id="seg-001",
-            segment_status="draft",
-            start=0.0,
-            end=120.0,
-            title="Introduction",
-            speaker="DM",
-        ),
-        body="_No claims extracted from this segment._\n",
-    )
-    seg002 = SegmentFile(
-        frontmatter=SegmentFrontmatter(
-            segment_id="seg-002",
-            segment_status="draft",
-            start=120.0,
-            end=270.0,
-            title="Rules discussion: grappling",
-            speaker="mixed",
-            notes="off-topic",
-        ),
-        body="_No claims extracted from this segment._\n",
-    )
-    seg003 = SegmentFile(
-        frontmatter=SegmentFrontmatter(
-            segment_id="seg-003",
-            segment_status="draft",
-            start=270.0,
-            end=600.0,
-            title="Founding of Aldara",
-            speaker="DM",
-        ),
-        body=(
-            "- [0:05:47] uncertain name: a place name; unclear\n"
-            "\n"
-            "- King Theron founded Aldara in the Second Age"
-            " [[0:04:32]](https://youtube.com/watch?v=abc12345678&t=272)\n"
-            "\n"
-            "- The founding displaced an earlier elven presence"
-            " [[0:05:14]](https://youtube.com/watch?v=abc12345678&t=314)\n"
+def _seed_ingest_in_db(
+    conn: sqlite3.Connection,
+    sid: str = _SOURCE_ID,
+    *,
+    default_speaker: str = "DM",
+    name_corrections: dict[str, str] | None = None,
+    session_date: str | None = None,
+) -> None:
+    """Seed sources + ingests rows and optionally structure + bullets in DB."""
+    from auto_lorebook import structure_store  # noqa: PLC0415
+
+    conn.execute(
+        "INSERT OR IGNORE INTO sources "
+        "(source_id, source_type, source_url, title, duration_seconds, "
+        " caption_type, fetched_at, session_date, context_json) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            sid,
+            "youtube",
+            "https://youtube.com/watch?v=abc12345678",
+            "Session 3",
+            600,
+            "manual",
+            "2026-04-20T14:35:12Z",
+            None,
+            "{}",
         ),
     )
-    return [seg001, seg002, seg003]
+    conn.execute(
+        "INSERT OR IGNORE INTO ingests "
+        "(ingest_id, source_id, started_at, state, default_speaker, "
+        " name_corrections_json, session_date) "
+        "VALUES (?,?,?,'reading',?,?,?)",
+        (
+            sid,
+            sid,
+            "2026-04-20T14:35:12Z",
+            default_speaker,
+            __import__("json").dumps(name_corrections or {}),
+            session_date,
+        ),
+    )
+    # seed structure + bullets
+    struct = _structure()
+    # patch source_id for the given sid
+    struct = Structure(
+        source_id=sid,
+        generated_at=struct.generated_at,
+        default_speaker=struct.default_speaker,
+        segments=struct.segments,
+        uncertainty_flags=struct.uncertainty_flags,
+    )
+    structure_store.write_structure(conn, sid, struct)
+
+    bulls = _bullets()
+    # patch source_id
+    bulls = ReadingBullets(
+        source_id=sid,
+        generated_at=bulls.generated_at,
+        segments=bulls.segments,
+    )
+    structure_store.write_bullets(conn, sid, bulls)
+    conn.commit()

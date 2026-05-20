@@ -32,29 +32,37 @@ def first_missing_stage(
 ) -> Stage | None:
     """Return first incomplete stage, or None when all stages done.
 
-    Pure filesystem inspection — no I/O side effects.
-
     Detector table:
-      INGEST        : <wiki>/sources/<sid>/info.yaml exists
-      GENERATE_READING : pending/<sid>/reading/reading.yaml exists
+      INGEST           : sources row exists in DB (lazy-backfills from info.yaml)
+      GENERATE_READING : ingests row exists (DB-backed reading state)
       APPROVE_READING  : <wiki>/sources/<sid>/reading.md exists
-      PLAN          : pending/<sid>/plan.yaml exists
-      EXTRACT       : pending/<sid>/proposals/ absent
-      REVIEW        : pending/<sid>/proposals/ exists and non-empty
-      done          : proposals dir exists and empty
+      PLAN             : pending/<sid>/plan.yaml exists
+      EXTRACT          : pending/<sid>/proposals/ absent
+      REVIEW           : pending/<sid>/proposals/ exists and non-empty
+      done             : proposals dir exists and empty
     """
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
+    from auto_lorebook import info_yaml as info_yaml_mod  # noqa: PLC0415
+    from auto_lorebook import reading_sidecar as sidecar_mod  # noqa: PLC0415
+
     wiki_root: Path = cfg.resolve_active_wiki(wiki_override)
 
-    info_yaml = wiki_root / "sources" / source_id / "info.yaml"
-    if not info_yaml.exists():
-        return Stage.INGEST
+    conn = db_mod.open(wiki_state.wiki_db_path(wiki_root))
+    try:
+        ingested = info_yaml_mod.exists(conn, source_id, wiki_repo=wiki_root)
+        if not ingested:
+            return Stage.INGEST
 
-    sidecar = wiki_state.pending_reading_dir(wiki_root, source_id) / "reading.yaml"
+        # check DB for reading state
+        has_reading_state = sidecar_mod.exists(conn, source_id)
+    finally:
+        conn.close()
+
     wiki_reading = wiki_root / "sources" / source_id / "reading.md"
 
     # wiki-side reading.md implies GENERATE_READING + APPROVE_READING both done
     if not wiki_reading.exists():
-        if not sidecar.exists():
+        if not has_reading_state:
             return Stage.GENERATE_READING
         return Stage.APPROVE_READING
 

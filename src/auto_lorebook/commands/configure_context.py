@@ -71,7 +71,7 @@ def run(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        info = info_yaml.read(info_path)
+        info = info_yaml.read_yaml(info_path)
     except info_yaml.InfoError as e:
         _logger.error("Could not read info.yaml: %s", e)
         return 1

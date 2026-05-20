@@ -1,7 +1,6 @@
-"""Assemble wiki-side reading.md from segments + sidecar + info.
+"""Assemble wiki-side reading.md from DB segments + sidecar + info.
 
-Pure function — no filesystem I/O. Imports rendering helpers from
-reading.py to avoid duplication.
+Pure-function assemble() now reads segments + bullets from DB via structure_store.
 """
 
 from __future__ import annotations
@@ -11,43 +10,104 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from auto_lorebook.reading import apply_name_corrections, linkify_timestamp
-from auto_lorebook.timestamps import format_timestamp
+from auto_lorebook.timestamps import format_timestamp, parse_timestamp
 
 if TYPE_CHECKING:
+    import sqlite3
+
     from auto_lorebook.info_yaml import Info
-    from auto_lorebook.reading_sidecar import Sidecar
-    from auto_lorebook.segment_file import SegmentFile
+    from auto_lorebook.reading_sidecar import IngestState
+
+_EMPTY_MARKER = "_No claims extracted from this segment._"
 
 
 def assemble(
     *,
-    segments: list[SegmentFile],
-    sidecar: Sidecar,
+    conn: sqlite3.Connection,
+    ingest_id: str,
     info: Info,
+    sidecar: IngestState,
 ) -> str:
-    """Render wiki-side reading.md; derived approval — file presence is the gate."""
+    """Render wiki-side reading.md from DB.
+
+    Derived approval — file presence is gate.
+    """
+    from auto_lorebook import structure_store  # noqa: PLC0415
+
     corrections = dict(sidecar.name_corrections)
+    seg_rows = structure_store.list_segments(conn, ingest_id)
+    bullets_map = structure_store.read_bullets(conn, ingest_id)
+
     parts: list[str] = [_render_frontmatter(info, sidecar)]
     parts.append(f"# Reading: {info.title or info.source_id}")
 
-    for sf in segments:
-        fm = sf.frontmatter
+    for seg in seg_rows:
+        start_f = parse_timestamp(seg.start)
+        end_f = parse_timestamp(seg.end)
         parts.append(
             _render_segment_header(
-                fm.start, fm.end, fm.title, fm.speaker, info.source_url, corrections
+                start_f,
+                end_f,
+                seg.title,
+                seg.speaker or "",
+                info.source_url,
+                corrections,
             )
         )
-        # body is pre-rendered; strip trailing newline for join, re-add via body itself
-        body = sf.body.rstrip("\n")
+        seg_bullets = bullets_map.segments.get(seg.segment_id, [])
+        flags = _decode_flags(seg.flags)
+        body = build_segment_body(
+            seg_bullets=seg_bullets,
+            flags=flags,
+            source_url=info.source_url,
+            name_corrections=corrections,
+            seg_start=start_f,
+        )
         if body:
-            parts.append(body)
+            parts.append(body.rstrip("\n"))
         else:
-            parts.append("_No claims extracted from this segment._")
+            parts.append(_EMPTY_MARKER)
 
     return "\n\n".join(parts) + "\n"
 
 
-def _render_frontmatter(info: Info, sidecar: Sidecar) -> str:
+def _decode_flags(flags: list[dict]) -> list[dict]:
+    return list(flags)
+
+
+def build_segment_body(
+    *,
+    seg_bullets: list,
+    flags: list[dict],
+    source_url: str | None,
+    name_corrections: dict[str, str],
+    seg_start: float = 0.0,  # noqa: ARG001
+) -> str:
+    """Render segment body: uncertainty flags + bullets (or empty marker)."""
+    parts: list[str] = []
+    for flag in flags:
+        locator = parse_timestamp(str(flag.get("locator") or "0:00:00"))
+        ts = format_timestamp(locator)
+        kind = flag.get("kind", "other")
+        span = flag.get("span", "")
+        note = flag.get("note")
+        note_str = f"; {note}" if note else ""
+        parts.append(f"- [{ts}] uncertain {kind}: {span}{note_str}")
+    if not seg_bullets:
+        parts.append(_EMPTY_MARKER)
+    else:
+        for b in seg_bullets:
+            text = apply_name_corrections(b.text, name_corrections)
+            anchor_ts = format_timestamp(b.anchor)
+            link = linkify_timestamp(source_url, b.anchor)
+            if link:
+                parts.append(f"- {text} [[{anchor_ts}]]({link})")
+            else:
+                parts.append(f"- {text} [{anchor_ts}]")
+    return "\n\n".join(parts) + "\n"
+
+
+def _render_frontmatter(info: Info, sidecar: IngestState) -> str:
     fm: dict[str, Any] = {
         "schema_version": 1,
         "source_id": info.source_id,

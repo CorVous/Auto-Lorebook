@@ -6,25 +6,25 @@ new facts — and new entities — enter the wiki.
 ## New entity creation during review
 
 When a proposal targets an entity the planner marked `new`, nothing in
-the wiki has been created yet. The entity stub is created atomically
+the DB has been created yet. The entity row is created atomically
 with the first approval of a fact targeting it:
 
-1. On the first approval, the tool creates `<category>/<slug>.yaml`
-   with canonical name, aliases confirmed so far, `created_at`, and
-   `created_by_ingest` set to the current ingest ID. It then appends
-   the approved fact.
-2. Subsequent approvals for the same entity in the same review
-   session just append to the now-existing file.
-3. Aliases confirmed during any approval for that entity are merged
-   into its `aliases` list (on stub creation for the first approval;
-   on update for later ones).
-4. The in-memory entity index is refreshed after each approval, so a
-   proposal reviewed later in the same session that references an
-   entity created earlier in the session sees it as existing.
+1. On the first approval, the tool inserts a row into `entities`
+   (canonical name, `created_at`, `created_by_ingest`) and inserts the
+   fact into `facts` + `fact_targets`. Then it regenerates
+   `<category>/<slug>.md` from the DB.
+2. Subsequent approvals for the same entity in the same review session
+   append new fact rows and regenerate the `.md` file.
+3. Aliases confirmed during any approval are inserted into the `aliases`
+   table and appear in the regenerated `.md`.
+4. The DB connection persists across the review session, so a proposal
+   reviewed later in the same session that references an entity created
+   earlier in the session sees it as existing — writes are immediately
+   visible on the same connection.
 
-If every proposal for a proposed new entity is rejected, no stub is
-ever written. This falls out of the design rather than requiring
-cleanup logic.
+If every proposal for a proposed new entity is rejected, no entity row
+or `.md` file is ever created. This falls out of the design rather than
+requiring cleanup logic.
 
 ## MVP: terminal review
 
@@ -85,7 +85,7 @@ Routes:
 
 **Bundle-level edits** carry only `text`, `status`, and `status_reason`
 — those are claim-level facts about the world, so they propagate to
-every checked route and should agree across siblings.
+every checked route and should agree across all targets.
 **Per-target overrides** carry only `section` and `speaker` and live
 in the `[t]argets` sub-prompt: different routes point at different
 entities, so section is inherently route-shaped, and speaker
@@ -136,16 +136,20 @@ seeds its dedup set from on-disk alias records whose
 
 ### Actions
 
-- **Approve** — every checked route becomes a fact, appended to its
-  target entity's YAML (creating the YAML if this is the first
-  approval for a new entity). Unchecked routes are dropped — their
-  proposal files are deleted.
+- **Approve** — one fact row is inserted into `facts` plus one
+  `fact_targets` row per checked route, all in a single SQLite
+  transaction. Confirmed aliases are written to `aliases` inside the
+  same transaction — a mid-tx failure rolls back both the fact and the
+  aliases. Declined aliases produce zero DB writes. Entity rows are
+  created if new. After commit, `<category>/<slug>.md` is regenerated
+  for each target. Unchecked routes are dropped before the insert —
+  they never reach `facts`.
 - **Edit** — bundle-level edits to `text`, `status`, and
   `status_reason` propagate to every checked route. Per-target
   `section` / `speaker` overrides are set in `[t]argets`. Tracks
   original text as `text_source` on each affected fact.
-- **Reject** — discards the whole bundle: every route's proposal
-  file is removed, no entity is touched.
+- **Reject** — discards the whole bundle: every route's proposal row
+  is removed from the DB, no entity is touched.
 - **Play** — prints the URL; user clicks through to verify against
   audio. Play is not a decision.
 - **Targets** — sub-prompt to toggle individual routes on / off and
@@ -160,24 +164,23 @@ seeds its dedup set from on-disk alias records whose
 
 ### Crash recovery
 
-Review writes happen in two steps: `entity_yaml.write` then
-`proposal_path.unlink`. A Ctrl-C between them leaves a proposal file on
-disk that references a fact already written. Two recovery invariants cover
-this:
+Review writes are atomic via `BEGIN IMMEDIATE` / `COMMIT`. Each
+`approve_proposal` call owns its own transaction: on success it commits
+the fact row, removes the proposal row, and regenerates the `.md` file.
+Two recovery invariants cover partial runs:
 
-1. **Idempotent skip.** When `_approve` finds the proposal's `proposed_id`
-   already present in the entity's facts list, it skips the append and
-   unlinks the proposal file anyway. The approved and edited counters do not
-   increment — the resume run sees the correct totals.
+1. **Idempotent skip.** When `approve_proposal` finds the proposal's
+   `proposed_id` already in `facts`, it skips the insert and deletes the
+   proposal row anyway. The approved and edited counters do not increment —
+   the resume run sees the correct totals.
 
 2. **Proposals as subset.** At the start of `run()`, the engine validates
-   that every on-disk proposal corresponds to a `(claim_group_id,
-   target_entity)` key in the plan. Missing keys are normal after a partial
-   run (already-approved proposals were unlinked). Extra keys — orphans
-   whose plan key doesn't exist — raise `ReviewError` and name each
-   offending file. The recovery path is
-   [`replan`](planner.md#replan-escape-hatch), which rebuilds the plan and
-   discards proposals no longer sanctioned by it.
+   that every target within each DB proposal corresponds to a
+   `(claim_group_id, entity)` pair in the plan. Missing pairs are normal
+   after a partial run (already-approved proposal rows were deleted).
+   Extra pairs — orphans whose plan key doesn't exist — raise `ReviewError`. The recovery
+   path is [`replan`](planner.md#replan-escape-hatch), which rebuilds the
+   plan and discards proposals no longer sanctioned by it.
 
 See also [ADR 0001](../adr/0001-plan-canonicality.md) for the decision
 rationale.

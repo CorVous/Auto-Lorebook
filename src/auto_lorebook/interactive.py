@@ -9,7 +9,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from auto_lorebook.info_yaml import SourceContext
-from auto_lorebook.info_yaml import write as write_info
+from auto_lorebook.info_yaml import write_yaml as write_info
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -6,18 +6,19 @@ Subcommands all dispatch through `run()`, branching on `args.entities_action`.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
 from auto_lorebook import config as cfg_mod
-from auto_lorebook import entity_index, entity_yaml
-from auto_lorebook.entity_yaml import slugify
+from auto_lorebook import db as db_mod
+from auto_lorebook import entities as entities_mod
+from auto_lorebook import entity_yaml
+from auto_lorebook.entities import slugify
 from auto_lorebook.timestamps import format_iso_now
 
 if TYPE_CHECKING:
     import argparse
-
-    from auto_lorebook.entity_yaml import Entity
 
 _logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ def add_parser(
     p_rebuild = sub.add_parser(
         "rebuild-index",
         parents=[common_parser],
-        help="Rebuild the in-memory entity index (no cache yet; placeholder)",
+        help="Legacy no-op; entities live in the wiki SQLite DB",
     )
     p_rebuild.set_defaults(func=run)
 
@@ -104,85 +105,70 @@ def run(args: argparse.Namespace) -> int:
     action = args.entities_action
     cfg = cfg_mod.load_config()
     wiki = cfg.resolve_active_wiki(getattr(args, "wiki", None))
+    conn = db_mod.open(wiki / ".wiki-state" / "wiki.db")
 
     if action == "list":
-        return _run_list(args, wiki)
+        return _run_list(args, wiki, conn)
     if action == "show":
-        return _run_show(args, wiki)
+        return _run_show(args, wiki, conn)
     if action == "new":
-        return _run_new(args, wiki)
+        return _run_new(args, wiki, conn)
     if action == "rebuild-index":
-        return _run_rebuild_index(wiki)
+        return _run_rebuild_index()
     msg = f"unknown entities action: {action}"
     raise ValueError(msg)
 
 
-def _run_list(args: argparse.Namespace, wiki) -> int:  # noqa: ANN001
-    entities = entity_yaml.scan(wiki)
-    if args.category:
-        entities = [e for e in entities if e.category == args.category]
+def _run_list(args: argparse.Namespace, wiki, conn) -> int:  # noqa: ANN001
+
+    rows = entities_mod.list_entities(conn, args.category, wiki_repo=wiki)
     if args.created_by:
-        entities = [e for e in entities if e.created_by_ingest == args.created_by]
-    if not entities:
+        rows = [r for r in rows if r.created_by_ingest == args.created_by]
+    if not rows:
         print("(no entities)")  # noqa: T201
         return 0
 
-    entities.sort(key=lambda e: (e.category, e.entity.casefold()))
     # column widths
-    cat_w = max(len("CATEGORY"), *(len(e.category) for e in entities))
-    name_w = max(len("NAME"), *(len(e.entity) for e in entities))
-    slug_w = max(len("SLUG"), *(len(e.slug) for e in entities))
+    cat_w = max(len("CATEGORY"), *(len(r.category) for r in rows))
+    name_w = max(len("NAME"), *(len(r.canonical_name) for r in rows))
+    slug_w = max(len("SLUG"), *(len(r.slug) for r in rows))
     header = f"{'CATEGORY':<{cat_w}}  {'NAME':<{name_w}}  {'SLUG':<{slug_w}}  ALIASES"
     print(header)  # noqa: T201
-    for e in entities:
+    for r in rows:
+        alias_count = len(entities_mod.list_aliases(conn, r.category, r.slug))
         print(  # noqa: T201
-            f"{e.category:<{cat_w}}  {e.entity:<{name_w}}  {e.slug:<{slug_w}}  "
-            f"{len(e.aliases)}"
+            f"{r.category:<{cat_w}}  {r.canonical_name:<{name_w}}  {r.slug:<{slug_w}}  "
+            f"{alias_count}"
         )
     return 0
 
 
-def _resolve(entities: list[Entity], query: str) -> list[Entity]:
-    """Return matches in resolution order: slug → name → alias."""
-    q_norm = entity_yaml.normalize_alias_name(query)
-    by_slug = [e for e in entities if e.slug == query]
-    if by_slug:
-        return by_slug
-    by_name = [e for e in entities if e.entity.casefold() == query.casefold()]
-    if by_name:
-        return by_name
-    return [
-        e
-        for e in entities
-        if any(entity_yaml.normalize_alias_name(a.name) == q_norm for a in e.aliases)
-    ]
-
-
-def _run_show(args: argparse.Namespace, wiki) -> int:  # noqa: ANN001
-    entities = entity_yaml.scan(wiki)
-    matches = _resolve(entities, args.query)
+def _run_show(args: argparse.Namespace, wiki, conn) -> int:  # noqa: ANN001
+    """3-tier resolution: slug → canonical_name → alias."""
+    # backfill from YAML if DB empty
+    entities_mod.list_entities(conn, wiki_repo=wiki)
+    matches = entities_mod.search_entities(conn, args.query)
     if not matches:
         print(f"No entity matching {args.query!r}")  # noqa: T201
         return 1
     if len(matches) > 1:
         print(f"Multiple matches for {args.query!r}:")  # noqa: T201
-        for e in matches:
-            print(f"  - {e.category}/{e.slug}  ({e.entity})")  # noqa: T201
+        for m in matches:
+            print(f"  - {m.category}/{m.slug}  ({m.canonical_name})")  # noqa: T201
         return 1
 
-    e = matches[0]
-    print(f"entity:    {e.entity}")  # noqa: T201
-    print(f"category:  {e.category}")  # noqa: T201
-    print(f"slug:      {e.slug}")  # noqa: T201
-    if e.superseded_by:
-        print(f"superseded_by: {e.superseded_by}")  # noqa: T201
-    if e.created_by_ingest:
-        print(f"created_by_ingest: {e.created_by_ingest}")  # noqa: T201
-    if e.created_at:
-        print(f"created_at: {e.created_at}")  # noqa: T201
-    if e.aliases:
+    m = matches[0]
+    print(f"entity:    {m.canonical_name}")  # noqa: T201
+    print(f"category:  {m.category}")  # noqa: T201
+    print(f"slug:      {m.slug}")  # noqa: T201
+    if m.superseded_by_category:
+        print(f"superseded_by: {m.superseded_by_category}/{m.superseded_by_slug}")  # noqa: T201
+    print(f"created_by_ingest: {m.created_by_ingest}")  # noqa: T201
+    print(f"created_at: {m.created_at}")  # noqa: T201
+    aliases = entities_mod.list_aliases(conn, m.category, m.slug)
+    if aliases:
         print("aliases:")  # noqa: T201
-        for a in e.aliases:
+        for a in aliases:
             tag = f" ({a.source})" if a.source else ""
             print(f"  - {a.name}{tag}")  # noqa: T201
     else:
@@ -191,7 +177,7 @@ def _run_show(args: argparse.Namespace, wiki) -> int:  # noqa: ANN001
     return 0
 
 
-def _run_new(args: argparse.Namespace, wiki) -> int:  # noqa: ANN001
+def _run_new(args: argparse.Namespace, wiki, conn) -> int:  # noqa: ANN001
     slug = args.slug or slugify(args.name)
     if not slug:
         print(f"error: could not derive a slug from {args.name!r}; pass --slug")  # noqa: T201
@@ -204,18 +190,29 @@ def _run_new(args: argparse.Namespace, wiki) -> int:  # noqa: ANN001
             f"error: {target} already exists; use `entities show {slug}` to inspect it"
         )
         return 1
+    now = format_iso_now()
+    # YAML write (dual-write: YAML first, then DB)
     e = entity_yaml.Entity(
         entity=args.name,
         category=args.category,
         slug=slug,
-        created_at=format_iso_now(),
+        created_at=now,
     )
     entity_yaml.write(e, target)
+    # DB write (idempotent on re-run)
+    with contextlib.suppress(entities_mod.EntityError):
+        entities_mod.create_entity(
+            conn,
+            category=args.category,
+            slug=slug,
+            canonical_name=args.name,
+            ingest_id="cli-new",
+            when=now,
+        )
     print(f"created {target}")  # noqa: T201
     return 0
 
 
-def _run_rebuild_index(wiki) -> int:  # noqa: ANN001
-    entity_index.build(wiki)
-    print("(index rebuilt from filesystem; no cache in use)")  # noqa: T201
+def _run_rebuild_index() -> int:
+    print("(DB-backed; index always current)")  # noqa: T201
     return 0

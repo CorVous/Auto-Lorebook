@@ -16,6 +16,9 @@ Every YAML file carries `schema_version` as its first key — see
 - **Purpose** — setting name, description, naming conventions,
   interpretation defaults, recurring speakers.
 - **Details** — [context pipeline](../pipeline/context.md#wiki-level-context-wiki-contextyaml).
+- **DB-backed** — on first read the tool lazy-backfills the
+  `wiki_context` row in `wiki.db`; subsequent reads are DB-only.
+  The YAML file is retained as a hand-edit surface.
 
 ### `.transcription-corrections.yaml`
 
@@ -25,6 +28,9 @@ Every YAML file carries `schema_version` as its first key — see
 - **Purpose** — global phonetic / mishearing fixes applied to all
   sources.
 - **Details** — [entity model](../architecture/entity-model.md#global-transcription-corrections).
+- **DB-backed** — on first read the tool lazy-backfills the
+  `transcription_corrections` table in `wiki.db`; subsequent reads
+  are DB-only. The YAML file is retained as a hand-edit surface.
 
 ### `sources/<source_id>/transcript.en.srt`
 
@@ -38,6 +44,9 @@ Every YAML file carries `schema_version` as its first key — see
 - **Purpose** — URL, title, duration, caption type, session date,
   per-source context.
 - **Details** — [context pipeline](../pipeline/context.md#per-source-context-infoyaml).
+- **DB-backed** — on first read the tool lazy-backfills the `sources`
+  row in `wiki.db`; subsequent reads are DB-only. The YAML file is
+  retained as a hand-edit surface.
 
 ### `sources/<source_id>/reading.md`
 
@@ -56,7 +65,7 @@ Every YAML file carries `schema_version` as its first key — see
   hand-editable as the designated post-approval edit surface.
 - **Purpose** — canonical name, aliases, and facts for a single
   entity. The source of truth for entity state.
-- **Details** — [entity model](../architecture/entity-model.md#entity-yaml-schema).
+- **Details** — [entity model](../architecture/entity-model.md#entities-table).
 
 ### `<category>/<slug>.md`
 
@@ -72,34 +81,32 @@ Every YAML file carries `schema_version` as its first key — see
 
 ## Tool state directory
 
+### `<wiki>/.wiki-state/wiki.db`
+
+- **Owner** — tool; never hand-edited.
+- **Purpose** — relational store for entities, facts, ingests, proposals,
+  and all other mutable tool state. Replaces per-file YAML for structured
+  data (YAML entity files remain the human-edit surface for now).
+- **Format** — SQLite 3; WAL journal mode; foreign keys enforced.
+- **Schema** — integer `schema_version`; migrated lazily by `db.open()`.
+  See [schema versioning](../architecture/schema-versioning.md#wiki-sqlite-database-wikidb).
+- **Excluded from git** — `.wiki-state/.gitignore` lists `wiki.db`,
+  `wiki.db-wal`, `wiki.db-shm`.
+
 ### `~/.auto-lorebook/config.yaml`
 
 - **Owner** — user.
 - **Purpose** — model selection, wiki repo path, API key env var name.
 - **Details** — [installation](../getting-started/installation.md#configure).
 
-### `<wiki>/.wiki-state/pending/<ingest_id>/reading/structure.yaml`
+### `wiki.db` — reading stage tables
 
-- **Stage** — Stage 1a output.
-- **Purpose** — segments, speaker attribution, sub-segment overrides,
-  uncertainty flags. Intermediate artifact; retained as audit through
-  ingest lifetime.
-- **Details** — [Stage 1a](../pipeline/reading.md#stage-1a-structure).
-
-### `<wiki>/.wiki-state/pending/<ingest_id>/reading/reading.yaml`
-
-- **Stage** — Stage 1b output; sidecar.
-- **Purpose** — session metadata: `default_speaker`, `name_corrections`,
-  `session_date`. Preserved across regenerations.
-- **Details** — [Stage 1b](../pipeline/reading.md#stage-1b-summarize).
-
-### `<wiki>/.wiki-state/pending/<ingest_id>/reading/segments/<segment_id>.md`
-
-- **Stage** — Stage 1b output; per-segment.
-- **Purpose** — YAML frontmatter (segment metadata, `segment_status`)
-  plus pre-rendered bullet body. Assembled into the wiki-side
-  `reading.md` at approval time.
-- **Details** — [reading assembly](../pipeline/reading.md#reading-assembly).
+- **Stage** — Stage 1a + 1b output.
+- **Tables** — `segments` (one row per segment: id, start, end, title,
+  speaker, status, overrides_json, flags_json), `segment_bullets` (one
+  row per bullet), `ingests` (session metadata: `default_speaker`,
+  `name_corrections_json`, `session_date`, `state`).
+- **Details** — [Stage 1: reading](../pipeline/reading.md).
 
 ### `<wiki>/.wiki-state/pending/<ingest_id>/plan.yaml`
 
@@ -125,15 +132,11 @@ SHA-256 hashes of the inputs that produced it. See
 
 Only these files are intended as hand-edit surfaces:
 
-- `pending/<id>/reading/reading.yaml` — before approval. Edit
-  `name_corrections` and `session_date`.
-- `pending/<id>/reading/segments/seg-NNN.md` — before approval. Edit
-  bullet body text and timestamps. (Per-segment interactive editing
-  lands in a future slice; currently the assembled preview is
-  read-only.)
+- Reading sidecar (before approval) — edit `name_corrections` and
+  `session_date` via the `[m]` meta command in `approve-reading`, which
+  opens a temp file and writes the changes back to `wiki.db`.
 - `<category>/<slug>.yaml` — after approval. Edit facts, aliases,
   sections, `superseded_by`.
 
-Hand-edits to intermediate artifacts (`structure.yaml`, `plan.yaml`,
-proposal YAMLs) are not detected as staleness signals; they are not
-supported edit surfaces.
+Reading stage state (`wiki.db` tables) and plan artifacts (`plan.yaml`,
+proposal YAMLs) are not supported as direct hand-edit surfaces.

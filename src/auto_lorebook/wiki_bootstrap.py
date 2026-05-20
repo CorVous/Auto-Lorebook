@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from auto_lorebook import wiki_state
+from auto_lorebook import db, wiki_state
 from auto_lorebook._io import atomic_write_text
 
 if TYPE_CHECKING:
@@ -42,3 +42,12 @@ def bootstrap(wiki_root: Path) -> None:
     gi = wiki_state.gitignore_path(wiki_root)
     if not gi.exists():
         atomic_write_text(gi, wiki_state.GITIGNORE_BODY)
+    else:
+        existing = gi.read_text(encoding="utf-8")
+        if "wiki.db" not in existing:
+            gi.write_text(
+                existing + "wiki.db\nwiki.db-wal\nwiki.db-shm\n",
+                encoding="utf-8",
+            )
+    conn = db.open(wiki_state.wiki_db_path(wiki_root))
+    conn.close()

@@ -27,7 +27,7 @@ Optional fields the tool will read if present:
 
 - `aliases` — list of `{name, added_by_ingest, added_at, source}` records.
 - `superseded_by` — `"<category>/<slug>"` if this entity was merged into
-  another. Hides it from the entity index.
+  another. Excluded from preamble and lookup by default.
 - `created_at`, `created_by_ingest`, `updated_at` — provenance fields
   (left blank for hand-created entries).
 
@@ -49,7 +49,6 @@ The command refuses if the target file already exists; use
 
 ## Verifying recognition
 
-The entity index is rebuilt from the filesystem on every command run.
 After hand-editing or scaffolding a stub, list it:
 
 ```bash
@@ -64,5 +63,5 @@ auto-lorebook entities show theron
 auto-lorebook entities show "King Theron"
 ```
 
-When you next run `ingest` or `configure-context`, the preamble shows
-the entity index and your hand-created stubs appear in it.
+When you next run `ingest` or `configure-context`, your hand-created
+stubs appear in the entity section of the preamble.

@@ -8,12 +8,15 @@ from typing import TYPE_CHECKING
 from auto_lorebook import config as cfg_mod
 from auto_lorebook import (
     corrections,
-    entity_index,
     info_yaml,
     interactive,
+    source_store,
     wiki_context,
 )
+from auto_lorebook import db as db_mod
+from auto_lorebook import entities as entities_mod
 from auto_lorebook import preamble as preamble_mod
+from auto_lorebook import wiki_state as wiki_state_mod
 from auto_lorebook.config import ConfigError
 
 if TYPE_CHECKING:
@@ -49,59 +52,66 @@ def finalize_context(
     cfg: cfg_mod.Config,
     args: argparse.Namespace,
 ) -> int:
-    """Gather context, write info.yaml, and check preamble budget.
+    """Gather context, write sources row, and check preamble budget.
 
     Shared tail for `ingest` and `configure-context` commands.
     Returns the CLI exit code.
     """
     wiki_repo = resolve_wiki(cfg, args)
-    wc = wiki_context.read(wiki_repo / ".wiki-context.yaml")
-    cors = corrections.read(wiki_repo / ".transcription-corrections.yaml")
-    last_ctx = cfg_mod.load_last_context(wiki_root=wiki_repo)
-
-    flags = {
-        "session_date": args.session_date,
-        "perspective": args.perspective,
-        "source_nature": args.source_nature,
-        "setting": args.setting,
-        "notes": args.notes,
-    }
+    conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
     try:
-        info = interactive.gather_context(
-            info,
-            flags,
-            wc,
-            last_ctx,
-            interactive=not args.no_interactive,
-            save_path=info_path,
+        wc = wiki_context.read(conn, wiki_repo=wiki_repo)
+        cors = corrections.read(conn, wiki_repo=wiki_repo)
+        last_ctx = cfg_mod.load_last_context(wiki_root=wiki_repo)
+
+        flags = {
+            "session_date": args.session_date,
+            "perspective": args.perspective,
+            "source_nature": args.source_nature,
+            "setting": args.setting,
+            "notes": args.notes,
+        }
+        try:
+            info = interactive.gather_context(
+                info,
+                flags,
+                wc,
+                last_ctx,
+                interactive=not args.no_interactive,
+                save_path=info_path,
+            )
+        except KeyboardInterrupt:
+            return 130
+
+        info_yaml.write(conn, info)
+        source_store.record_in_db(conn, info, info.source_id, info.source_type)
+        # also write YAML for human editing / backfill surface
+        info_yaml.write_yaml(info, info_path)
+        print(f"Context saved for source {info.source_id}")  # noqa: T201
+
+        cfg_mod.save_last_context(
+            cfg_mod.LastContext(
+                perspective=info.context.perspective,
+                source_nature=info.context.source_nature,
+            ),
+            wiki_root=wiki_repo,
         )
-    except KeyboardInterrupt:
-        return 130
 
-    info_yaml.write(info, info_path)
-    print(f"Context saved to {info_path}")  # noqa: T201
+        entity_snippet = entities_mod.render_for_preamble(conn, wiki_repo)
+        try:
+            p = preamble_mod.assemble(info, wc, cors, entity_snippet, reduced=False)
+            p.check_budget(
+                context_window=cfg.models.primary_context_window,
+                budget_fraction=cfg.preamble.budget_fraction,
+            )
+        except preamble_mod.PreambleTooLargeError as e:
+            _logger.error("%s", e)
+            return 1
 
-    cfg_mod.save_last_context(
-        cfg_mod.LastContext(
-            perspective=info.context.perspective,
-            source_nature=info.context.source_nature,
-        ),
-        wiki_root=wiki_repo,
-    )
-
-    idx = entity_index.build(wiki_repo)
-    try:
-        p = preamble_mod.assemble(info, wc, cors, idx, reduced=False)
-        p.check_budget(
-            context_window=cfg.models.primary_context_window,
-            budget_fraction=cfg.preamble.budget_fraction,
+        char_count = len(p.text)
+        print(  # noqa: T201
+            f"Preamble: {char_count} chars (~{char_count // 4} tokens) — budget OK"
         )
-    except preamble_mod.PreambleTooLargeError as e:
-        _logger.error("%s", e)
-        return 1
-
-    char_count = len(p.text)
-    print(  # noqa: T201
-        f"Preamble: {char_count} chars (~{char_count // 4} tokens) — budget OK"
-    )
-    return 0
+        return 0
+    finally:
+        conn.close()

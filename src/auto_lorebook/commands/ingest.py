@@ -200,7 +200,9 @@ def _run_from_url(
             _logger.error("%s", e)
             return 1
 
-        caption_type = "auto" if ".auto." in fetched.srt_path.name else "manual"
+        caption_type = (
+            "auto-generated" if ".auto." in fetched.srt_path.name else "manual"
+        )
         resolved = _ResolvedSource(
             local_path=fetched.srt_path,
             source_url=args.url_or_path,
@@ -220,7 +222,7 @@ def _store_and_finalize(
     resolved: _ResolvedSource,
 ) -> int:
     try:
-        dest, transcript_filename = source_store.copy_transcript(
+        dest, _transcript_filename = source_store.copy_transcript(
             resolved.local_path, source_id, resolved.source_type, wiki_repo
         )
     except (source_store.DuplicateSourceError, source_store.CollisionError) as e:
@@ -232,7 +234,7 @@ def _store_and_finalize(
     info_path = wiki_repo / "sources" / source_id / "info.yaml"
     if info_path.exists():
         try:
-            info = info_yaml.read(info_path)
+            info = info_yaml.read_yaml(info_path)
         except info_yaml.InfoError as e:
             _logger.error(
                 "Existing info.yaml is unreadable (%s). "
@@ -241,9 +243,7 @@ def _store_and_finalize(
             )
             return 1
     else:
-        info = _new_info(source_id, resolved, args, transcript_filename)
-
-    info.transcript_filename = transcript_filename
+        info = _new_info(source_id, resolved, args)
 
     return finalize_context(info, info_path, cfg, args)
 
@@ -263,7 +263,6 @@ def _new_info(
     source_id: str,
     resolved: _ResolvedSource,
     args: argparse.Namespace,
-    transcript_filename: str,
 ) -> info_yaml.Info:
     fetched_at = format_iso_now()
     title = resolved.fetched_title or Path(args.url_or_path).stem
@@ -280,6 +279,5 @@ def _new_info(
         title=title,
         duration_seconds=duration,
         caption_type=resolved.caption_type,
-        transcript_filename=transcript_filename,
         context=info_yaml.SourceContext(),
     )

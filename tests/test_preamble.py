@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from auto_lorebook.corrections import Correction, Corrections
-from auto_lorebook.entity_index import EntityEntry, EntityIndex
 from auto_lorebook.info_yaml import Info, SourceContext
 from auto_lorebook.preamble import (
     PreambleTooLargeError,
@@ -46,10 +45,18 @@ def _corrections(pairs: list[tuple[str, str]] | None = None) -> Corrections:
     return Corrections(corrections=[Correction(wrong=w, right=r) for w, r in pairs])
 
 
-def _index(*entities: tuple[str, str]) -> EntityIndex:
-    """Build an EntityIndex from (entity_name, category) tuples."""
-    entries = [EntityEntry(entity=e, category=c, slug=e.lower()) for e, c in entities]
-    return EntityIndex(entries)
+def _snippet(*entity_names: tuple[str, str]) -> str:
+    """Build an entity snippet string from (entity_name, category) tuples."""
+    if not entity_names:
+        return "(no entities yet)"
+    by_cat: dict[str, list[str]] = {}
+    for name, cat in entity_names:
+        by_cat.setdefault(cat, []).append(name)
+    lines: list[str] = []
+    for cat in sorted(by_cat):
+        lines.append(f"{cat.capitalize()}:")
+        lines.extend(f"  - {n}" for n in sorted(by_cat[cat]))
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +65,7 @@ def _index(*entities: tuple[str, str]) -> EntityIndex:
 
 
 def test_full_preamble_has_four_sections() -> None:
-    p = assemble(_info(), _wiki_context(), _corrections(), _index(), reduced=False)
+    p = assemble(_info(), _wiki_context(), _corrections(), _snippet(), reduced=False)
     assert "## Context for this source" in p.text
     assert "## Setting context" in p.text
     assert "## Known transcription corrections" in p.text
@@ -66,7 +73,7 @@ def test_full_preamble_has_four_sections() -> None:
 
 
 def test_full_preamble_section_order() -> None:
-    p = assemble(_info(), _wiki_context(), _corrections(), _index(), reduced=False)
+    p = assemble(_info(), _wiki_context(), _corrections(), _snippet(), reduced=False)
     pos_source = p.text.index("## Context for this source")
     pos_setting = p.text.index("## Setting context")
     pos_corrections = p.text.index("## Known transcription corrections")
@@ -80,17 +87,17 @@ def test_full_preamble_section_order() -> None:
 
 
 def test_reduced_preamble_omits_source_context() -> None:
-    p = assemble(_info(), _wiki_context(), _corrections(), _index(), reduced=True)
+    p = assemble(_info(), _wiki_context(), _corrections(), _snippet(), reduced=True)
     assert "## Context for this source" not in p.text
 
 
 def test_reduced_preamble_omits_setting_context() -> None:
-    p = assemble(_info(), _wiki_context(), _corrections(), _index(), reduced=True)
+    p = assemble(_info(), _wiki_context(), _corrections(), _snippet(), reduced=True)
     assert "## Setting context" not in p.text
 
 
 def test_reduced_preamble_has_corrections_and_entities() -> None:
-    p = assemble(_info(), _wiki_context(), _corrections(), _index(), reduced=True)
+    p = assemble(_info(), _wiki_context(), _corrections(), _snippet(), reduced=True)
     assert "## Known transcription corrections" in p.text
     assert "## Entities in this wiki" in p.text
 
@@ -102,19 +109,19 @@ def test_reduced_preamble_has_corrections_and_entities() -> None:
 
 def test_corrections_rendered() -> None:
     cors = _corrections([("Aldera", "Aldara"), ("Valore", "Valoria")])
-    p = assemble(_info(), _wiki_context(), cors, _index(), reduced=False)
+    p = assemble(_info(), _wiki_context(), cors, _snippet(), reduced=False)
     assert "Aldera → Aldara" in p.text
     assert "Valore → Valoria" in p.text
 
 
 def test_no_corrections_shows_none() -> None:
-    p = assemble(_info(), _wiki_context(), _corrections(), _index(), reduced=False)
+    p = assemble(_info(), _wiki_context(), _corrections(), _snippet(), reduced=False)
     assert "(none)" in p.text
 
 
 def test_entity_rendered() -> None:
-    idx = _index(("Theron", "characters"), ("Aldara", "locations"))
-    p = assemble(_info(), _wiki_context(), _corrections(), idx, reduced=False)
+    snippet = _snippet(("Theron", "characters"), ("Aldara", "locations"))
+    p = assemble(_info(), _wiki_context(), _corrections(), snippet, reduced=False)
     assert "Theron" in p.text
     assert "Aldara" in p.text
 
@@ -124,7 +131,7 @@ def test_perspective_in_source_section() -> None:
         _info(perspective="Cor playing Kiki"),
         _wiki_context(),
         _corrections(),
-        _index(),
+        _snippet(),
         reduced=False,
     )
     assert "Cor playing Kiki" in p.text
@@ -135,7 +142,7 @@ def test_setting_name_in_setting_section() -> None:
         _info(),
         _wiki_context(name="My Setting"),
         _corrections(),
-        _index(),
+        _snippet(),
         reduced=False,
     )
     assert "My Setting" in p.text
@@ -147,7 +154,7 @@ def test_setting_name_in_setting_section() -> None:
 
 
 def test_sections_dict_keys_full() -> None:
-    p = assemble(_info(), _wiki_context(), _corrections(), _index(), reduced=False)
+    p = assemble(_info(), _wiki_context(), _corrections(), _snippet(), reduced=False)
     assert "Context for this source" in p.sections
     assert "Setting context" in p.sections
     assert "Known transcription corrections" in p.sections
@@ -155,7 +162,7 @@ def test_sections_dict_keys_full() -> None:
 
 
 def test_sections_dict_keys_reduced() -> None:
-    p = assemble(_info(), _wiki_context(), _corrections(), _index(), reduced=True)
+    p = assemble(_info(), _wiki_context(), _corrections(), _snippet(), reduced=True)
     assert "Context for this source" not in p.sections
     assert "Setting context" not in p.sections
     assert "Known transcription corrections" in p.sections
@@ -169,9 +176,9 @@ def test_sections_dict_keys_reduced() -> None:
 
 def test_identical_inputs_produce_identical_output() -> None:
     cors = _corrections([("Aldera", "Aldara")])
-    idx = _index(("Theron", "characters"))
-    p1 = assemble(_info(), _wiki_context(), cors, idx, reduced=False)
-    p2 = assemble(_info(), _wiki_context(), cors, idx, reduced=False)
+    snippet = _snippet(("Theron", "characters"))
+    p1 = assemble(_info(), _wiki_context(), cors, snippet, reduced=False)
+    p2 = assemble(_info(), _wiki_context(), cors, snippet, reduced=False)
     assert p1.text == p2.text
 
 
@@ -181,7 +188,7 @@ def test_identical_inputs_produce_identical_output() -> None:
 
 
 def test_budget_ok_does_not_raise() -> None:
-    p = assemble(_info(), _wiki_context(), _corrections(), _index(), reduced=False)
+    p = assemble(_info(), _wiki_context(), _corrections(), _snippet(), reduced=False)
     p.check_budget(context_window=200_000, budget_fraction=0.8)  # should not raise
 
 
@@ -192,7 +199,7 @@ def test_budget_exceeded_raises() -> None:
         setting=SettingContext(description=big_text),
         naming_conventions=big_text,
     )
-    p = assemble(_info(), wc, _corrections(), _index(), reduced=False)
+    p = assemble(_info(), wc, _corrections(), _snippet(), reduced=False)
     with pytest.raises(PreambleTooLargeError):
         p.check_budget(context_window=1000, budget_fraction=0.8)
 
@@ -200,7 +207,7 @@ def test_budget_exceeded_raises() -> None:
 def test_budget_error_names_largest_section() -> None:
     big_text = "y" * 200_000
     wc = WikiContext(setting=SettingContext(description=big_text))
-    p = assemble(_info(), wc, _corrections(), _index(), reduced=False)
+    p = assemble(_info(), wc, _corrections(), _snippet(), reduced=False)
     with pytest.raises(PreambleTooLargeError) as exc_info:
         p.check_budget(context_window=1000, budget_fraction=0.8)
     assert exc_info.value.largest_section == "Setting context"

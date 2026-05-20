@@ -1,136 +1,158 @@
-"""pending/<id>/reading/reading.yaml: sidecar for the reading session.
+"""DB-backed reading session state (ingests row).
 
-Stores session metadata (default_speaker, session_date, name_corrections)
-separately from per-segment content.
+Replaces the old pending/<id>/reading/reading.yaml YAML sidecar.
+gap_warnings are derived at read time from segments — not persisted.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import yaml
-
-from auto_lorebook._io import atomic_write_text
-from auto_lorebook.gap_check import GapWarning
-from auto_lorebook.schema import SchemaVersionError, read_schema_version
+from auto_lorebook.gap_check import GapWarning  # noqa: TC001 -- used in dataclass field
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
-# v2: persist gap_warnings produced at generate time
-_MAX_SCHEMA = 2
+    import sqlite3
 
 
 class ReadingSidecarError(ValueError):
-    """Raised when reading.yaml is missing or malformed."""
+    """Raised when ingests row missing or malformed."""
 
 
 @dataclass
-class Sidecar:
-    """In-memory representation of reading.yaml."""
+class IngestState:
+    """In-memory representation of reading session state (from ingests row)."""
 
+    ingest_id: str
+    source_id: str
+    state: str
     default_speaker: str
     name_corrections: dict[str, str] = field(default_factory=dict)
     session_date: str | None = None
     gap_warnings: list[GapWarning] = field(default_factory=list)
 
 
-def _warning_to_dict(w: GapWarning) -> dict[str, Any]:
-    return {
-        "start": w.start,
-        "end": w.end,
-        "segment_ids": list(w.segment_ids),
-        "segment_titles": list(w.segment_titles),
-    }
+# Back-compat alias used in tests and other modules.
+Sidecar = IngestState
+
+# Convenience aliases
+read = None  # defined below; reassigned after function definition
+write = None
 
 
-def _warning_from_dict(d: dict[str, Any], path: str) -> GapWarning:
-    """Parse a gap_warnings list entry; raise ReadingSidecarError on bad shape."""
-    try:
-        start = float(d["start"])
-        end = float(d["end"])
-        segment_ids = tuple(str(s) for s in d["segment_ids"])
-        segment_titles = tuple(str(s) for s in d["segment_titles"])
-    except (KeyError, TypeError, ValueError) as e:
-        msg = f"{path}: malformed gap_warnings entry: {e}"
-        raise ReadingSidecarError(msg) from e
-    return GapWarning(
-        start=start,
-        end=end,
-        segment_ids=segment_ids,
-        segment_titles=segment_titles,
-    )
+def read_state(conn: sqlite3.Connection, ingest_id: str) -> IngestState:
+    """Read IngestState from DB.
 
-
-def _to_dict(sc: Sidecar) -> dict[str, Any]:
-    return {
-        "schema_version": 2,
-        "default_speaker": sc.default_speaker,
-        "session_date": sc.session_date,
-        "name_corrections": dict(sc.name_corrections),
-        "gap_warnings": [_warning_to_dict(w) for w in sc.gap_warnings],
-    }
-
-
-def write(sc: Sidecar, path: Path) -> None:
-    """Atomically write reading.yaml."""
-    body = yaml.safe_dump(
-        _to_dict(sc),
-        allow_unicode=True,
-        sort_keys=False,
-        default_flow_style=False,
-    )
-    atomic_write_text(path, body)
-
-
-def read(path: Path) -> Sidecar:
-    """Read reading.yaml into a Sidecar.
-
-    :raises ReadingSidecarError: missing file, missing/future schema_version,
-        or malformed YAML.
+    Derives gap_warnings by running gap_check over the stored structure.
+    :raises ReadingSidecarError: no ingests row for ingest_id.
     """
-    if not path.exists():
-        msg = f"{path}: not found"
+    from auto_lorebook import gap_check as gap_check_mod  # noqa: PLC0415
+    from auto_lorebook import structure_store  # noqa: PLC0415
+
+    row = conn.execute(
+        "SELECT source_id, state, default_speaker, name_corrections_json, session_date "
+        "FROM ingests WHERE ingest_id=?",
+        (ingest_id,),
+    ).fetchone()
+    if row is None:
+        msg = f"{ingest_id}: no ingests row found"
         raise ReadingSidecarError(msg)
-    text = path.read_text(encoding="utf-8")
+
+    source_id, state, default_speaker, nc_json, session_date = row
+    name_corrections: dict[str, str] = {}
+    if nc_json:
+        try:
+            raw = json.loads(nc_json)
+            if isinstance(raw, dict):
+                name_corrections = {str(k): str(v) for k, v in raw.items()}
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as e:
-        msg = f"{path}: YAML parse error: {e}"
-        raise ReadingSidecarError(msg) from e
-    if not isinstance(data, dict):
-        msg = f"{path}: expected YAML mapping"
-        raise ReadingSidecarError(msg)
-    try:
-        read_schema_version(data, str(path), max_supported=_MAX_SCHEMA)
-    except SchemaVersionError as e:
-        raise ReadingSidecarError(str(e)) from e
+        structure = structure_store.read_structure(conn, ingest_id)
+        gap_warnings = gap_check_mod.check(structure)
+    except structure_store.StructureStoreError:
+        gap_warnings = []
 
-    default_speaker = data.get("default_speaker", "")
-    if not isinstance(default_speaker, str):
-        msg = f"{path}: default_speaker must be a string"
-        raise ReadingSidecarError(msg)
-
-    session_date = data.get("session_date")
-    if session_date is not None and not isinstance(session_date, str):
-        session_date = str(session_date)
-
-    raw_corrections = data.get("name_corrections") or {}
-    if not isinstance(raw_corrections, dict):
-        msg = f"{path}: name_corrections must be a mapping"
-        raise ReadingSidecarError(msg)
-    name_corrections = {str(k): str(v) for k, v in raw_corrections.items()}
-
-    raw_warnings = data.get("gap_warnings") or []
-    if not isinstance(raw_warnings, list):
-        msg = f"{path}: gap_warnings must be a list"
-        raise ReadingSidecarError(msg)
-    gap_warnings = [_warning_from_dict(w, str(path)) for w in raw_warnings]
-
-    return Sidecar(
-        default_speaker=default_speaker,
+    return IngestState(
+        ingest_id=ingest_id,
+        source_id=source_id or "",
+        state=state or "reading",
+        default_speaker=default_speaker or "",
         name_corrections=name_corrections,
         session_date=session_date,
         gap_warnings=gap_warnings,
     )
+
+
+def write_state(
+    conn: sqlite3.Connection,
+    ingest_id: str,
+    *,
+    default_speaker: str,
+    name_corrections: dict[str, str],
+    session_date: str | None,
+    state: str = "reading",
+) -> None:
+    """UPSERT reading state onto an existing ingests row.
+
+    The ingests row must already exist (created by source_store.record_in_db).
+    """
+    nc_json = json.dumps(name_corrections)
+    conn.execute(
+        "UPDATE ingests SET state=?, default_speaker=?, name_corrections_json=?, "
+        "session_date=? WHERE ingest_id=?",
+        (state, default_speaker, nc_json, session_date, ingest_id),
+    )
+
+
+def update_default_speaker(
+    conn: sqlite3.Connection, ingest_id: str, speaker: str
+) -> None:
+    """Update default_speaker on ingests row."""
+    conn.execute(
+        "UPDATE ingests SET default_speaker=? WHERE ingest_id=?",
+        (speaker, ingest_id),
+    )
+
+
+def update_name_corrections(
+    conn: sqlite3.Connection, ingest_id: str, mapping: dict[str, str]
+) -> None:
+    """Replace name_corrections_json on ingests row."""
+    conn.execute(
+        "UPDATE ingests SET name_corrections_json=? WHERE ingest_id=?",
+        (json.dumps(mapping), ingest_id),
+    )
+
+
+def update_session_date(
+    conn: sqlite3.Connection, ingest_id: str, session_date: str | None
+) -> None:
+    """Update session_date on ingests row."""
+    conn.execute(
+        "UPDATE ingests SET session_date=? WHERE ingest_id=?",
+        (session_date, ingest_id),
+    )
+
+
+def update_state(conn: sqlite3.Connection, ingest_id: str, new_state: str) -> None:
+    """Update state field on ingests row."""
+    conn.execute(
+        "UPDATE ingests SET state=? WHERE ingest_id=?",
+        (new_state, ingest_id),
+    )
+
+
+def exists(conn: sqlite3.Connection, ingest_id: str) -> bool:
+    """Return True if an ingests row exists for ingest_id."""
+    row = conn.execute(
+        "SELECT 1 FROM ingests WHERE ingest_id=?", (ingest_id,)
+    ).fetchone()
+    return row is not None
+
+
+# Convenience aliases matching old read/write names used in tests.
+read = read_state
+write = write_state

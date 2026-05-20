@@ -9,10 +9,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from auto_lorebook import config as cfg_mod
+from auto_lorebook import db as db_mod
 from auto_lorebook import info_yaml as info_yaml_mod
 from auto_lorebook import reading_pipeline as pipeline
 from auto_lorebook import reading_sidecar as sidecar_mod
-from auto_lorebook import segment_file as segment_file_mod
+from auto_lorebook import structure_store as structure_store_mod
+from auto_lorebook import wiki_state as wiki_state_mod
 from auto_lorebook.interactive import _is_interactive
 from auto_lorebook.reading_review import (
     AcceptDecision,
@@ -23,11 +25,10 @@ from auto_lorebook.reading_review import (
     UndoDecision,
 )
 from auto_lorebook.reading_sidecar import ReadingSidecarError
-from auto_lorebook.timestamps import format_timestamp
+from auto_lorebook.timestamps import format_timestamp, parse_timestamp
 
 if TYPE_CHECKING:
     import argparse
-    from pathlib import Path
 
     from auto_lorebook.gap_check import GapWarning
     from auto_lorebook.reading_review import SegmentDecision
@@ -113,7 +114,7 @@ def add_parser(
             "Opens a hierarchical interactive session over the draft reading. "
             "Outer view: numbered segment list with status; "
             "keys [#] (open segment N), [n] (next draft), "
-            "[m] (open reading.yaml in $EDITOR), "
+            "[m] (open sidecar meta in $EDITOR), "
             "[q] (commit pending marks; if every segment is decided, "
             "write wiki-side reading.md). "
             "Per-segment prompt: [a] accept, [e] edit body in $EDITOR, "
@@ -168,34 +169,35 @@ def _approve_only(
     return 0
 
 
-def _load_summaries(source_id: str) -> list[_SegSummary]:
-    """Load frontmatter from all seg-NNN.md files, sorted by filename."""
-    segs_dir = pipeline.pending_segments_dir(source_id)
-    if not segs_dir.exists():
-        return []
-    paths = sorted(segs_dir.glob("*.md"))
-    out = []
-    for p in paths:
-        sf = segment_file_mod.read(p)
-        fm = sf.frontmatter
-        out.append(
-            _SegSummary(
-                segment_id=fm.segment_id,
-                title=fm.title,
-                start=fm.start,
-                end=fm.end,
-                speaker=fm.speaker,
-                current_status=fm.segment_status,
-            )
+def _load_summaries(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> list[_SegSummary]:
+    """Load segment summaries from DB."""
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
+    conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    try:
+        rows = structure_store_mod.list_segments(conn, source_id)
+    finally:
+        conn.close()
+    return [
+        _SegSummary(
+            segment_id=r.segment_id,
+            title=r.title,
+            start=parse_timestamp(r.start),
+            end=parse_timestamp(r.end),
+            speaker=r.speaker or "",
+            current_status=r.segment_status,
         )
-    return out
+        for r in rows
+    ]
 
 
 def _render_gap_warnings(warnings: list[GapWarning]) -> None:
     """Print gap-warning blocks sorted by start. No output when empty."""
     if not warnings:
         return
-    # below segment list, above prompt — keeps warnings in last-screen view
     print()  # noqa: T201
     for idx, w in enumerate(sorted(warnings, key=lambda x: x.start)):
         if idx > 0:
@@ -254,7 +256,7 @@ def _render_segment(
     print(_SEG_PROMPT, end="", flush=True)  # noqa: T201
 
 
-def _open_in_editor(path: Path) -> None:
+def _open_in_editor(path: object) -> None:
     editor = os.environ.get("EDITOR", "vi")
     subprocess.run([editor, str(path)], check=False)  # noqa: S603
 
@@ -284,27 +286,56 @@ def _next_draft_index(
     return None
 
 
+def _load_segment_body(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    segment_id: str,
+    wiki_override: str | None = None,
+) -> str:
+    """Render segment body from DB for interactive display."""
+    from auto_lorebook import reading_assembly as assembly_mod  # noqa: PLC0415
+
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
+    conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    try:
+        seg_row = structure_store_mod.get_segment(conn, source_id, segment_id)
+        if seg_row is None:
+            return ""
+        info = info_yaml_mod.read(conn, source_id, wiki_repo=wiki_repo)
+        sc = sidecar_mod.read_state(conn, source_id)
+        bullets_map = structure_store_mod.read_bullets(conn, source_id)
+        seg_bullets = bullets_map.segments.get(segment_id, [])
+        flags = list(seg_row.flags)
+        return assembly_mod.build_segment_body(
+            seg_bullets=seg_bullets,
+            flags=flags,
+            source_url=info.source_url,
+            name_corrections=sc.name_corrections,
+        )
+    finally:
+        conn.close()
+
+
 def _per_segment_prompt(
+    cfg: cfg_mod.Config,
     source_id: str,
     idx: int,
     summaries: list[_SegSummary],
     pending_marks: _PendingMarks,
+    wiki_override: str | None = None,
 ) -> None:
     """Inner per-segment loop; mutates pending_marks in place."""
     summary = summaries[idx]
     sid = summary.segment_id
 
     while True:
-        # re-read body each iteration so edits show
-        seg_path = pipeline.pending_segment_path(source_id, sid)
-        sf = segment_file_mod.read(seg_path)
-        _render_segment(summary, pending_marks.get(sid), sf.body)
+        body = _load_segment_body(cfg, source_id, sid, wiki_override)
+        _render_segment(summary, pending_marks.get(sid), body)
 
         try:
             choice = input("").strip().lower()
         except EOFError:
             return
-        # KeyboardInterrupt propagates to outer
 
         if choice == "a":
             pending_marks[sid] = "accepted"
@@ -316,20 +347,89 @@ def _per_segment_prompt(
             pending_marks[sid] = "regenerating"
             return
         if choice == "e":
-            _open_in_editor(pipeline.pending_segment_path(source_id, sid))
-            # reload summary so edits show (status might have changed externally)
-            summaries[idx] = _load_summaries(source_id)[idx]
+            # Open a tempfile with the segment body for editing.
+            import pathlib  # noqa: PLC0415
+            import tempfile  # noqa: PLC0415
+
+            with tempfile.NamedTemporaryFile(
+                suffix=f"-{sid}.md", mode="w", encoding="utf-8", delete=False
+            ) as tf:
+                tf.write(body)
+                tmp_path = pathlib.Path(tf.name)
+            try:
+                _open_in_editor(tmp_path)
+                # Body edits are display-only; bullets still come from DB.
+            finally:
+                tmp_path.unlink(missing_ok=True)
+            # reload summary
+            fresh = _load_summaries(cfg, source_id, wiki_override)
+            summaries[idx] = fresh[idx]
             summary = summaries[idx]
         elif choice == "u":
             pending_marks.pop(sid, None)
-            # stay in segment prompt
         elif choice == "b":
             return
-        # unrecognized → re-prompt
 
 
-def _open_meta(source_id: str) -> None:
-    _open_in_editor(pipeline.pending_sidecar_path(source_id))
+def _open_meta(
+    cfg: cfg_mod.Config,
+    source_id: str,
+    wiki_override: str | None = None,
+) -> None:
+    """Open a tempfile YAML with sidecar meta; write back on save."""
+    import tempfile  # noqa: PLC0415
+
+    import yaml  # noqa: PLC0415
+
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
+    conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    try:
+        sc = sidecar_mod.read_state(conn, source_id)
+    finally:
+        conn.close()
+
+    data = {
+        "default_speaker": sc.default_speaker,
+        "name_corrections": dict(sc.name_corrections),
+        "session_date": sc.session_date,
+    }
+    import pathlib  # noqa: PLC0415
+
+    with tempfile.NamedTemporaryFile(
+        suffix="-meta.yaml", mode="w", encoding="utf-8", delete=False
+    ) as tf:
+        yaml.safe_dump(data, tf, allow_unicode=True, sort_keys=False)
+        tmp_path = pathlib.Path(tf.name)
+    try:
+        _open_in_editor(tmp_path)
+        if tmp_path.exists():
+            text = tmp_path.read_text(encoding="utf-8")
+            try:
+                updated = yaml.safe_load(text)
+                if isinstance(updated, dict):
+                    conn2 = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+                    try:
+                        sidecar_mod.write_state(
+                            conn2,
+                            source_id,
+                            default_speaker=str(
+                                updated.get("default_speaker") or sc.default_speaker
+                            ),
+                            name_corrections={
+                                str(k): str(v)
+                                for k, v in (
+                                    updated.get("name_corrections") or {}
+                                ).items()
+                            },
+                            session_date=updated.get("session_date"),
+                        )
+                        conn2.commit()
+                    finally:
+                        conn2.close()
+            except Exception:  # noqa: BLE001
+                _logger.debug("meta edit: could not parse YAML; ignoring")
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def _commit_and_exit(
@@ -367,10 +467,9 @@ def _commit_and_exit(
             _logger.error("%s", e)
             return 1
 
+    summaries = _load_summaries(cfg, source_id, wiki_override)
     remaining = sum(
-        1
-        for s in _load_summaries(source_id)
-        if s.current_status not in {"accepted", "skipped"}
+        1 for s in summaries if s.current_status not in {"accepted", "skipped"}
     )
     print(f"Still {remaining} undecided; pending marks committed for the rest.")  # noqa: T201
     return 0
@@ -381,8 +480,14 @@ def _interactive_session(
     source_id: str,
     wiki_override: str | None = None,
 ) -> int:
-    sidecar_path = pipeline.pending_sidecar_path(source_id)
-    if not sidecar_path.exists():
+    wiki_repo = cfg.resolve_active_wiki(wiki_override)
+    conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+    try:
+        has_state = sidecar_mod.exists(conn, source_id)
+    finally:
+        conn.close()
+
+    if not has_state:
         _logger.error(
             "No draft reading for %r. Run `generate-reading` first.", source_id
         )
@@ -391,22 +496,28 @@ def _interactive_session(
     # load source title for header
     source_title: str | None = None
     try:
-        wiki_repo = cfg.resolve_active_wiki(wiki_override)
-        info_path = wiki_repo / "sources" / source_id / "info.yaml"
-        info = info_yaml_mod.read(info_path)
-        source_title = info.title
+        conn2 = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+        try:
+            info = info_yaml_mod.read(conn2, source_id, wiki_repo=wiki_repo)
+            source_title = info.title
+        finally:
+            conn2.close()
     except info_yaml_mod.InfoError:
         pass
 
-    # load gap_warnings from sidecar; fall back to [] on parse failure
+    # load gap_warnings from DB sidecar
     gap_warnings: list[GapWarning] = []
     try:
-        sc = sidecar_mod.read(sidecar_path)
-        gap_warnings = sc.gap_warnings
+        conn3 = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+        try:
+            sc = sidecar_mod.read_state(conn3, source_id)
+            gap_warnings = sc.gap_warnings
+        finally:
+            conn3.close()
     except ReadingSidecarError:
         pass
 
-    summaries = _load_summaries(source_id)
+    summaries = _load_summaries(cfg, source_id, wiki_override)
     pending_marks: _PendingMarks = {}
 
     while True:
@@ -425,26 +536,29 @@ def _interactive_session(
             if idx is None:
                 continue
             try:
-                _per_segment_prompt(source_id, idx, summaries, pending_marks)
+                _per_segment_prompt(
+                    cfg, source_id, idx, summaries, pending_marks, wiki_override
+                )
             except KeyboardInterrupt:
                 print()  # noqa: T201
                 return 130
-            summaries = _load_summaries(source_id)
+            summaries = _load_summaries(cfg, source_id, wiki_override)
         elif choice == "n":
             idx = _next_draft_index(summaries, pending_marks)
             if idx is None:
                 print("  (no remaining draft segments)")  # noqa: T201
                 continue
             try:
-                _per_segment_prompt(source_id, idx, summaries, pending_marks)
+                _per_segment_prompt(
+                    cfg, source_id, idx, summaries, pending_marks, wiki_override
+                )
             except KeyboardInterrupt:
                 print()  # noqa: T201
                 return 130
-            summaries = _load_summaries(source_id)
+            summaries = _load_summaries(cfg, source_id, wiki_override)
         elif choice == "m":
-            _open_meta(source_id)
+            _open_meta(cfg, source_id, wiki_override)
         elif choice == "q":
             return _commit_and_exit(
                 cfg, source_id, pending_marks, wiki_override=wiki_override
             )
-        # unrecognized → re-prompt

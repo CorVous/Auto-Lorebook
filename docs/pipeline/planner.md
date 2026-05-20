@@ -20,7 +20,7 @@ side effects.
 ## Input
 
 - Approved reading (frontmatter plus body).
-- Entity index (in-memory, built from entity YAMLs).
+- Entity store (DB-backed; see [entity model](../architecture/entity-model.md)).
 - Existing entity YAML files for richer context where needed.
 - Full prompt preamble — same assembly as the reading stage. See
   [context pipeline](context.md).
@@ -134,7 +134,7 @@ reviewing proposal #7 sees the same "wait, this should match Aldara"
 signal they'd see in a plan review, with the added benefit of reading
 the actual claim. And because the planner never touches the
 filesystem, a hallucinated or poorly-routed new entity never pollutes
-the entity index, and `replan` can discard unreviewed proposals with
+the entity store, and `replan` can discard unreviewed proposals with
 no residue to clean up.
 
 Inspection is still available:

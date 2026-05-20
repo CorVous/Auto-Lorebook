@@ -19,32 +19,24 @@ Any directory you point the tool at, registered with a nickname:
 
 ```
 <wiki-repo>/
-  .transcription-corrections.yaml   # global phonetic / mishearing fixes
-  .wiki-context.yaml                # setting info, conventions, defaults
+  .transcription-corrections.yaml   # global phonetic / mishearing fixes (legacy; lazy-backfills wiki.db)
+  .wiki-context.yaml                # setting info, conventions, defaults (legacy; lazy-backfills wiki.db)
   .wiki-state/                      # per-wiki tool state (hidden)
     .gitignore                      # auto-managed: ignores pending/
+    wiki.db                         # canonical store for sources, corrections, wiki context, entities, …
     last-context.yaml               # per-setting defaults: perspective, source_nature
     pending/
       <source_id>/
-        reading/                    # intermediate reading artifacts
-          structure.yaml            # Stage 1a output (segments + attribution)
-          bullets.yaml              # Stage 1b output (raw bullets)
-          reading.yaml              # sidecar (default_speaker, name_corrections, session_date)
-          segments/
-            seg-001.md              # per-segment frontmatter + rendered body
-            seg-002.md
-            …
         plan.yaml                   # planner output
         proposals/
           <proposal_id>.yaml        # one per proposed fact
   sources/
     <source_id>/
       transcript.en.srt             # raw transcript, untouched
-      info.yaml                     # url, title, duration, caption_type, context
+      info.yaml                     # url, title, duration, caption_type, context (legacy; lazy-backfills wiki.db)
       reading.md                    # corrected reading (after approval)
   characters/
-    <slug>.yaml                     # canonical name, slug, aliases, facts
-    <slug>.md                       # summary (regenerated view)
+    <slug>.md                       # summary (regenerated from DB after each approval)
   locations/
   factions/
   events/
@@ -53,9 +45,19 @@ Any directory you point the tool at, registered with a nickname:
   index.md                          # auto-generated table of contents
 ```
 
-Entity identity lives entirely in entity YAMLs. An entity exists iff
-`<category>/<slug>.yaml` exists. No separate registry file — see
-[entity model](entity-model.md).
+Entity identity lives in the `entities` and `aliases` tables of
+`wiki.db`. An entity exists iff a row is present in `entities`. The
+`.md` files are regenerated views — see [entity model](entity-model.md).
+
+Typed cross-fact relationships are stored in the `fact_refs` table.
+Four `kind` values are supported: `supersedes`, `contradicts`,
+`corroborates`, and `qualifies`. Only `supersedes` mutates fact state:
+creating an edge atomically sets the target fact's status to `disproven`
+and appends a `system-ref-creation` row to `fact_status_history`;
+deleting the last `supersedes` edge pointing at a fact restores its most
+recent non-system status and appends a `system-ref-deletion` row. All
+`fact_refs` rows carry FK CASCADE on both endpoints so deleting a fact
+removes its edges automatically.
 
 Visible-vs-hidden line: hand-edited canon and source material stay at
 the wiki root (browsable, diffable, hand-editable). Tool-managed
@@ -143,21 +145,25 @@ YAMLs whose history matters.
   `.wiki-state/`) if not already present. `auto-lorebook wiki use
   <nickname>` switches active to an existing entry.
 - **Ingest start.** Transcript and `info.yaml` land under
-  `<wiki>/sources/<source_id>/`. Intermediate reading artifacts
-  (`structure.yaml`, draft segment files) live under
-  `<wiki>/.wiki-state/pending/<source_id>/reading/`.
+  `<wiki>/sources/<source_id>/`. Reading pipeline state (segments,
+  bullets, sidecar) is stored in `wiki.db` (`segments`,
+  `segment_bullets`, and `ingests` tables), not as YAML files.
 - **Reading approval.** The wiki-side `reading.md` is written by the
   reading-review engine when every segment is decided (`accepted` or
   `skipped`). The presence of the file is the gate — there is no
-  top-level frontmatter flag. `structure.yaml` is retained as an audit
-  artifact for the lifetime of the ingest.
+  top-level frontmatter flag.
 - **Planning + extraction.** Produces
   `<wiki>/.wiki-state/pending/<source_id>/plan.yaml` and one YAML per
   proposed fact under `<wiki>/.wiki-state/pending/<source_id>/proposals/`.
-- **Fact review.** Approvals append to (or create) entity YAMLs
-  under `<category>/<slug>.yaml`. Rejected proposals are discarded.
-  If every proposal for a new entity is rejected, no stub is ever
-  written.
+  Proposals are also persisted in `wiki.db` as `proposals` rows with
+  child `proposal_targets` rows (one per target entity, joined on
+  `proposal_id` with `ON DELETE CASCADE`); a multi-target bundle is
+  one `proposals` row + N `proposal_targets` rows.
+- **Fact review.** Approving a bundle inserts one `facts` row + N
+  `fact_targets` rows in a single transaction, then regenerates
+  `<category>/<slug>.md` for each target. Rejected proposals are
+  discarded. If every proposal for a new entity is rejected, no
+  entity row or `.md` is ever created.
 - **Ingest complete.** When all proposals are decided, the ingest's
   pending directory is discarded. The audit trail lives on in
   `created_by_ingest` and `approved_at` fields on the resulting

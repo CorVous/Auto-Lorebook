@@ -10,7 +10,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from auto_lorebook import entity_yaml, reading_pipeline
+from auto_lorebook import db as db_mod
+from auto_lorebook import facts as facts_mod
+from auto_lorebook import reading_pipeline
+from auto_lorebook import wiki_state as wiki_state_mod
 from auto_lorebook.commands import (
     approve_reading_cmd,
     extract_cmd,
@@ -22,7 +25,20 @@ from auto_lorebook.commands import (
 from auto_lorebook.openrouter import OpenRouterResponse
 
 if TYPE_CHECKING:
+    import sqlite3
     from pathlib import Path
+
+
+def _open_db(wiki: Path) -> sqlite3.Connection:
+    return db_mod.open(wiki_state_mod.wiki_db_path(wiki))
+
+
+def _db_facts(wiki: Path, category: str, slug: str) -> list[facts_mod.FactRow]:
+    conn = _open_db(wiki)
+    try:
+        return facts_mod.list_facts_by_entity(conn, category, slug)
+    finally:
+        conn.close()
 
 
 _SRT = (
@@ -227,15 +243,15 @@ class TestReplan:
             plan_cmd.run(_args(source_id=SOURCE_ID))
             extract_cmd.run(_args(source_id=SOURCE_ID))
             review_cmd.run(_args(source_id=SOURCE_ID, auto_approve=True))
-            # Now the entity stub exists and the proposals dir is empty.
-            aldara_path = ingested_wiki / "locations" / "aldara.yaml"
-            facts_before = entity_yaml.read(aldara_path).facts
+            # Now the entity stub exists in DB and the proposals dir is empty.
+            facts_before = _db_facts(ingested_wiki, "locations", "aldara")
             assert len(facts_before) == 1
             rc = replan_cmd.run(_args(source_id=SOURCE_ID))
         assert rc == 0
         # Approved fact survives
-        facts_after = entity_yaml.read(aldara_path).facts
-        assert facts_after == facts_before
+        facts_after = _db_facts(ingested_wiki, "locations", "aldara")
+        assert len(facts_after) == 1
+        assert facts_after[0].id == facts_before[0].id
         # Proposals dir repopulated by the new extract — Aldara is now
         # `existing` to the planner so we won't get a fresh aldara-f001.
         # This mocked plan still proposes `new` though, so the test just
@@ -304,7 +320,17 @@ class TestReplan:
             approve_reading_cmd.run(_args(source_id=SOURCE_ID, yes=True))
             plan_cmd.run(_args(source_id=SOURCE_ID))
             extract_cmd.run(_args(source_id=SOURCE_ID))
-            # Remove structure.yaml to break the prerequisite.
-            reading_pipeline.pending_structure_path(SOURCE_ID).unlink()
+            # Remove segments from DB to break the structure prerequisite.
+            from auto_lorebook import db as db_mod  # noqa: PLC0415
+            from auto_lorebook import structure_store as ss_mod  # noqa: PLC0415
+            from auto_lorebook import wiki_state as ws_mod  # noqa: PLC0415
+
+            db_path = ws_mod.wiki_db_path(ingested_wiki)
+            conn = db_mod.open(db_path)
+            try:
+                ss_mod.delete_ingest_segments(conn, SOURCE_ID)
+                conn.commit()
+            finally:
+                conn.close()
             rc = replan_cmd.run(_args(source_id=SOURCE_ID))
         assert rc == 1
