@@ -494,11 +494,6 @@ def delete_ref(
     )
 
 
-_SELECT_REFS = (
-    "SELECT from_fact_id, to_fact_id, kind, created_at, created_by,"
-    " created_by_ingest, note FROM fact_refs"
-    " ORDER BY from_fact_id, to_fact_id, kind"
-)
 _SELECT_REFS_OUT = (
     "SELECT from_fact_id, to_fact_id, kind, created_at, created_by,"
     " created_by_ingest, note FROM fact_refs"
