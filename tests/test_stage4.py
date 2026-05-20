@@ -698,3 +698,86 @@ class TestBuildPromptLinkedFacts:
         user_content = " ".join(m["content"] for m in messages if m["role"] == "user")
         assert "Aldara is an ancient city." in user_content
         assert result.prose == "Theron founded Aldara."
+
+
+# ---------------------------------------------------------------------------
+# page_step.run_page_step — linked-context budgeting
+# ---------------------------------------------------------------------------
+
+
+class TestRunPageStepBudget:
+    def _seed_with_linked(self, conn: sqlite3.Connection) -> None:
+        """Add aldara entity sharing a fact with theron."""
+        conn.execute(
+            "INSERT INTO entities(category, slug, canonical_name, created_at,"
+            " created_by_ingest, updated_at)"
+            " VALUES ('locations', 'aldara', 'Aldara',"
+            " '2026-01-01T00:00:00Z', 'ing-001', '2026-01-01T00:00:00Z')"
+        )
+        create_fact_with_targets(
+            conn,
+            fact_id="f-shared",
+            text="Theron founded Aldara.",
+            raw_transcript_span="raw",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:04:32",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            targets=[
+                ("characters", "theron", "biography"),
+                ("locations", "aldara", "founding"),
+            ],
+            by="tester",
+        )
+        conn.commit()
+
+    def test_page_step_caps_linked_context(self, tmp_path: Path) -> None:
+        """run_page_step applies budget_linked_context; large budget passes facts."""
+        conn = _seed_conn()
+        self._seed_with_linked(conn)
+
+        client = MagicMock()
+        client.complete.return_value = MagicMock(text='{"prose": "Generated prose."}')
+
+        # large budget → linked facts included; LLM called with linked context
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+            context_window=200_000,
+            budget_fraction=0.25,
+        )
+        # LLM should have been called (theron has shared fact)
+        assert client.complete.called
+
+    def test_page_step_degrades_on_over_budget(self, tmp_path: Path) -> None:
+        """When linked context too large, page step still summarizes own facts."""
+        conn = _seed_conn()
+        self._seed_with_linked(conn)
+
+        client = MagicMock()
+        client.complete.return_value = MagicMock(text='{"prose": "Generated prose."}')
+
+        # budget so tiny that fact text ("Theron founded Aldara." = 22 chars → 5 tokens)
+        # exceeds budget → LinkedContextTooLargeError → degrade to empty linked context
+        paths = run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+            context_window=4,  # budget = 4 * 0.25 = 1 token; fact text → 5 tokens
+            budget_fraction=0.25,
+        )
+        # entity still summarized even when linked context dropped
+        theron_path = tmp_path / "characters" / "theron.md"
+        assert theron_path in paths
+        assert theron_path.exists()

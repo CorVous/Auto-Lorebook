@@ -69,6 +69,8 @@ models:
   primary_context_window: 200000
 preamble:
   budget_fraction: 0.8
+summarizer:
+  linked_context_budget_fraction: 0.25
 ```
 
 ## Switching and adding wikis

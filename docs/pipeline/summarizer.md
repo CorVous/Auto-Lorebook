@@ -106,6 +106,39 @@ synthesize a claim drawn from a linked entity's fact, applying the same epistemi
 hedging rules as for the entity's own facts. The rendered `## Facts` section on the
 page lists only the entity's own facts.
 
+## Linked-context token budget
+
+A hub entity with many linked entities could overflow the model's context window.
+The budgeter (`linked_budget.budget_linked_context`) caps the linked-entities block
+to a configurable fraction of the context window (`summarizer.linked_context_budget_fraction`,
+default 0.25).
+
+**Priority ordering** (highest to lowest):
+
+1. Shared facts (fact targets both the subject entity and the linked entity).
+2. Non-shared authoritative facts.
+3. Non-shared trustworthy facts.
+4. Non-shared hearsay facts (dropped first when over budget).
+5. Non-shared disproven facts (dropped before hearsay).
+
+**Entity ranking**: entities with more shared facts appear first (nearest-first);
+ties broken alphabetically by `(category, slug)`. The entity-count cap
+(`max_linked_entities`) is applied before token counting.
+
+**Token estimate**: `len(rendered_block) // 4`, consistent with the preamble budget heuristic.
+
+**Degrade gracefully**: if no linked entity fits within the budget (its minimal
+single-fact block is larger than the budget), the budgeter raises
+`LinkedContextTooLargeError`. The page step catches this, logs a warning, and
+summarizes the entity from its own facts only.
+
+Configure the budget fraction in `config.yaml`:
+
+```yaml
+summarizer:
+  linked_context_budget_fraction: 0.25
+```
+
 ## Rebuild
 
 Regenerate summaries from scratch for all entities:

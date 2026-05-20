@@ -28,3 +28,8 @@ entity propagates to re-summarize its linked entities (one hop).
 - One new fact on a well-connected hub entity can force LLM
   re-summarization of every linked entity. Propagation is capped at one
   hop (no transitive cascade) to bound this cost.
+- A second cost bound is the linked-context token budgeter: the
+  linked-entities block in each prompt is capped to a configurable
+  fraction of the context window (`summarizer.linked_context_budget_fraction`,
+  default 0.25), keeping entities with more shared facts and dropping
+  low-priority facts first.

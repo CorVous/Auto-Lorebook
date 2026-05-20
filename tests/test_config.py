@@ -15,6 +15,7 @@ from auto_lorebook.config import (
     ModelsConfig,
     OpenRouterConfig,
     PreambleConfig,
+    SummarizerConfig,
     interactive_setup,
     load_config,
     load_last_context,
@@ -544,3 +545,69 @@ def test_save_config_roundtrip(tmp_path: Path) -> None:
     assert reloaded.openrouter.api_key_env == "MY_KEY"
     assert reloaded.models.primary == "anthropic/claude-opus-4-7"
     assert reloaded.preamble.budget_fraction == pytest.approx(0.6)
+
+
+# ---------------------------------------------------------------------------
+# SummarizerConfig
+# ---------------------------------------------------------------------------
+
+
+def test_summarizer_config_default() -> None:
+    """SummarizerConfig defaults to 0.25 linked_context_budget_fraction."""
+    cfg = SummarizerConfig()
+    assert cfg.linked_context_budget_fraction == pytest.approx(0.25)
+
+
+def test_config_has_summarizer_field() -> None:
+    """Config has summarizer field defaulting to SummarizerConfig()."""
+    cfg = Config(wikis=[], active_wiki=None)
+    assert isinstance(cfg.summarizer, SummarizerConfig)
+    assert cfg.summarizer.linked_context_budget_fraction == pytest.approx(0.25)
+
+
+def test_load_config_summarizer_from_yaml(tmp_path: Path) -> None:
+    """summarizer.linked_context_budget_fraction loaded from YAML."""
+    wiki_path = str(tmp_path / "wiki")
+    _write_config(
+        tmp_path / "config.yaml",
+        {
+            "schema_version": 2,
+            "wikis": [{"nickname": "main", "path": wiki_path}],
+            "active_wiki": "main",
+            "summarizer": {"linked_context_budget_fraction": 0.15},
+        },
+    )
+    cfg = load_config(home=tmp_path)
+    assert cfg.summarizer.linked_context_budget_fraction == pytest.approx(0.15)
+
+
+def test_load_config_summarizer_defaults_when_absent(tmp_path: Path) -> None:
+    """Missing summarizer block defaults to SummarizerConfig()."""
+    wiki_path = str(tmp_path / "wiki")
+    _write_config(
+        tmp_path / "config.yaml",
+        {
+            "schema_version": 2,
+            "wikis": [{"nickname": "main", "path": wiki_path}],
+            "active_wiki": "main",
+        },
+    )
+    cfg = load_config(home=tmp_path)
+    assert cfg.summarizer.linked_context_budget_fraction == pytest.approx(0.25)
+
+
+def test_save_config_writes_summarizer_block(tmp_path: Path) -> None:
+    """save_config writes summarizer section; round-trip preserves value."""
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    cfg = Config(
+        wikis=[WikiEntry("main", wiki)],
+        active_wiki="main",
+        summarizer=SummarizerConfig(linked_context_budget_fraction=0.3),
+    )
+    save_config(cfg, home=tmp_path)
+    raw = yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
+    assert raw["summarizer"]["linked_context_budget_fraction"] == pytest.approx(0.3)
+
+    reloaded = load_config(home=tmp_path)
+    assert reloaded.summarizer.linked_context_budget_fraction == pytest.approx(0.3)
