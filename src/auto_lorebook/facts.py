@@ -1,17 +1,19 @@
 """DB-backed fact store.
 
 Public API (conn first):
-    FactRow, FactTargetRow, FactError
-    VALID_STATUSES
+    FactRow, FactTargetRow, FactRef, FactError
+    VALID_STATUSES, VALID_REF_KINDS
     create_fact_with_target, create_fact_with_targets,
-    get_fact, list_facts_by_entity, update_status
+    get_fact, list_facts_by_entity, update_status,
+    create_ref, delete_ref, list_refs_by_fact
 """
 
 from __future__ import annotations
 
 import json
+import sqlite3 as _sqlite3
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from auto_lorebook.timestamps import format_iso_now
 
@@ -24,6 +26,17 @@ VALID_STATUSES: frozenset[str] = frozenset({
     "hearsay",
     "disproven",
 })
+
+VALID_REF_KINDS: frozenset[str] = frozenset({
+    "supersedes",
+    "contradicts",
+    "corroborates",
+    "qualifies",
+})
+
+# system actor constants for fact_status_history rows written by ref operations
+_SYSTEM_REF_CREATION = "system-ref-creation"
+_SYSTEM_REF_DELETION = "system-ref-deletion"
 
 
 class FactError(ValueError):
@@ -62,6 +75,19 @@ class FactTargetRow:
     entity_category: str
     entity_slug: str
     section: str
+
+
+@dataclass(frozen=True)
+class FactRef:
+    """One row from the fact_refs table."""
+
+    from_fact_id: str
+    to_fact_id: str
+    kind: str
+    created_at: str
+    created_by: str
+    created_by_ingest: str | None
+    note: str | None
 
 
 def _fact_from_row(row: sqlite3.Row) -> FactRow:
@@ -334,3 +360,194 @@ def update_status(
         """,
         (fact_id, status, now, by, reason),
     )
+
+
+def create_ref(
+    conn: sqlite3.Connection,
+    *,
+    from_fact_id: str,
+    to_fact_id: str,
+    kind: str,
+    by: str,
+    ingest_id: str | None = None,
+    note: str | None = None,
+    when: str | None = None,
+) -> FactRef:
+    """INSERT into fact_refs; for supersedes, also flip target status.
+
+    CALLER OWNS THE TX — issues conn.execute only, no BEGIN/COMMIT.
+    Raises FactError on invalid kind, duplicate edge, FK violations, self-loop.
+    """
+    if kind not in VALID_REF_KINDS:
+        msg = f"invalid ref kind {kind!r}; must be one of {sorted(VALID_REF_KINDS)}"
+        raise FactError(msg)
+    now = when or format_iso_now()
+    try:
+        conn.execute(
+            """
+            INSERT INTO fact_refs
+                (from_fact_id, to_fact_id, kind, created_at, created_by,
+                 created_by_ingest, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (from_fact_id, to_fact_id, kind, now, by, ingest_id, note),
+        )
+    except _sqlite3.IntegrityError as exc:
+        msg = f"create_ref failed ({from_fact_id!r} -{kind}-> {to_fact_id!r}): {exc}"
+        raise FactError(msg) from exc
+
+    if kind == "supersedes":
+        # flip target to disproven + record system history row (always)
+        conn.execute(
+            "UPDATE facts SET status='disproven' WHERE id=?",
+            (to_fact_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO fact_status_history (fact_id, status, at, by, reason)
+            VALUES (?, 'disproven', ?, ?, ?)
+            """,
+            (to_fact_id, now, _SYSTEM_REF_CREATION, f"superseded by {from_fact_id}"),
+        )
+
+    return FactRef(
+        from_fact_id=from_fact_id,
+        to_fact_id=to_fact_id,
+        kind=kind,
+        created_at=now,
+        created_by=by,
+        created_by_ingest=ingest_id,
+        note=note,
+    )
+
+
+def delete_ref(
+    conn: sqlite3.Connection,
+    *,
+    from_fact_id: str,
+    to_fact_id: str,
+    kind: str,
+    by: str,  # noqa: ARG001 — symmetric API; unused on non-supersedes paths
+    ingest_id: str | None = None,  # noqa: ARG001 — symmetric API; reserved
+    when: str | None = None,
+) -> None:
+    """DELETE from fact_refs; for supersedes, restore target status when last edge gone.
+
+    CALLER OWNS THE TX — issues conn.execute only, no BEGIN/COMMIT.
+    Raises FactError if edge not found or if supersedes restore has no prior history.
+    `by` and `ingest_id` kept for API symmetry; unused on non-supersedes paths.
+    """
+    if kind not in VALID_REF_KINDS:
+        msg = f"invalid ref kind {kind!r}; must be one of {sorted(VALID_REF_KINDS)}"
+        raise FactError(msg)
+    now = when or format_iso_now()
+
+    cur = conn.execute(
+        "DELETE FROM fact_refs WHERE from_fact_id=? AND to_fact_id=? AND kind=?",
+        (from_fact_id, to_fact_id, kind),
+    )
+    if cur.rowcount == 0:
+        msg = f"fact_ref not found: ({from_fact_id!r} -{kind}-> {to_fact_id!r})"
+        raise FactError(msg)
+
+    if kind != "supersedes":
+        return
+
+    # check remaining supersedes edges pointing at the target
+    other_count: int = conn.execute(
+        "SELECT COUNT(*) FROM fact_refs WHERE to_fact_id=? AND kind='supersedes'",
+        (to_fact_id,),
+    ).fetchone()[0]
+    if other_count > 0:
+        # still superseded by other facts — leave as disproven
+        return
+
+    # restore most recent non-system status
+    row = conn.execute(
+        """
+        SELECT status FROM fact_status_history
+        WHERE fact_id=? AND by NOT IN (?, ?)
+        ORDER BY id DESC LIMIT 1
+        """,
+        (to_fact_id, _SYSTEM_REF_CREATION, _SYSTEM_REF_DELETION),
+    ).fetchone()
+    if row is None:
+        msg = "cannot restore: no prior non-system status in history"
+        raise FactError(msg)
+    prior_status: str = row[0]
+    conn.execute(
+        "UPDATE facts SET status=? WHERE id=?",
+        (prior_status, to_fact_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO fact_status_history (fact_id, status, at, by, reason)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            to_fact_id,
+            prior_status,
+            now,
+            _SYSTEM_REF_DELETION,
+            f"supersedes by {from_fact_id} removed",
+        ),
+    )
+
+
+_SELECT_REFS = (
+    "SELECT from_fact_id, to_fact_id, kind, created_at, created_by,"
+    " created_by_ingest, note FROM fact_refs"
+    " ORDER BY from_fact_id, to_fact_id, kind"
+)
+_SELECT_REFS_OUT = (
+    "SELECT from_fact_id, to_fact_id, kind, created_at, created_by,"
+    " created_by_ingest, note FROM fact_refs"
+    " WHERE from_fact_id=?"
+    " ORDER BY from_fact_id, to_fact_id, kind"
+)
+_SELECT_REFS_IN = (
+    "SELECT from_fact_id, to_fact_id, kind, created_at, created_by,"
+    " created_by_ingest, note FROM fact_refs"
+    " WHERE to_fact_id=?"
+    " ORDER BY from_fact_id, to_fact_id, kind"
+)
+_SELECT_REFS_BOTH = (
+    "SELECT from_fact_id, to_fact_id, kind, created_at, created_by,"
+    " created_by_ingest, note FROM fact_refs"
+    " WHERE from_fact_id=? OR to_fact_id=?"
+    " ORDER BY from_fact_id, to_fact_id, kind"
+)
+
+
+def list_refs_by_fact(
+    conn: sqlite3.Connection,
+    fact_id: str,
+    direction: Literal["out", "in", "both"] = "both",
+) -> list[FactRef]:
+    """Return FactRef list for `fact_id`; sorted by (from_fact_id, to_fact_id, kind).
+
+    direction: 'out' — edges where fact_id is source; 'in' — where it's target;
+               'both' — union.
+    """
+    if direction == "out":
+        rows = conn.execute(_SELECT_REFS_OUT, (fact_id,)).fetchall()
+    elif direction == "in":
+        rows = conn.execute(_SELECT_REFS_IN, (fact_id,)).fetchall()
+    elif direction == "both":
+        rows = conn.execute(_SELECT_REFS_BOTH, (fact_id, fact_id)).fetchall()
+    else:
+        msg = f"direction must be 'out', 'in', or 'both'; got {direction!r}"
+        raise ValueError(msg)
+
+    return [
+        FactRef(
+            from_fact_id=r[0],
+            to_fact_id=r[1],
+            kind=r[2],
+            created_at=r[3],
+            created_by=r[4],
+            created_by_ingest=r[5],
+            note=r[6],
+        )
+        for r in rows
+    ]

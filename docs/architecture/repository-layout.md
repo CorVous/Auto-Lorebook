@@ -49,6 +49,16 @@ Entity identity lives in the `entities` and `aliases` tables of
 `wiki.db`. An entity exists iff a row is present in `entities`. The
 `.md` files are regenerated views — see [entity model](entity-model.md).
 
+Typed cross-fact relationships are stored in the `fact_refs` table.
+Four `kind` values are supported: `supersedes`, `contradicts`,
+`corroborates`, and `qualifies`. Only `supersedes` mutates fact state:
+creating an edge atomically sets the target fact's status to `disproven`
+and appends a `system-ref-creation` row to `fact_status_history`;
+deleting the last `supersedes` edge pointing at a fact restores its most
+recent non-system status and appends a `system-ref-deletion` row. All
+`fact_refs` rows carry FK CASCADE on both endpoints so deleting a fact
+removes its edges automatically.
+
 Visible-vs-hidden line: hand-edited canon and source material stay at
 the wiki root (browsable, diffable, hand-editable). Tool-managed
 churn — pending LLM outputs, last-used defaults — lives under
