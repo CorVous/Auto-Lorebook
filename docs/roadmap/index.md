@@ -79,6 +79,11 @@ implementation status.
     without its own gate; its failure modes surface during fact review,
     with `replan` as the escape hatch.
 
+    Phase 5 slice 1 landed: Stage 4 LLM-prose summarizer. Entity `.md`
+    files are now generated with LLM prose, status-grouped facts, and
+    per-fact footnote citations. Review sessions batch page generation
+    for all touched entities on completion.
+
 ## Phase 1: Reading stage
 
 **Goal** — ingest a YouTube URL, gather context, produce a reviewable,
@@ -223,13 +228,19 @@ one sibling leaves the others intact.
 
 ## Phase 5: Summarizer
 
-**Scope**
+**Slice 1 landed:** Stage 4 LLM-prose summarizer (`stage4.py`) and
+batched page-step orchestrator (`page_step.py`). Entities with approved
+facts get LLM-generated prose plus `## Facts` grouped by epistemic
+status, per-fact footnote citations with timestamps, and `## References`.
+Zero-fact entities get a mechanical stub with no LLM call. Review
+session batches regeneration for all touched entities at completion;
+Ctrl-C leaves no partial writes. `models.summarizer` config slot added
+(falls back to `models.primary`).
 
-- Stage 4 summarizer with status-aware rendering.
+**Remaining scope**
+
 - Section normalization (case-insensitive grouping of free-text
   section names).
-- Integration with fact approval flow (batched regeneration at
-  session end).
 - `wiki rebuild` command to regenerate all summaries from scratch.
 - `promote-correction` command (with `first_seen_in` / `also_seen_in`
   tracking).

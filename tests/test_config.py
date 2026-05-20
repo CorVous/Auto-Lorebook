@@ -88,6 +88,40 @@ def test_load_config_with_all_fields(tmp_path: Path) -> None:
     assert cfg.preamble.budget_fraction == pytest.approx(0.6)
 
 
+def test_models_config_summarizer_slot(tmp_path: Path) -> None:
+    """ModelsConfig has summarizer slot; defaults None; loads from config."""
+    wiki_path = str(tmp_path / "wiki")
+    _write_config(
+        tmp_path / "config.yaml",
+        {
+            "schema_version": 2,
+            "wikis": [{"nickname": "main", "path": wiki_path}],
+            "active_wiki": "main",
+            "models": {
+                "primary": "anthropic/claude-sonnet-4-5",
+                "summarizer": "anthropic/claude-haiku-4-5",
+            },
+        },
+    )
+    cfg = load_config(home=tmp_path)
+    assert cfg.models.summarizer == "anthropic/claude-haiku-4-5"
+
+
+def test_models_config_summarizer_defaults_none() -> None:
+    """Summarizer defaults to None when not set."""
+    cfg = ModelsConfig()
+    assert cfg.summarizer is None
+
+
+def test_models_config_summarizer_fallback_to_primary() -> None:
+    """Summarizer or primary gives primary when summarizer is None."""
+    cfg = ModelsConfig(primary="anthropic/claude-sonnet-4-5")
+    assert cfg.summarizer is None
+    # consumer code pattern: cfg.models.summarizer or cfg.models.primary
+    effective = cfg.summarizer or cfg.primary
+    assert effective == "anthropic/claude-sonnet-4-5"
+
+
 def test_load_config_missing_file_raises(tmp_path: Path) -> None:
     with pytest.raises(MissingConfigError, match="not found"):
         load_config(home=tmp_path)

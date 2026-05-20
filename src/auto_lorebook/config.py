@@ -38,6 +38,7 @@ class ModelsConfig:
     primary_context_window: int = 200_000
     extractor: str | None = None
     planner: str | None = None
+    summarizer: str | None = None
 
 
 @dataclass
@@ -173,6 +174,7 @@ def load_config(home: Path | None = None) -> Config:
         primary_context_window=int(models_raw.get("primary_context_window", 200_000)),
         extractor=models_raw.get("extractor"),
         planner=models_raw.get("planner"),
+        summarizer=models_raw.get("summarizer"),
     )
     preamble = PreambleConfig(
         budget_fraction=float(preamble_raw.get("budget_fraction", 0.8)),
@@ -374,6 +376,8 @@ def save_config(cfg: Config, home: Path | None = None) -> None:
         data["models"]["extractor"] = cfg.models.extractor
     if cfg.models.planner is not None:
         data["models"]["planner"] = cfg.models.planner
+    if cfg.models.summarizer is not None:
+        data["models"]["summarizer"] = cfg.models.summarizer
     atomic_write_text(
         cfg_path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
     )

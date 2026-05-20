@@ -141,9 +141,10 @@ seeds its dedup set from on-disk alias records whose
   transaction. Confirmed aliases are written to `aliases` inside the
   same transaction — a mid-tx failure rolls back both the fact and the
   aliases. Declined aliases produce zero DB writes. Entity rows are
-  created if new. After commit, `<category>/<slug>.md` is regenerated
-  for each target. Unchecked routes are dropped before the insert —
-  they never reach `facts`.
+  created if new. Each approved target is recorded in the session's
+  touched-entity list; `.md` files are written in a batch at session
+  completion (see below). Unchecked routes are dropped before the
+  insert — they never reach `facts`.
 - **Edit** — bundle-level edits to `text`, `status`, and
   `status_reason` propagate to every checked route. Per-target
   `section` / `speaker` overrides are set in `[t]argets`. Tracks
@@ -184,6 +185,16 @@ Two recovery invariants cover partial runs:
 
 See also [ADR 0001](../adr/0001-plan-canonicality.md) for the decision
 rationale.
+
+## Batched page generation
+
+After all bundles are approved or rejected, the review session runs a
+single **page step** that regenerates `.md` files for every entity that
+received at least one approved fact. LLM prose is generated via Stage 4
+(`stage4.summarize_entity`). If the session is interrupted (Ctrl-C),
+no `.md` files are written; resuming and completing the session
+generates them. This avoids redundant LLM calls for entities touched
+multiple times in one session.
 
 ## No skip, no defer
 

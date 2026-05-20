@@ -1,8 +1,8 @@
 # Stage 4: Summarizer
 
-The summarizer regenerates readable summary prose for an entity from
-its approved facts. It runs after fact approvals and may batch
-regeneration at session end rather than per-fact for efficiency.
+The summarizer generates LLM-written prose for an entity from its
+approved facts. It runs once per review session after all fact
+decisions are made, batching regeneration for all touched entities.
 
 ## Purpose
 
@@ -13,9 +13,9 @@ next regeneration.
 
 ## Input
 
-- Entity YAML (all approved facts). See
-  [entity model](../architecture/entity-model.md).
-- Entity index (for alias-aware rendering of cross-references).
+- Approved facts for the entity (from the DB).
+- Entity index (for cross-reference awareness in prose).
+- Wiki setting description (from `.wiki-context.yaml`).
 
 ## Output
 
@@ -26,45 +26,35 @@ Entity markdown file, overwritten in full on each regeneration:
 
 ## Summary
 
-Aldara is a kingdom founded in the Second Age [^1][^2] by the grandfather
-of King Theron [^1]. Its ruling bloodline has remained unbroken since
-its founding [^3]. Some tavern rumors suggest the founding king was
-cursed by an elven sorceress [^4], though this is unconfirmed.
+Aldara is a kingdom founded in the Second Age by the grandfather of King
+Theron. Its ruling bloodline has remained unbroken since its founding.
+Some tavern rumors suggest the founding king was cursed by an elven
+sorceress, though this is unconfirmed.
 
 ## Facts
 
 ### Authoritative
 
-**Founding**
-
 [^1]: "Theron's grandfather founded Aldara in the Second Age."
-  — DM, [Worldbuilding Session 3, 0:04:32-0:04:41](https://youtube.com/watch?v=abc123&t=272)
-  (session: 2026-01-15)
-
-[^2]: "Scholars dispute the exact year, but the Second Age attribution is well-attested."
-  — DM, [Worldbuilding Session 3, 0:06:02-0:06:14](https://youtube.com/watch?v=abc123&t=362)
-  (session: 2026-01-15)
-
-**Government**
-
-[^3]: "Aldara's kings have always come from the Theron bloodline."
-  — DM, Campaign Notes, lines 47-48 (session: 2026-01-20)
+[^2]: "Aldara's kings have always come from the Theron bloodline."
 
 ### Hearsay
 
-[^4]: "The founding king was cursed by an elven sorceress."
-  — Innkeeper NPC, [Worldbuilding Session 3, 1:23:40-1:24:15](https://youtube.com/watch?v=abc123&t=5020)
-  (session: 2026-02-03)
-  *Told to the party by a tavern NPC, not confirmed.*
+[^3]: "The founding king was cursed by an elven sorceress."
 
 ### Disproven
 
-_(none)_
+[^4]: ~~The founding king was mortal.~~ — Later shown to be half-fae.
 
 ## References
 
 1. Worldbuilding Session 3 — https://youtube.com/watch?v=abc123
-2. Campaign Notes — sources/txt-campaign-notes/notes.txt
+
+[^1]: "Theron's grandfather founded Aldara in the Second Age."  — DM, [0:04:32-0:04:41](https://youtube.com/watch?v=abc123&t=272) (session: 2026-01-15)
+[^2]: "Aldara's kings have always come from the Theron bloodline."  — DM, 0:06:02 (session: 2026-01-20)
+[^3]: "The founding king was cursed by an elven sorceress."  — Innkeeper NPC, [1:23:40-1:24:15](https://youtube.com/watch?v=abc123&t=5020) (session: 2026-02-03)
+[^4]: "The founding king was mortal."  — DM, 0:08:00 (session: 2026-02-03)
+  *Later shown to be half-fae.*
 ```
 
 ## Summarizer rules
@@ -83,27 +73,27 @@ _(none)_
 - Every summary sentence cites fact IDs; citation labels in the
   rendered view are footnote numbers.
 
-## Section ordering and normalization
+## Model slot
 
-The summarizer reads the free-text `section` field on each fact and
-groups facts by normalized section name — case-insensitive, trimmed.
-If two facts have sections "founding" and "Founding", they group
-together under the canonical casing of whichever appears more often,
-with a tie broken by first-seen. This papers over drift without
-forcing a controlled vocabulary.
+The summarizer uses the `models.summarizer` config key if set, falling
+back to `models.primary`. Override per-session by passing a model name
+to `review`.
 
-A future enhancement may allow per-category section vocabularies in
-`.wiki-context.yaml` — see [roadmap](../roadmap/index.md).
+## Zero-fact entities
+
+Entities with no approved facts get a mechanical stub (heading + aliases
+only) with no LLM call.
+
+## Batched page step
+
+Regeneration runs once per `review` session after all fact decisions are
+made, not per approval. Interrupted review (Ctrl-C) writes no pages;
+resuming and completing the session triggers the batch.
 
 ## Rebuild
 
-Regenerate all summaries from scratch:
+Regenerate summaries from scratch for all entities:
 
 ```bash
 auto-lorebook wiki rebuild
 ```
-
-By default, `wiki rebuild` skips regeneration for entity `.md` files
-whose recorded inputs match the current entity YAML and index.
-`wiki rebuild --force` regenerates unconditionally. See
-[staleness](../architecture/staleness.md#integration-with-commands).

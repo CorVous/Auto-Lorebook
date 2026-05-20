@@ -233,7 +233,12 @@ def _approve_one(
     monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
     client = MagicMock()
     _wire_client(client)
-    with patch("auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client):
+    review_client = MagicMock()
+    review_client.complete.return_value = MagicMock(text='{"prose": "Stub prose."}')
+    with (
+        patch("auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client),
+        patch("auto_lorebook.review.OpenRouterClient", return_value=review_client),
+    ):
         generate_reading_cmd.run(_args(source_id=SOURCE_ID))
         approve_reading_cmd.run(_args(source_id=SOURCE_ID, yes=True))
         plan_cmd.run(_args(source_id=SOURCE_ID))
