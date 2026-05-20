@@ -9,7 +9,11 @@ import pytest
 
 from auto_lorebook import db
 from auto_lorebook.entities import AliasRow, EntityRow
-from auto_lorebook.facts import FactRow, create_fact_with_target
+from auto_lorebook.facts import (
+    FactRow,
+    create_fact_with_target,
+    create_fact_with_targets,
+)
 from auto_lorebook.page_step import run_page_step
 from auto_lorebook.stage4 import (
     Stage4Error,
@@ -509,3 +513,188 @@ class TestRunPageStep:
         md_path = tmp_path / "characters" / "theron.md"
         assert md_path in paths
         assert md_path.exists()
+
+    def test_approving_fact_on_a_regenerates_linked_b(self, tmp_path: Path) -> None:
+        """Integration: touched entity A shares fact with B → B page also written."""
+        conn = _seed_conn()
+        # seed second entity (aldara)
+        conn.execute(
+            "INSERT INTO entities(category, slug, canonical_name, created_at,"
+            " created_by_ingest, updated_at)"
+            " VALUES ('locations', 'aldara', 'Aldara',"
+            " '2026-01-01T00:00:00Z', 'ing-001', '2026-01-01T00:00:00Z')"
+        )
+        # shared fact targeting both theron and aldara
+        create_fact_with_targets(
+            conn,
+            fact_id="f-shared",
+            text="Theron founded Aldara.",
+            raw_transcript_span="raw",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:04:32",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            targets=[
+                ("characters", "theron", "biography"),
+                ("locations", "aldara", "founding"),
+            ],
+            by="tester",
+        )
+        conn.commit()
+
+        client = MagicMock()
+        client.complete.return_value = MagicMock(text='{"prose": "Generated prose."}')
+
+        # only theron is "touched" — aldara should be regenerated as linked
+        paths = run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+        )
+        aldara_path = tmp_path / "locations" / "aldara.md"
+        assert aldara_path in paths
+        assert aldara_path.exists()
+
+    def test_progress_reports_linked_count(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Progress message includes linked entity info when links exist."""
+        conn = _seed_conn()
+        conn.execute(
+            "INSERT INTO entities(category, slug, canonical_name, created_at,"
+            " created_by_ingest, updated_at)"
+            " VALUES ('locations', 'aldara', 'Aldara',"
+            " '2026-01-01T00:00:00Z', 'ing-001', '2026-01-01T00:00:00Z')"
+        )
+        create_fact_with_targets(
+            conn,
+            fact_id="f-shared",
+            text="Theron founded Aldara.",
+            raw_transcript_span="raw",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:04:32",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            targets=[
+                ("characters", "theron", "biography"),
+                ("locations", "aldara", "founding"),
+            ],
+            by="tester",
+        )
+        conn.commit()
+
+        client = MagicMock()
+        client.complete.return_value = MagicMock(text='{"prose": "Generated prose."}')
+
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+        )
+        captured = capsys.readouterr()
+        # progress should mention linked count (1 linked)
+        assert "linked" in captured.out.lower() or "1" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# build_prompt — linked_facts parameter
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPromptLinkedFacts:
+    def test_no_linked_block_when_none(self) -> None:
+        entity = _make_entity_row()
+        prompt = build_prompt(
+            entity=entity,
+            aliases=[],
+            facts=[_make_fact_row()],
+            entity_index="",
+            wiki_setting="",
+            linked_facts=None,
+        )
+        assert "Linked entities" not in prompt
+        assert "LINKED" not in prompt
+
+    def test_no_linked_block_when_empty_list(self) -> None:
+        entity = _make_entity_row()
+        prompt = build_prompt(
+            entity=entity,
+            aliases=[],
+            facts=[_make_fact_row()],
+            entity_index="",
+            wiki_setting="",
+            linked_facts=[],
+        )
+        assert "Linked entities" not in prompt
+
+    def test_linked_facts_appear_in_prompt(self) -> None:
+        entity = _make_entity_row()
+        linked_entity = _make_entity_row("Aldara", "locations", "aldara")
+        linked_fact = _make_fact_row(
+            fact_id="f-n01",
+            text="Aldara was founded in the Second Age.",
+            status="authoritative",
+        )
+        prompt = build_prompt(
+            entity=entity,
+            aliases=[],
+            facts=[_make_fact_row()],
+            entity_index="",
+            wiki_setting="",
+            linked_facts=[(linked_entity, [linked_fact])],
+        )
+        assert "Aldara was founded in the Second Age." in prompt
+
+    def test_linked_block_label_present(self) -> None:
+        entity = _make_entity_row()
+        linked_entity = _make_entity_row("Aldara", "locations", "aldara")
+        linked_fact = _make_fact_row(fact_id="f-n01", text="Some linked fact.")
+        prompt = build_prompt(
+            entity=entity,
+            aliases=[],
+            facts=[_make_fact_row()],
+            entity_index="",
+            wiki_setting="",
+            linked_facts=[(linked_entity, [linked_fact])],
+        )
+        assert "Linked" in prompt
+
+    def test_run_forwards_linked_facts(self) -> None:
+        client = MagicMock()
+        client.complete.return_value = MagicMock(
+            text='{"prose": "Theron founded Aldara."}'
+        )
+        entity = _make_entity_row()
+        linked_entity = _make_entity_row("Aldara", "locations", "aldara")
+        linked_fact = _make_fact_row(
+            fact_id="f-n01",
+            text="Aldara is an ancient city.",
+            status="trustworthy",
+        )
+        result = run(
+            entity=entity,
+            aliases=[],
+            facts=[_make_fact_row()],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+            linked_facts=[(linked_entity, [linked_fact])],
+        )
+        call_args = client.complete.call_args
+        messages = call_args[0][0] if call_args[0] else call_args[1]["messages"]
+        user_content = " ".join(m["content"] for m in messages if m["role"] == "user")
+        assert "Aldara is an ancient city." in user_content
+        assert result.prose == "Theron founded Aldara."

@@ -19,6 +19,7 @@ from auto_lorebook.facts import (
     delete_ref,
     get_fact,
     list_facts_by_entity,
+    list_linked_entities,
     list_refs_by_fact,
     update_status,
 )
@@ -906,3 +907,211 @@ class TestRefAtomicity:
             "SELECT COUNT(*) FROM fact_status_history WHERE fact_id='f-001'"
         ).fetchone()[0]
         assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# Step 8 — list_linked_entities
+# ---------------------------------------------------------------------------
+
+
+def _seed_linked_entities(conn: sqlite3.Connection) -> None:
+    """Seed two extra entities (locations/aldara, factions/guild) for link tests."""
+    conn.execute(
+        "INSERT INTO entities(category, slug, canonical_name, created_at,"
+        " created_by_ingest, updated_at)"
+        " VALUES ('locations', 'aldara', 'Aldara',"
+        " '2026-01-01T00:00:00Z', 'ing-001', '2026-01-01T00:00:00Z')"
+    )
+    conn.execute(
+        "INSERT INTO entities(category, slug, canonical_name, created_at,"
+        " created_by_ingest, updated_at)"
+        " VALUES ('factions', 'guild', 'The Guild',"
+        " '2026-01-01T00:00:00Z', 'ing-001', '2026-01-01T00:00:00Z')"
+    )
+
+
+class TestListLinkedEntities:
+    def test_co_target_returned(self, conn: sqlite3.Connection) -> None:
+        """Fact targeting both theron and aldara → aldara linked to theron."""
+        _seed_linked_entities(conn)
+        create_fact_with_targets(
+            conn,
+            fact_id="f-link-01",
+            text="Theron founded Aldara.",
+            raw_transcript_span="Theron founded Aldara.",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:04:00",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            targets=[
+                ("characters", "theron", "biography"),
+                ("locations", "aldara", "founding"),
+            ],
+            by="test-user",
+        )
+        conn.commit()
+        linked = list_linked_entities(conn, "characters", "theron")
+        assert ("locations", "aldara") in linked
+
+    def test_symmetric(self, conn: sqlite3.Connection) -> None:
+        """Linked relation is symmetric: aldara also linked to theron."""
+        _seed_linked_entities(conn)
+        create_fact_with_targets(
+            conn,
+            fact_id="f-link-01",
+            text="Theron founded Aldara.",
+            raw_transcript_span="Theron founded Aldara.",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:04:00",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            targets=[
+                ("characters", "theron", "biography"),
+                ("locations", "aldara", "founding"),
+            ],
+            by="test-user",
+        )
+        conn.commit()
+        linked = list_linked_entities(conn, "locations", "aldara")
+        assert ("characters", "theron") in linked
+
+    def test_self_excluded(self, conn: sqlite3.Connection) -> None:
+        """Entity not linked to itself."""
+        _seed_linked_entities(conn)
+        create_fact_with_targets(
+            conn,
+            fact_id="f-link-01",
+            text="Theron founded Aldara.",
+            raw_transcript_span="Theron founded Aldara.",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:04:00",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            targets=[
+                ("characters", "theron", "biography"),
+                ("locations", "aldara", "founding"),
+            ],
+            by="test-user",
+        )
+        conn.commit()
+        linked = list_linked_entities(conn, "characters", "theron")
+        assert ("characters", "theron") not in linked
+
+    def test_no_shared_fact_returns_empty(self, conn: sqlite3.Connection) -> None:
+        """Entity with no co-targeted fact returns empty list."""
+        _seed_linked_entities(conn)
+        # theron has a single-target fact
+        _make_fact(conn, fact_id="f-solo", status="authoritative")
+        conn.commit()
+        linked = list_linked_entities(conn, "characters", "theron")
+        assert linked == []
+
+    def test_dedup_multiple_shared_facts(self, conn: sqlite3.Connection) -> None:
+        """Two facts linking same pair → aldara appears once."""
+        _seed_linked_entities(conn)
+        create_fact_with_targets(
+            conn,
+            fact_id="f-link-01",
+            text="Claim one.",
+            raw_transcript_span="Claim one.",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:01:00",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            targets=[
+                ("characters", "theron", "biography"),
+                ("locations", "aldara", "founding"),
+            ],
+            by="test-user",
+        )
+        create_fact_with_targets(
+            conn,
+            fact_id="f-link-02",
+            text="Claim two.",
+            raw_transcript_span="Claim two.",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:02:00",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            targets=[
+                ("characters", "theron", "biography"),
+                ("locations", "aldara", "founding"),
+            ],
+            by="test-user",
+        )
+        conn.commit()
+        linked = list_linked_entities(conn, "characters", "theron")
+        aldara_hits = [e for e in linked if e == ("locations", "aldara")]
+        assert len(aldara_hits) == 1
+
+    def test_superseded_entity_excluded(self, conn: sqlite3.Connection) -> None:
+        """Superseded (non-null superseded_by_*) entity excluded from results."""
+        _seed_linked_entities(conn)
+        # make a third entity that supersedes aldara
+        conn.execute(
+            "INSERT INTO entities(category, slug, canonical_name, created_at,"
+            " created_by_ingest, updated_at)"
+            " VALUES ('locations', 'old-aldara', 'Old Aldara',"
+            " '2026-01-01T00:00:00Z', 'ing-001', '2026-01-01T00:00:00Z')"
+        )
+        # mark old-aldara superseded by aldara
+        conn.execute(
+            "UPDATE entities SET superseded_by_category='locations',"
+            " superseded_by_slug='aldara'"
+            " WHERE category='locations' AND slug='old-aldara'"
+        )
+        create_fact_with_targets(
+            conn,
+            fact_id="f-link-01",
+            text="Shared claim.",
+            raw_transcript_span="Shared claim.",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:01:00",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            targets=[
+                ("characters", "theron", "biography"),
+                ("locations", "old-aldara", "founding"),
+            ],
+            by="test-user",
+        )
+        conn.commit()
+        linked = list_linked_entities(conn, "characters", "theron")
+        assert ("locations", "old-aldara") not in linked
+
+    def test_sorted_by_category_slug(self, conn: sqlite3.Connection) -> None:
+        """Results sorted by (category, slug)."""
+        _seed_linked_entities(conn)
+        create_fact_with_targets(
+            conn,
+            fact_id="f-link-01",
+            text="Three-way claim.",
+            raw_transcript_span="Three-way claim.",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:01:00",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            targets=[
+                ("characters", "theron", "biography"),
+                ("factions", "guild", "members"),
+                ("locations", "aldara", "founding"),
+            ],
+            by="test-user",
+        )
+        conn.commit()
+        linked = list_linked_entities(conn, "characters", "theron")
+        assert linked == [("factions", "guild"), ("locations", "aldara")]

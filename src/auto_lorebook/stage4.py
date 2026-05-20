@@ -2,6 +2,7 @@
 
 Generates readable prose pages for entities with approved facts.
 Zero-fact entities get a mechanical stub with no LLM call.
+Linked-entity facts (one-hop co-targets) can be threaded in for synthesis context.
 
 Public API:
     Stage4Error, SummarizeResult
@@ -46,6 +47,9 @@ Rules:
 - Disproven facts: do NOT include in the prose; they appear only in the Facts section.
 - Be concise. One to three paragraphs.
 - Do NOT invent facts beyond what is listed.
+- Linked-entity facts (below): you MAY synthesize a claim drawn from a
+  linked entity's fact, with the same epistemic-status hedging as above.
+  Do not fabricate beyond what is listed.
 
 Emit a single JSON object:
 {
@@ -74,8 +78,9 @@ def build_prompt(
     facts: list[FactRow],
     entity_index: str,
     wiki_setting: str,
+    linked_facts: list[tuple[EntityRow, list[FactRow]]] | None = None,
 ) -> str:
-    """Assemble user message from entity facts, index, and wiki setting."""
+    """Assemble user message from entity facts, index, wiki setting, linked context."""
     parts: list[str] = []
 
     if wiki_setting.strip():
@@ -113,6 +118,30 @@ def build_prompt(
             reason = f" [reason: {fact.status_reason}]" if fact.status_reason else ""
             speaker = f" (speaker: {fact.speaker})" if fact.speaker else ""
             parts.append(f"  - [{fact.id}] {fact.text}{speaker}{reason}")
+
+    # linked-entity context block (one-hop linked entities)
+    if linked_facts:
+        parts.extend(["", "Linked entities (for synthesis context):"])
+        for linked_ent, linked_fact_rows in linked_facts:
+            name = linked_ent.canonical_name
+            cat_slug = f"{linked_ent.category}/{linked_ent.slug}"
+            parts.append(f"\n{name} ({cat_slug}):")
+            nb_by_status: dict[str, list[FactRow]] = {s: [] for s in _STATUS_ORDER}
+            for fact in linked_fact_rows:
+                bucket = fact.status if fact.status in nb_by_status else "hearsay"
+                nb_by_status[bucket].append(fact)
+            for status in _STATUS_ORDER:
+                nb_bucket = nb_by_status[status]
+                if not nb_bucket:
+                    continue
+                parts.append(f"  {status.upper()}:")
+                for fact in nb_bucket:
+                    reason = (
+                        f" [reason: {fact.status_reason}]" if fact.status_reason else ""
+                    )
+                    speaker = f" (speaker: {fact.speaker})" if fact.speaker else ""
+                    parts.append(f"    - [{fact.id}] {fact.text}{speaker}{reason}")
+
     return "\n".join(parts)
 
 
@@ -136,6 +165,7 @@ def run(
     wiki_setting: str,
     client: OpenRouterClient,
     model: str,
+    linked_facts: list[tuple[EntityRow, list[FactRow]]] | None = None,
 ) -> SummarizeResult:
     """Run Stage 4 LLM call for one entity; return SummarizeResult.
 
@@ -147,6 +177,7 @@ def run(
         facts=facts,
         entity_index=entity_index,
         wiki_setting=wiki_setting,
+        linked_facts=linked_facts,
     )
     messages = [
         {
@@ -324,11 +355,13 @@ def summarize_entity(
     wiki_setting: str,
     client: OpenRouterClient,
     model: str,
+    linked_facts: list[tuple[EntityRow, list[FactRow]]] | None = None,
 ) -> Path:
     """Render entity page (LLM prose or stub); write atomically. Return path.
 
     Zero-fact entities: write mechanical stub, no LLM call.
     Entities with facts: call LLM, write prose page.
+    linked_facts: linked-entity (entity, facts) pairs for synthesis context.
     """
     entity = entities_mod.get_entity(conn, category, slug)
     if entity is None:
@@ -347,6 +380,7 @@ def summarize_entity(
             wiki_setting=wiki_setting,
             client=client,
             model=model,
+            linked_facts=linked_facts,
         )
         prose = result.prose
 

@@ -90,6 +90,22 @@ Regeneration runs once per `review` session after all fact decisions are
 made, not per approval. Interrupted review (Ctrl-C) writes no pages;
 resuming and completing the session triggers the batch.
 
+## Linked-entity propagation
+
+When a fact is approved for entity A that co-targets entity B (via `fact_targets`),
+the page step also regenerates B's page. This is **one-hop, non-transitive**:
+only entities directly sharing a fact with a touched entity are included.
+
+The regeneration set is `touched ∪ linked(touched)`, where `linked` is the
+symmetric co-target relation. Touched entities are regenerated first, then linked
+entities (sorted by category and slug).
+
+Each entity's LLM prompt includes a **linked-entities context block** listing the
+facts of its one-hop linked entities (grouped by epistemic status). The LLM may
+synthesize a claim drawn from a linked entity's fact, applying the same epistemic-status
+hedging rules as for the entity's own facts. The rendered `## Facts` section on the
+page lists only the entity's own facts.
+
 ## Rebuild
 
 Regenerate summaries from scratch for all entities:
