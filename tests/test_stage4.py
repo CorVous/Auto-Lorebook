@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -17,6 +18,8 @@ from auto_lorebook.facts import (
 from auto_lorebook.page_step import run_page_step
 from auto_lorebook.stage4 import (
     Stage4Error,
+    _resolve_crossref_markers,
+    _resolve_entity_links,
     build_prompt,
     parse_response,
     render_entity_page,
@@ -698,3 +701,195 @@ class TestBuildPromptLinkedFacts:
         user_content = " ".join(m["content"] for m in messages if m["role"] == "user")
         assert "Aldara is an ancient city." in user_content
         assert result.prose == "Theron founded Aldara."
+
+
+# ---------------------------------------------------------------------------
+# TestPerFactAnchors — fact.id-derived stable anchors
+# ---------------------------------------------------------------------------
+
+
+class TestPerFactAnchors:
+    def test_anchor_derived_from_fact_id(self) -> None:
+        """Footnote label uses fact.id, not a counter."""
+        entity = _make_entity_row()
+        fact = _make_fact_row(fact_id="f-001")
+        result = render_entity_page(
+            entity=entity,
+            aliases=[],
+            facts=[fact],
+            prose="Some prose.",
+            conn=None,
+        )
+        assert "[^f-001]:" in result
+
+    def test_anchor_stable_across_fact_set_change(self) -> None:
+        """Adding a second fact does not change the anchor of the first."""
+        entity = _make_entity_row()
+        fact1 = _make_fact_row(fact_id="f-001", text="First fact.")
+        fact2 = _make_fact_row(fact_id="f-002", text="Second fact.", source_id="src-001")
+
+        result_one = render_entity_page(
+            entity=entity,
+            aliases=[],
+            facts=[fact1],
+            prose="Some prose.",
+            conn=None,
+        )
+        result_two = render_entity_page(
+            entity=entity,
+            aliases=[],
+            facts=[fact1, fact2],
+            prose="Some prose.",
+            conn=None,
+        )
+        # f-001 anchor must be present in both; not changed by adding f-002
+        assert "[^f-001]:" in result_one
+        assert "[^f-001]:" in result_two
+
+
+# ---------------------------------------------------------------------------
+# TestEntityMarkerResolution — [[category/slug]] → markdown link
+# ---------------------------------------------------------------------------
+
+
+class TestEntityMarkerResolution:
+    def _make_linked_entity(
+        self, name: str, category: str, slug: str
+    ) -> EntityRow:
+        return _make_entity_row(name, category, slug)
+
+    def test_marker_resolves_to_link(self) -> None:
+        """[[characters/aldara]] → [Aldara](../characters/aldara.md) (cross-cat)."""
+        entity = self._make_linked_entity("Aldara", "characters", "aldara")
+        lookup = {("characters", "aldara"): entity}
+        prose = "See [[characters/aldara]] for details."
+        result = _resolve_entity_links(prose, lookup, from_category="locations")
+        assert "[Aldara](../characters/aldara.md)" in result
+        assert "[[characters/aldara]]" not in result
+
+    def test_same_category_bare_path(self) -> None:
+        """Same category → relative path without parent component."""
+        entity = self._make_linked_entity("Aldara", "locations", "aldara")
+        lookup = {("locations", "aldara"): entity}
+        prose = "See [[locations/aldara]] here."
+        result = _resolve_entity_links(prose, lookup, from_category="locations")
+        assert "[Aldara](aldara.md)" in result
+
+    def test_unresolvable_marker_becomes_plain_text(self) -> None:
+        """Unknown marker degrades to raw 'category/slug' text."""
+        lookup: dict[tuple[str, str], EntityRow] = {}
+        prose = "See [[mystery/unknown]] here."
+        result = _resolve_entity_links(prose, lookup, from_category="characters")
+        assert "[[mystery/unknown]]" not in result
+        assert "mystery/unknown" in result
+
+    def test_unresolvable_marker_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Unresolvable marker emits a logged warning."""
+        lookup: dict[tuple[str, str], EntityRow] = {}
+        prose = "See [[mystery/unknown]] here."
+        with caplog.at_level(logging.WARNING, logger="auto_lorebook.stage4"):
+            _resolve_entity_links(prose, lookup, from_category="characters")
+        assert any("mystery/unknown" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# TestCrossReferenceFootnotes — [[fact:<id>]] → footnote + crossref
+# ---------------------------------------------------------------------------
+
+
+class TestCrossReferenceFootnotes:
+    def _make_linked(
+        self, name: str = "Aldara", cat: str = "locations", slug: str = "aldara"
+    ) -> EntityRow:
+        return _make_entity_row(name, cat, slug)
+
+    def test_crossref_marker_emits_footnote(self) -> None:
+        """[[fact:f-n01]] replaced with [^f-n01] ref; footnote def added."""
+        linked_ent = self._make_linked()
+        linked_fact = _make_fact_row(
+            fact_id="f-n01", text="Aldara was built in the Second Age."
+        )
+        linked_fact_index = {"f-n01": (linked_ent, linked_fact)}
+        prose = "Theron lived near [[fact:f-n01]]."
+        new_prose, footnote_defs = _resolve_crossref_markers(
+            prose, linked_fact_index, from_category="characters"
+        )
+        assert "[^f-n01]" in new_prose
+        assert "[[fact:f-n01]]" not in new_prose
+        assert any("f-n01" in d for d in footnote_defs)
+
+    def test_crossref_footnote_quotes_linked_fact(self) -> None:
+        """Footnote def includes the linked fact's text as a quote."""
+        linked_ent = self._make_linked()
+        linked_fact = _make_fact_row(
+            fact_id="f-n01", text="Aldara was built in the Second Age."
+        )
+        linked_fact_index = {"f-n01": (linked_ent, linked_fact)}
+        prose = "Background: [[fact:f-n01]]."
+        _, footnote_defs = _resolve_crossref_markers(
+            prose, linked_fact_index, from_category="characters"
+        )
+        combined = "\n".join(footnote_defs)
+        assert "Aldara was built in the Second Age." in combined
+
+    def test_crossref_footnote_links_to_entity_page(self) -> None:
+        """Footnote def contains link to linked entity's page anchored at fact."""
+        linked_ent = self._make_linked(cat="locations", slug="aldara")
+        linked_fact = _make_fact_row(fact_id="f-n01", text="Some claim.")
+        linked_fact_index = {"f-n01": (linked_ent, linked_fact)}
+        prose = "See [[fact:f-n01]]."
+        _, footnote_defs = _resolve_crossref_markers(
+            prose, linked_fact_index, from_category="characters"
+        )
+        combined = "\n".join(footnote_defs)
+        # link to ../locations/aldara.md#fn:f-n01
+        assert "locations/aldara.md" in combined
+        assert "#fn:f-n01" in combined
+
+    def test_unresolvable_crossref_degrades_to_plain_text(self) -> None:
+        """[[fact:unknown]] → plain text (marker removed), no exception."""
+        linked_fact_index: dict[str, tuple[EntityRow, FactRow]] = {}
+        prose = "See [[fact:unknown]]."
+        new_prose, footnote_defs = _resolve_crossref_markers(
+            prose, linked_fact_index, from_category="characters"
+        )
+        assert "[[fact:unknown]]" not in new_prose
+        assert not footnote_defs
+
+    def test_crossref_only_for_cited_linked_facts(self) -> None:
+        """Only [[fact:…]] markers that appear in prose generate footnotes."""
+        linked_ent = self._make_linked()
+        fact_cited = _make_fact_row(fact_id="f-n01", text="Cited fact.")
+        fact_uncited = _make_fact_row(fact_id="f-n02", text="Uncited fact.")
+        linked_fact_index = {
+            "f-n01": (linked_ent, fact_cited),
+            "f-n02": (linked_ent, fact_uncited),
+        }
+        prose = "Only [[fact:f-n01]] is mentioned."
+        _, footnote_defs = _resolve_crossref_markers(
+            prose, linked_fact_index, from_category="characters"
+        )
+        combined = "\n".join(footnote_defs)
+        assert "f-n01" in combined
+        assert "f-n02" not in combined
+
+    def test_render_entity_page_with_crossref(self) -> None:
+        """render_entity_page passes crossref footnotes through to output."""
+        entity = _make_entity_row()
+        own_fact = _make_fact_row(fact_id="f-001", text="Theron ruled.")
+        linked_ent = _make_entity_row("Aldara", "locations", "aldara")
+        linked_fact = _make_fact_row(fact_id="f-n01", text="Aldara was founded here.")
+        entity_lookup = {("locations", "aldara"): linked_ent}
+        linked_facts = [(linked_ent, [linked_fact])]
+        prose = "Theron ruled. See [[fact:f-n01]]."
+        result = render_entity_page(
+            entity=entity,
+            aliases=[],
+            facts=[own_fact],
+            prose=prose,
+            conn=None,
+            entity_lookup=entity_lookup,
+            linked_facts=linked_facts,
+        )
+        assert "[^f-n01]" in result
+        assert "Aldara was founded here." in result

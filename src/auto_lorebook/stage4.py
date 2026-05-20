@@ -13,6 +13,7 @@ Public API:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -50,6 +51,8 @@ Rules:
 - Linked-entity facts (below): you MAY synthesize a claim drawn from a
   linked entity's fact, with the same epistemic-status hedging as above.
   Do not fabricate beyond what is listed.
+- Markers: use [[category/slug]] to link an entity by name (e.g. [[locations/aldara]]);
+  use [[fact:<fact_id>]] to cite a linked entity's fact (e.g. [[fact:f-n01]]).
 
 Emit a single JSON object:
 {
@@ -198,6 +201,69 @@ def run(
     return parse_response(payload)
 
 
+_ENTITY_LINK_RE = re.compile(r"\[\[([a-z0-9-]+)/([a-z0-9-]+)\]\]")
+_FACT_REF_RE = re.compile(r"\[\[fact:([^\]]+)\]\]")
+
+
+def _resolve_entity_links(
+    prose: str,
+    entity_lookup: dict[tuple[str, str], EntityRow],
+    *,
+    from_category: str,
+) -> str:
+    """Scan [[category/slug]] markers; resolve to markdown links or plain text.
+
+    Same-category: bare ``slug.md``; cross-category: ``../category/slug.md``.
+    Unresolvable: raw ``category/slug`` text + logged warning.  Never raises.
+    """
+
+    def _replace(m: re.Match[str]) -> str:
+        cat, slug = m.group(1), m.group(2)
+        entity = entity_lookup.get((cat, slug))
+        if entity is None:
+            _logger.warning("unresolvable entity marker: %s/%s", cat, slug)
+            return f"{cat}/{slug}"
+        path = f"{slug}.md" if cat == from_category else f"../{cat}/{slug}.md"
+        return f"[{entity.canonical_name}]({path})"
+
+    return _ENTITY_LINK_RE.sub(_replace, prose)
+
+
+def _resolve_crossref_markers(
+    prose: str,
+    linked_fact_index: dict[str, tuple[EntityRow, FactRow]],
+    *,
+    from_category: str,
+) -> tuple[str, list[str]]:
+    """Scan [[fact:<id>]] markers; resolve to footnote refs + footnote defs.
+
+    Resolvable: inline marker → ``[^<id>]``; footnote def quotes linked fact
+    text and links to linked entity's page anchored at ``#fn:<id>``.
+    Unresolvable: plain text + logged warning.  Never raises.
+    Returns (rewritten_prose, footnote_def_lines).
+    """
+    footnote_defs: list[str] = []
+
+    def _replace(m: re.Match[str]) -> str:
+        fact_id = m.group(1)
+        entry = linked_fact_index.get(fact_id)
+        if entry is None:
+            _logger.warning("unresolvable fact marker: %s", fact_id)
+            return fact_id
+        linked_ent, linked_fact = entry
+        cat = linked_ent.category
+        slug = linked_ent.slug
+        path = f"{slug}.md" if cat == from_category else f"../{cat}/{slug}.md"
+        anchor = f"#fn:{fact_id}"
+        quote = f'"{linked_fact.text}"'
+        link = f"[{linked_ent.canonical_name}]({path}{anchor})"
+        footnote_defs.append(f"[^{fact_id}]: {quote} — {link}")
+        return f"[^{fact_id}]"
+
+    rewritten = _FACT_REF_RE.sub(_replace, prose)
+    return rewritten, footnote_defs
+
+
 def _source_url_with_ts(source_url: str | None, locator: str) -> str | None:
     """Append timestamp query param to YouTube URLs."""
     if not source_url:
@@ -244,11 +310,15 @@ def render_entity_page(
     facts: list[FactRow],
     prose: str | None,
     conn: sqlite3.Connection | None,
+    entity_lookup: dict[tuple[str, str], EntityRow] | None = None,
+    linked_facts: list[tuple[EntityRow, list[FactRow]]] | None = None,
 ) -> str:
     """Render full Markdown page for entity.
 
     Zero-fact entities (prose=None): mechanical stub, no ``## Summary``.
     Entities with facts: ``## Summary`` + prose + status-grouped facts + references.
+    entity_lookup: index for [[category/slug]] marker resolution.
+    linked_facts: linked-entity pairs for [[fact:<id>]] crossref resolution.
     """
     lines: list[str] = [f"# {entity.canonical_name}", ""]
 
@@ -259,22 +329,31 @@ def render_entity_page(
     if not facts or prose is None:
         return "\n".join(lines)
 
-    # prose summary section
-    lines.extend(["## Summary", "", prose.strip(), ""])
+    # resolve entity-link and crossref markers in prose
+    resolved_prose = prose.strip()
+    crossref_footnote_defs: list[str] = []
+    if entity_lookup is not None:
+        resolved_prose = _resolve_entity_links(
+            resolved_prose, entity_lookup, from_category=entity.category
+        )
+    if linked_facts is not None:
+        # build flat index: fact_id → (entity, fact)
+        linked_fact_index: dict[str, tuple[EntityRow, FactRow]] = {}
+        for linked_ent, linked_fact_rows in linked_facts:
+            for lf in linked_fact_rows:
+                linked_fact_index[lf.id] = (linked_ent, lf)
+        resolved_prose, crossref_footnote_defs = _resolve_crossref_markers(
+            resolved_prose, linked_fact_index, from_category=entity.category
+        )
 
-    # group facts by status; assign footnote numbers
+    # prose summary section
+    lines.extend(["## Summary", "", resolved_prose, ""])
+
+    # group facts by status; use fact.id as stable anchor label
     by_status: dict[str, list[FactRow]] = {s: [] for s in _STATUS_ORDER}
     for fact in facts:
         bucket = fact.status if fact.status in by_status else "hearsay"
         by_status[bucket].append(fact)
-
-    # build footnote index: fact_id → footnote number
-    fn_counter = 0
-    fact_footnote: dict[str, int] = {}
-    for status in _STATUS_ORDER:
-        for fact in by_status[status]:
-            fn_counter += 1
-            fact_footnote[fact.id] = fn_counter
 
     # ## Facts section
     lines.extend(["## Facts", ""])
@@ -284,13 +363,12 @@ def render_entity_page(
             continue
         lines.extend((f"### {status.capitalize()}", ""))
         for fact in bucket:
-            fn = fact_footnote[fact.id]
             if status == "disproven":
                 text_part = f"~~{fact.text}~~"
                 reason_part = f" — {fact.status_reason}" if fact.status_reason else ""
-                lines.append(f"[^{fn}]: {text_part}{reason_part}")
+                lines.append(f"[^{fact.id}]: {text_part}{reason_part}")
             else:
-                lines.append(f"[^{fn}]: {fact.text}")
+                lines.append(f"[^{fact.id}]: {fact.text}")
         lines.append("")
 
     # ## References section
@@ -326,7 +404,6 @@ def render_entity_page(
     lines.append("")
     for status in _STATUS_ORDER:
         for fact in by_status[status]:
-            fn = fact_footnote[fact.id]
             src_url = _resolve_source_url(conn, fact.source_id, fact.locator)
             link = f"[{fact.locator}]({src_url})" if src_url else fact.locator
             speaker = f"— {fact.speaker}, " if fact.speaker else ""
@@ -334,9 +411,14 @@ def render_entity_page(
             quote = f'"{fact.text}"'
             if status == "disproven":
                 reason = f"\n  *{fact.status_reason}*" if fact.status_reason else ""
-                lines.append(f"[^{fn}]: {quote}  {speaker}{link}{session}{reason}")
+                lines.append(f"[^{fact.id}]: {quote}  {speaker}{link}{session}{reason}")
             else:
-                lines.append(f"[^{fn}]: {quote}  {speaker}{link}{session}")
+                lines.append(f"[^{fact.id}]: {quote}  {speaker}{link}{session}")
+
+    # crossref footnote defs (linked-entity citations)
+    if crossref_footnote_defs:
+        lines.append("")
+        lines.extend(crossref_footnote_defs)
 
     return "\n".join(lines)
 
@@ -370,6 +452,12 @@ def summarize_entity(
     aliases = entities_mod.list_aliases(conn, category, slug)
     fact_rows = facts_mod.list_facts_by_entity(conn, category, slug)
 
+    # build entity lookup for [[category/slug]] marker resolution
+    all_entities = entities_mod.list_entities(conn)
+    entity_lookup: dict[tuple[str, str], EntityRow] = {
+        (e.category, e.slug): e for e in all_entities
+    }
+
     prose: str | None = None
     if fact_rows:
         result = run(
@@ -390,6 +478,8 @@ def summarize_entity(
         facts=fact_rows,
         prose=prose,
         conn=conn,
+        entity_lookup=entity_lookup,
+        linked_facts=linked_facts,
     )
     path = _summary_path(wiki_repo, category, slug)
     atomic_write_text(path, text)

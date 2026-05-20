@@ -27,34 +27,36 @@ Entity markdown file, overwritten in full on each regeneration:
 ## Summary
 
 Aldara is a kingdom founded in the Second Age by the grandfather of King
-Theron. Its ruling bloodline has remained unbroken since its founding.
-Some tavern rumors suggest the founding king was cursed by an elven
-sorceress, though this is unconfirmed.
+[Theron](../characters/theron.md). Its ruling bloodline has remained unbroken
+since its founding.[^f-n01] Some tavern rumors suggest the founding king was
+cursed by an elven sorceress, though this is unconfirmed.
 
 ## Facts
 
 ### Authoritative
 
-[^1]: "Theron's grandfather founded Aldara in the Second Age."
-[^2]: "Aldara's kings have always come from the Theron bloodline."
+[^fact-001]: "Theron's grandfather founded Aldara in the Second Age."
+[^fact-002]: "Aldara's kings have always come from the Theron bloodline."
 
 ### Hearsay
 
-[^3]: "The founding king was cursed by an elven sorceress."
+[^fact-003]: "The founding king was cursed by an elven sorceress."
 
 ### Disproven
 
-[^4]: ~~The founding king was mortal.~~ — Later shown to be half-fae.
+[^fact-004]: ~~The founding king was mortal.~~ — Later shown to be half-fae.
 
 ## References
 
 1. Worldbuilding Session 3 — https://youtube.com/watch?v=abc123
 
-[^1]: "Theron's grandfather founded Aldara in the Second Age."  — DM, [0:04:32-0:04:41](https://youtube.com/watch?v=abc123&t=272) (session: 2026-01-15)
-[^2]: "Aldara's kings have always come from the Theron bloodline."  — DM, 0:06:02 (session: 2026-01-20)
-[^3]: "The founding king was cursed by an elven sorceress."  — Innkeeper NPC, [1:23:40-1:24:15](https://youtube.com/watch?v=abc123&t=5020) (session: 2026-02-03)
-[^4]: "The founding king was mortal."  — DM, 0:08:00 (session: 2026-02-03)
+[^fact-001]: "Theron's grandfather founded Aldara in the Second Age."  — DM, [0:04:32-0:04:41](https://youtube.com/watch?v=abc123&t=272) (session: 2026-01-15)
+[^fact-002]: "Aldara's kings have always come from the Theron bloodline."  — DM, 0:06:02 (session: 2026-01-20)
+[^fact-003]: "The founding king was cursed by an elven sorceress."  — Innkeeper NPC, [1:23:40-1:24:15](https://youtube.com/watch?v=abc123&t=5020) (session: 2026-02-03)
+[^fact-004]: "The founding king was mortal."  — DM, 0:08:00 (session: 2026-02-03)
   *Later shown to be half-fae.*
+
+[^f-n01]: "Theron's bloodline has remained unbroken." — [Theron](../characters/theron.md#fn:f-n01)
 ```
 
 ## Summarizer rules
@@ -71,7 +73,8 @@ sorceress, though this is unconfirmed.
 - **Disproven facts** excluded from summary by default; rendered
   struck-through in their own section with the reason.
 - Every summary sentence cites fact IDs; citation labels in the
-  rendered view are footnote numbers.
+  rendered view are stable anchors derived from the fact's ID
+  (e.g. `[^fact-001]`), not positional counters.
 
 ## Model slot
 
@@ -105,6 +108,34 @@ facts of its one-hop linked entities (grouped by epistemic status). The LLM may
 synthesize a claim drawn from a linked entity's fact, applying the same epistemic-status
 hedging rules as for the entity's own facts. The rendered `## Facts` section on the
 page lists only the entity's own facts.
+
+## Cross-references and entity links
+
+The LLM may embed two kinds of inline markers in its prose output, which
+the renderer resolves before writing the page.
+
+**Entity links** — `[[category/slug]]` markers become clickable markdown
+links using the entity's canonical name. Same-category links resolve to a
+bare `slug.md` path; cross-category links resolve to `../category/slug.md`.
+If a marker cannot be found in the entity index, the renderer degrades it
+to plain `category/slug` text and logs a warning — the page is always
+written.
+
+**Cross-reference citations** — `[[fact:<id>]]` markers indicate that the
+preceding prose sentence draws on a linked entity's fact. The renderer
+replaces each marker with a footnote reference `[^<id>]` and appends a
+cross-reference footnote definition that quotes the source fact text and
+links to the linked entity's page anchored at `#fn:<id>` (Python-Markdown
+footnote convention). Only facts actually cited in prose generate crossref
+footnotes; the full linked-entity fact set is available to the LLM for
+context but does not appear unless cited. Unresolvable markers degrade to
+plain text and log a warning.
+
+Example crossref footnote in rendered output:
+
+```markdown
+[^f-n01]: "Theron's bloodline has remained unbroken." — [Theron](../characters/theron.md#fn:f-n01)
+```
 
 ## Rebuild
 
