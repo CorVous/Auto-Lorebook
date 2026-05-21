@@ -1,0 +1,20 @@
+schema_version: 1
+source_id: __QA_SOURCE_ID__
+source_type: srt
+source_url: null
+title: Aether Chronicles - Leywalker
+duration_seconds: null
+caption_type: null
+fetched_at: '2026-01-01T00:00:00Z'
+session_date: null
+transcript_filename: transcript.en.srt
+context:
+  perspective: Players and a DM around a table; in-character and out-of-character speech are mixed.
+  source_nature: actual-play
+  setting: null
+  speakers: []
+  notes: >-
+    Real ~89-minute actual-play session. Transcript normalized from raw
+    YouTube auto-captions: cues with NaN/empty timestamps or empty bodies
+    dropped, timestamps shifted to start at 0:00. Large, messy fixture for
+    exercising Stage 1a/1b against realistic content.

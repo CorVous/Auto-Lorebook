@@ -69,10 +69,17 @@ Stage ladder (each `--at` value seeds everything from prior levels too):
 | `approve`   | `approve-reading <sid> --yes` — runs approve + plan + extract |
 | `plan`      | `replan <sid>` — runs Stage 2 + 3                         |
 
-Fixtures live in the package at `src/auto_lorebook/_qa_fixtures/`; the
-default is `tiny-aldara` (a 4-cue SRT with two segments). Add new
-fixtures by dropping a sibling directory containing the same set of
-artifacts.
+Fixtures live in the package at `src/auto_lorebook/_qa_fixtures/`,
+selected with `--fixture` (default `tiny-aldara`):
+
+| Fixture | Character |
+|---------|-----------|
+| `tiny-aldara` | 4-cue SRT, two segments — the minimal default. |
+| `aldara-session` | Synthetic 8-segment actual-play; deliberately mixes setting lore with session-play (combat, travel, table talk) to exercise Stage 1b extraction. |
+| `leywalker` | A real ~89-minute actual-play VOD, transcript normalized from raw YouTube auto-captions. Large, messy, realistic — seed at `--at=structure` and run `generate-reading`. |
+
+Add new fixtures by dropping a sibling directory containing the same
+set of artifacts.
 
 Clean up with `reject-ingest <sid>` (which knows how to remove pending
 artifacts and any contributions written into the wiki). The interactive
