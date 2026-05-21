@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stage 1b Fact Extraction — Refinement Analysis</title>
+<style>
+  :root {
+    --ink: #1c1b22;
+    --muted: #6b6976;
+    --line: #e4e1ea;
+    --bg: #f7f6fa;
+    --card: #ffffff;
+    --accent: #5b3fae;
+    --accent-soft: #efe9fb;
+    --keep: #1f8a52;
+    --keep-bg: #e8f6ee;
+    --drop: #c0392b;
+    --drop-bg: #fbeae8;
+    --warn: #b9750a;
+    --warn-bg: #fbf1df;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 22px 80px; }
+  header {
+    background: linear-gradient(135deg, #5b3fae 0%, #7d5fd0 100%);
+    color: #fff;
+    padding: 54px 22px 46px;
+    text-align: center;
+  }
+  header .kicker {
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    font-size: 12px;
+    font-weight: 600;
+    opacity: .82;
+  }
+  header h1 { margin: 12px 0 6px; font-size: 32px; line-height: 1.25; }
+  header p { margin: 0 auto; max-width: 560px; opacity: .9; font-size: 15px; }
+  h2 {
+    font-size: 21px;
+    margin: 46px 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--accent-soft);
+  }
+  h3 { font-size: 16px; margin: 26px 0 8px; }
+  p { margin: 10px 0; }
+  code {
+    background: #f0eef5;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 90%;
+    font-family: "SF Mono", SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin: 16px 0;
+  }
+  .tldr {
+    background: var(--accent-soft);
+    border: 1px solid #d9cdf3;
+    border-radius: 12px;
+    padding: 18px 22px;
+    margin: 26px 0 8px;
+  }
+  .tldr strong { color: var(--accent); }
+  .stats { display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0; }
+  .stat {
+    flex: 1 1 150px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 16px;
+    text-align: center;
+  }
+  .stat .num { font-size: 26px; font-weight: 700; color: var(--accent); }
+  .stat .lbl { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  th { background: #f3f1f8; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  td.n { text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  tr.total td { background: #faf9fd; font-weight: 700; }
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 20px;
+    vertical-align: middle;
+  }
+  .tag.keep { background: var(--keep-bg); color: var(--keep); }
+  .tag.drop { background: var(--drop-bg); color: var(--drop); }
+  .tag.warn { background: var(--warn-bg); color: var(--warn); }
+  .cols { display: flex; flex-wrap: wrap; gap: 14px; margin: 16px 0; }
+  .col {
+    flex: 1 1 280px;
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .col.keep { background: var(--keep-bg); border: 1px solid #bfe3cd; }
+  .col.drop { background: var(--drop-bg); border: 1px solid #efc6c0; }
+  .col h3 { margin-top: 0; }
+  .col.keep h3 { color: var(--keep); }
+  .col.drop h3 { color: var(--drop); }
+  .col ul { margin: 8px 0 0; padding-left: 18px; }
+  .col li { margin: 7px 0; font-size: 13.5px; }
+  .quote {
+    font-style: italic;
+    color: #46434f;
+  }
+  .principle {
+    border-left: 4px solid var(--accent);
+    padding: 4px 0 4px 16px;
+    margin: 14px 0;
+  }
+  .principle b { color: var(--accent); }
+  .step { display: flex; gap: 14px; margin: 14px 0; }
+  .step .dot {
+    flex: none;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+  .step .body { flex: 1; }
+  .step .body b { display: block; }
+  .small { font-size: 13px; color: var(--muted); }
+  .ok { color: var(--keep); font-weight: 700; }
+  .bad { color: var(--drop); font-weight: 700; }
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    margin-top: 50px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="kicker">Auto-Lorebook · Pipeline Stage 1b</div>
+  <h1>Refining Fact Extraction</h1>
+  <p>Teaching the reading stage to capture <em>setting lore</em> — and ignore the actual-play session's own play-by-play.</p>
+</header>
+
+<div class="wrap">
+
+  <div class="tldr">
+    <strong>In short.</strong> Stage 1b used to extract "worldbuilding <em>and narrative</em> claims," which on an
+    actual-play transcript meant combat rolls, travel, and table talk were recorded as facts. The prompt was
+    rewritten so a fact is <strong>standing setting knowledge</strong> only. Tested on a synthetic fixture and a
+    real 89-minute actual-play VOD: session-play leakage fell from roughly <strong>1 in 8 bullets</strong> to
+    about <strong>1 in 84</strong>, with no loss of genuine lore.
+  </div>
+
+  <h2>1 · The problem</h2>
+  <p>
+    The reading stage (Stage 1b) is the only point in the pipeline that invents content: for each segment of a
+    transcript it produces <em>claim bullets</em>, which a human then approves into the wiki as facts. Its
+    instruction told the model to extract <em>"worldbuilding and narrative claims"</em> and to
+    <em>"err on the side of over-inclusion."</em>
+  </p>
+  <p>
+    On a tabletop actual-play recording that is the wrong target. A session is mostly <em>play</em> — dice rolls,
+    combat, travel, out-of-character chatter — and only sometimes <em>lore</em>. The old prompt could not tell the
+    difference, so it dressed up session events as facts: <span class="quote">"a palace guard dealt 7 slashing
+    damage,"</span> <span class="quote">"the party rode north on the north road."</span> None of that belongs in a
+    worldbuilding wiki.
+  </p>
+
+  <h2>2 · The decision</h2>
+  <p>Two principles were settled before touching the prompt.</p>
+
+  <div class="principle">
+    <b>A fact is standing setting knowledge.</b> History, geography, peoples, factions, religions, powers, items,
+    and the characters who inhabit the world — asserted by anyone (the GM, an NPC, or a player's character).
+    In-world history counts. The session's own play-narrative does not.
+  </div>
+  <div class="principle">
+    <b>Durable-state rule.</b> When play <em>changes</em> the world, the extractor keeps the <em>result</em>, not
+    the action. If the party assassinates the king, the fact is <span class="quote">"King Theron is dead"</span> —
+    never <span class="quote">"a player threw a dagger and rolled 23."</span> Recapping the play-by-play is a
+    separate concern (session summary), not fact extraction.
+  </div>
+
+  <h2>3 · How it was tested</h2>
+  <div class="step">
+    <div class="dot">A</div>
+    <div class="body">
+      <b>A synthetic fixture for fast, controlled iteration</b>
+      <span class="small">An 8-segment actual-play transcript built so each segment is a deliberate test case:
+      lore exposition, in-world history, an NPC rumour, player-character backstory, a kill that changes the world,
+      and pure session-play (combat + dice, travel, out-of-character break) that must yield nothing.</span>
+    </div>
+  </div>
+  <div class="step">
+    <div class="dot">B</div>
+    <div class="body">
+      <b>A real 89-minute actual-play VOD as a reality check</b>
+      <span class="small">A genuine recorded session — messy auto-generated captions and all — to confirm the
+      prompt generalises beyond the hand-built fixture rather than just "teaching to the test."</span>
+    </div>
+  </div>
+
+  <h2>4 · Synthetic fixture results</h2>
+  <p>
+    Bullets extracted per segment, across three versions of the prompt. <span class="bad">Red</span> marks
+    spurious session-play; the goal is for the play segments (006, 007, 008) to produce nothing while the lore
+    segments keep their facts.
+  </p>
+  <table>
+    <thead>
+      <tr><th>Segment</th><th>What it tests</th><th class="n">Original</th><th class="n">Rewrite v1</th><th class="n">Rewrite v2</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>001 Founding</td><td>GM lore exposition</td><td class="n">7</td><td class="n">4</td><td class="n">4</td></tr>
+      <tr><td>002 War of the Dusk</td><td>in-world history</td><td class="n">5</td><td class="n">5</td><td class="n">5</td></tr>
+      <tr><td>003 Innkeeper</td><td>NPC rumour (hearsay)</td><td class="n">5</td><td class="n">4</td><td class="n">5</td></tr>
+      <tr><td>004 Aldwin's history</td><td>player-character backstory</td><td class="n">4</td><td class="n" style="color:var(--warn)">2</td><td class="n">2</td></tr>
+      <tr><td>005 The throne room</td><td>kill that changes the world</td><td class="n" style="color:var(--drop)">4</td><td class="n">3</td><td class="n">3</td></tr>
+      <tr><td>006 Fight with guards</td><td>combat + dice — should be 0</td><td class="n" style="color:var(--drop)">3</td><td class="n ok">0</td><td class="n ok">0</td></tr>
+      <tr><td>007 Flight from Highmoor</td><td>travel — should be 0</td><td class="n" style="color:var(--drop)">4</td><td class="n ok">0</td><td class="n ok">0</td></tr>
+      <tr><td>008 Out-of-character break</td><td>table talk — should be 0</td><td class="n ok">0</td><td class="n ok">0</td><td class="n ok">0</td></tr>
+      <tr class="total"><td colspan="2">Total bullets</td><td class="n">32</td><td class="n">18</td><td class="n">19</td></tr>
+    </tbody>
+  </table>
+  <p class="small">
+    <b>Original:</b> ~10 of 32 bullets were session-play — all of segments 006/007 plus blow-by-blow detail
+    smeared into 005 (<span class="quote">"killed by Garrick's thrown dagger… struck in the throat"</span>).<br>
+    <b>Rewrite v1</b> killed the leakage but over-corrected: it stopped treating a player-character's own
+    backstory as setting knowledge, dropping segment 004 from 4 facts to 2 and generalising
+    <span class="quote">"I was orphaned"</span> into a vague <span class="quote">"children were orphaned."</span><br>
+    <b>Rewrite v2</b> added character identity — including player-character backstory — explicitly back in scope,
+    and forbade generalising away a fact's subject. Result: 19 bullets, every one genuine lore; all three
+    play segments empty.
+  </p>
+
+  <div class="cols">
+    <div class="col keep">
+      <h3>Kept — genuine facts</h3>
+      <ul>
+        <li>"Aldara was founded three hundred years ago, at the dawn of the Second Age, by Corwin the Elder."</li>
+        <li>"Sister Aldwin was raised in the temple of the Dawnmother in Highmoor." <span class="tag keep">PC backstory</span></li>
+        <li>"King Theron is dead." · "The throne of Aldara sits empty." <span class="tag keep">durable result of play</span></li>
+      </ul>
+    </div>
+    <div class="col drop">
+      <h3>Dropped — session-play</h3>
+      <ul>
+        <li>"A palace guard dealt 7 slashing damage to Garrick." <span class="tag drop">combat</span></li>
+        <li>"The party rode north from Highmoor on the north road." <span class="tag drop">travel</span></li>
+        <li>"Can I use my reaction while prone? Let me check the book." <span class="tag drop">rules / OOC</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>5 · Real VOD reality check</h2>
+  <p>
+    The v2 prompt was then run end-to-end on a real 89-minute actual-play session — a fantasy campaign about a
+    floating island, a mage's college, and an ancient sealed vault.
+  </p>
+  <div class="stats">
+    <div class="stat"><div class="num">33</div><div class="lbl">segments</div></div>
+    <div class="stat"><div class="num">12</div><div class="lbl">correctly empty<br>(banter, logistics, travel)</div></div>
+    <div class="stat"><div class="num">~80</div><div class="lbl">genuine lore bullets</div></div>
+    <div class="stat"><div class="num">~5</div><div class="lbl">session-play leaks</div></div>
+  </div>
+  <p>
+    The prompt held up well on messy real captions. Long stretches of in-character chatter — a pre-session
+    banter segment, a meandering conversation about love, idle table talk — correctly produced
+    <b class="ok">zero</b> bullets, while it captured deep lore: the war that ruined magic, a catastrophic ritual
+    7,000 years ago, the golden dragon Oroxy who reigns over the Nexus, the history of the monastic knight order.
+  </p>
+  <p>
+    But a pattern the synthetic fixture never exercised slipped through: <b>exploration and loot</b>. The session
+    is an expedition, and the model treated the party's adventuring as fact —
+  </p>
+  <table>
+    <thead><tr><th>Leaked bullet (before tweak)</th><th>After exploration-and-loot tweak</th></tr></thead>
+    <tbody>
+      <tr><td class="quote">"Samples of metal and stone were collected from the ruined tower site."</td><td><span class="tag keep">dropped</span></td></tr>
+      <tr><td class="quote">"The party previously investigated a location with a bridge…"</td><td><span class="tag keep">dropped</span> — survives only as context for a real lore claim</td></tr>
+      <tr><td class="quote">"A character possesses remnants of stone taken from the island."</td><td><span class="tag keep">dropped</span></td></tr>
+      <tr><td class="quote">"Rift gave a magical language book as a reward for two days of work."</td><td><span class="tag warn">still present</span> — lone holdout</td></tr>
+    </tbody>
+  </table>
+  <p>
+    The exclusion list was extended to name what the party <em>finds, collects, loots, or is given</em>, plus party
+    possessions and prior-session actions. Re-running both transcripts: <b class="ok">4 of 5 leaks fixed</b> on the
+    real VOD (84 bullets, ~1 borderline holdout), and <b class="ok">no regression</b> on the synthetic fixture —
+    still 19 clean bullets.
+  </p>
+
+  <h2>6 · Outcome</h2>
+  <table>
+    <thead><tr><th>Measure</th><th class="n">Before</th><th class="n">After</th></tr></thead>
+    <tbody>
+      <tr><td>Synthetic fixture — session-play leaks</td><td class="n">~10 / 32</td><td class="n ok">0 / 19</td></tr>
+      <tr><td>Real VOD — session-play leaks</td><td class="n">~5 / 85</td><td class="n ok">~1 / 84</td></tr>
+      <tr><td>Genuine lore retained</td><td class="n">—</td><td class="n ok">full</td></tr>
+    </tbody>
+  </table>
+  <p>What changed in the codebase:</p>
+  <ul>
+    <li><code>stage1b.py</code> — the extraction prompt rewritten around standing setting knowledge, the
+      durable-state rule, and explicit exclusion of session-play.</li>
+    <li><code>_qa_fixtures/aldara-session/</code> — a new permanent QA fixture exercising the lore-vs-session-event
+      distinction.</li>
+    <li><code>docs/pipeline/reading.md</code> and <code>CONTEXT.md</code> — updated to define a <em>claim</em> and a
+      <em>session event</em> and the boundary between them.</li>
+  </ul>
+  <p class="small">
+    One residual is left deliberately: a single borderline quest-reward bullet on the real VOD. The pipeline's
+    design already tilts toward over-inclusion — a spurious bullet costs a human reviewer seconds to reject — so
+    chasing the last bullet would risk overfitting the prompt for no real gain.
+  </p>
+
+  <footer>
+    Auto-Lorebook · Stage 1b fact-extraction refinement · branch <code>claude/refine-fact-extraction-U782e</code>
+  </footer>
+
+</div>
+</body>
+</html>
