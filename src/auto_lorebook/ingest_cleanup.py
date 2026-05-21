@@ -5,6 +5,13 @@ from the DB, deletes entity rows that the ingest created and are now
 empty of facts, removes their `.md` summaries, and removes pipeline
 artifacts under `pending/<source_id>/` (plan + proposals).
 
+Page reconciliation: after DB deletion, removed entities' pages are
+deleted and linked survivors are re-summarized via `run_page_step`
+(LLM path when API key is available; mechanical fallback otherwise).
+
+`replan` needs no page reconciliation: it only discards unreviewed
+proposals and never deletes approved facts or entity pages.
+
 Decisions:
 
 - Stub deletion criterion: empty facts AND `entity.created_by_ingest == source_id`.
@@ -103,10 +110,14 @@ def reject_ingest(
     source_id: str,
     wiki_override: str | None = None,
 ) -> RejectResult:
-    """Remove `source_id`'s contributions from DB; clean pending."""
+    """Remove `source_id`'s contributions from DB; clean pending; reconcile pages."""
     wiki_repo = cfg.resolve_active_wiki(wiki_override)
     conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
     result = RejectResult()
+    removed_entity_keys: list[tuple[str, str]] = []
+    partial_survivors: set[tuple[str, str]] = set()
+    linked_survivors: set[tuple[str, str]] = set()
+
     try:
         # collect entities affected before deletion
         fact_rows = conn.execute(
@@ -126,6 +137,29 @@ def reject_ingest(
                     conn, r["entity_category"], r["entity_slug"]
                 )
 
+        # compute removed/linked sets BEFORE deletion (co-target rows still exist)
+        for (cat, slug), entity in affected_entities.items():
+            if entity is None:
+                continue
+            remaining_after = conn.execute(
+                "SELECT COUNT(*) FROM facts f"
+                " JOIN fact_targets ft ON ft.fact_id=f.id"
+                " WHERE ft.entity_category=? AND ft.entity_slug=?"
+                " AND f.created_by_ingest!=?",
+                (cat, slug, source_id),
+            ).fetchone()[0]
+            if remaining_after == 0 and entity.created_by_ingest == source_id:
+                removed_entity_keys.append((cat, slug))
+                # linked neighbors of this removed entity
+                linked_survivors.update(facts_mod.list_linked_entities(conn, cat, slug))
+            else:
+                partial_survivors.add((cat, slug))
+
+        removed_set = set(removed_entity_keys)
+        # one-hop neighbors minus removed entities, plus partial survivors
+        linked_survivors -= removed_set
+        linked_survivors |= partial_survivors
+
         # delete facts + cascade (fact_targets, fact_status_history)
         conn.execute(
             "DELETE FROM facts WHERE created_by_ingest=?",
@@ -139,31 +173,64 @@ def reject_ingest(
         )
         result.aliases_removed = cur.rowcount
 
-        # delete or mark entities
-        for (cat, slug), entity in affected_entities.items():
-            if entity is None:
-                continue
-            remaining = conn.execute(
-                "SELECT COUNT(*) FROM facts f"
-                " JOIN fact_targets ft ON ft.fact_id=f.id"
-                " WHERE ft.entity_category=? AND ft.entity_slug=?",
+        # delete entity rows for fully-removed stubs
+        for cat, slug in removed_entity_keys:
+            conn.execute(
+                "DELETE FROM entities WHERE category=? AND slug=?",
                 (cat, slug),
-            ).fetchone()[0]
-            if remaining == 0 and entity.created_by_ingest == source_id:
-                conn.execute(
-                    "DELETE FROM entities WHERE category=? AND slug=?",
-                    (cat, slug),
-                )
-                regen_mod.delete_entity_summary(wiki_repo, cat, slug)
-                result.stubs_deleted += 1
-            elif remaining < (result.facts_removed):
-                # partial removal; regenerate .md
-                with contextlib.suppress(ValueError):
-                    regen_mod.regenerate_entity(conn, wiki_repo, cat, slug)
-                result.entities_modified += 1
+            )
+            result.stubs_deleted += 1
+
+        result.entities_modified = len(partial_survivors)
 
     finally:
         conn.close()
+
+    # page reconciliation
+    api_key = cfg.get_api_key()
+    if api_key:
+        # LLM path: deleted pages + re-summarize linked survivors
+        from auto_lorebook import entities as _entities_mod  # noqa: PLC0415
+        from auto_lorebook import wiki_context as wiki_context_mod  # noqa: PLC0415
+        from auto_lorebook.openrouter import OpenRouterClient  # noqa: PLC0415
+        from auto_lorebook.page_step import run_page_step  # noqa: PLC0415
+
+        llm_conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+        try:
+            client = OpenRouterClient(
+                api_key=api_key,
+                default_model=cfg.models.summarizer or cfg.models.primary,
+                app_title="auto-lorebook",
+            )
+            model = cfg.models.summarizer or cfg.models.primary
+            wiki_ctx = wiki_context_mod.read(llm_conn, wiki_repo=wiki_repo)
+            wiki_setting = wiki_ctx.setting.description or ""
+            entity_index = _entities_mod.render_for_preamble(llm_conn)
+            run_page_step(
+                llm_conn,
+                wiki_repo,
+                sorted(linked_survivors),
+                removed_entities=removed_entity_keys,
+                entity_index=entity_index,
+                wiki_setting=wiki_setting,
+                client=client,
+                model=model,
+                context_window=cfg.models.primary_context_window,
+                budget_fraction=cfg.summarizer.linked_context_budget_fraction,
+            )
+        finally:
+            llm_conn.close()
+    else:
+        # offline fallback: delete removed pages, mechanically regen survivors
+        for cat, slug in removed_entity_keys:
+            regen_mod.delete_entity_summary(wiki_repo, cat, slug)
+        offline_conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
+        try:
+            for cat, slug in sorted(linked_survivors):
+                with contextlib.suppress(ValueError):
+                    regen_mod.regenerate_entity(offline_conn, wiki_repo, cat, slug)
+        finally:
+            offline_conn.close()
 
     # Pipeline artifacts: drop plan.yaml + proposals/. Leave reading-state
     # DB rows (ingests/segments/segment_bullets) alone so replan /

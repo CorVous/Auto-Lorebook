@@ -404,6 +404,236 @@ class TestRejectIngest:
             conn.close()
 
 
+class TestPageReconciliationIntegration:
+    """Integration: reject-ingest page reconciliation."""
+
+    def _seed_entity_direct(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        name: str,
+        category: str,
+        slug: str,
+        created_by: str,
+    ) -> None:
+        conn.execute(
+            "INSERT OR IGNORE INTO sources"
+            "(source_id, source_type, fetched_at, context_json)"
+            " VALUES (?, 'youtube', '2026-01-01T00:00:00Z', '{}')",
+            (created_by,),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO ingests(ingest_id, source_id, started_at, state)"
+            " VALUES (?, ?, '2026-01-01T00:00:00Z', 'done')",
+            (created_by, created_by),
+        )
+        ts = "2026-04-20T00:00:00Z"
+        conn.execute(
+            "INSERT OR IGNORE INTO entities"
+            "(category, slug, canonical_name,"
+            " created_at, created_by_ingest, updated_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (category, slug, name, ts, created_by, ts),
+        )
+
+    def _seed_shared_fact_direct(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        fact_id: str,
+        ingest: str,
+        cat_a: str,
+        slug_a: str,
+        cat_b: str,
+        slug_b: str,
+        text: str = "Shared lore.",
+    ) -> None:
+        conn.execute(
+            "INSERT OR IGNORE INTO sources"
+            "(source_id, source_type, fetched_at, context_json)"
+            " VALUES (?, 'youtube', '2026-01-01T00:00:00Z', '{}')",
+            (ingest,),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO ingests(ingest_id, source_id, started_at, state)"
+            " VALUES (?, ?, '2026-01-01T00:00:00Z', 'done')",
+            (ingest, ingest),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO facts (
+                id, text, raw_transcript_span, text_corrects_transcript,
+                text_source, edited_by_human, edited_at,
+                source_id, locator, speaker,
+                status, status_reason, session_date,
+                approved_at, created_by_ingest, claim_group_id,
+                corrections_applied_json, inputs_json
+            ) VALUES (?,?,?,0,NULL,0,NULL,?,?,?,?,NULL,?,?,?,NULL,'[]',NULL)
+            """,
+            (
+                fact_id,
+                text,
+                text,
+                ingest,
+                "0:01:00",
+                "DM",
+                "authoritative",
+                "2026-04-15",
+                "2026-04-20T00:00:00Z",
+                ingest,
+            ),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO fact_targets"
+            "(fact_id, entity_category, entity_slug, section)"
+            " VALUES (?,?,?,?)",
+            (fact_id, cat_a, slug_a, "s1"),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO fact_targets"
+            "(fact_id, entity_category, entity_slug, section)"
+            " VALUES (?,?,?,?)",
+            (fact_id, cat_b, slug_b, "s2"),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO fact_status_history(fact_id, status, at, by, reason)"
+            " VALUES (?,?,?,?,NULL)",
+            (fact_id, "authoritative", "2026-04-20T00:00:00Z", "test"),
+        )
+
+    def _seed_own_fact_direct(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        fact_id: str,
+        ingest: str,
+        category: str,
+        slug: str,
+    ) -> None:
+        conn.execute(
+            "INSERT OR IGNORE INTO sources"
+            "(source_id, source_type, fetched_at, context_json)"
+            " VALUES (?, 'youtube', '2026-01-01T00:00:00Z', '{}')",
+            (ingest,),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO ingests(ingest_id, source_id, started_at, state)"
+            " VALUES (?, ?, '2026-01-01T00:00:00Z', 'done')",
+            (ingest, ingest),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO facts (
+                id, text, raw_transcript_span, text_corrects_transcript,
+                text_source, edited_by_human, edited_at,
+                source_id, locator, speaker,
+                status, status_reason, session_date,
+                approved_at, created_by_ingest, claim_group_id,
+                corrections_applied_json, inputs_json
+            ) VALUES (?,?,?,0,NULL,0,NULL,?,?,?,?,NULL,?,?,?,NULL,'[]',NULL)
+            """,
+            (
+                fact_id,
+                "Own fact.",
+                "Own fact.",
+                ingest,
+                "0:02:00",
+                "DM",
+                "authoritative",
+                "2026-04-15",
+                "2026-04-20T00:00:00Z",
+                ingest,
+            ),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO fact_targets"
+            "(fact_id, entity_category, entity_slug, section)"
+            " VALUES (?,?,?,?)",
+            (fact_id, category, slug, "general"),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO fact_status_history(fact_id, status, at, by, reason)"
+            " VALUES (?,?,?,?,NULL)",
+            (fact_id, "authoritative", "2026-04-20T00:00:00Z", "test"),
+        )
+
+    def test_deleted_entity_page_removed_and_neighbour_resummarized(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Deleted entity page removed; linked survivor re-summarized."""
+        from auto_lorebook import db as db_mod  # noqa: PLC0415
+        from auto_lorebook import wiki_bootstrap  # noqa: PLC0415
+        from auto_lorebook import wiki_state as ws_mod  # noqa: PLC0415
+        from auto_lorebook.config import Config  # noqa: PLC0415
+        from auto_lorebook.ingest_cleanup import reject_ingest  # noqa: PLC0415
+        from auto_lorebook.wiki_registry import WikiEntry  # noqa: PLC0415
+
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("AUTO_LOREBOOK_HOME", str(home))
+        wiki = tmp_path / "wiki"
+        wiki_bootstrap.bootstrap(wiki)
+
+        # write config.yaml so reading_pipeline._active_wiki_root() resolves
+        (home / "config.yaml").write_text(
+            "schema_version: 2\nactive_wiki: main\nwikis:\n"
+            f"- nickname: main\n  path: {wiki}\n",
+            encoding="utf-8",
+        )
+        cfg = Config(wikis=[WikiEntry("main", wiki)], active_wiki="main")
+
+        conn = db_mod.open(ws_mod.wiki_db_path(wiki))
+        # aldara: created by yt-x → will be fully removed
+        self._seed_entity_direct(
+            conn, name="Aldara", category="locations", slug="aldara", created_by="yt-x"
+        )
+        # theron: created by other-ingest → linked survivor
+        self._seed_entity_direct(
+            conn,
+            name="Theron",
+            category="characters",
+            slug="theron",
+            created_by="other-ingest",
+        )
+        # shared fact from yt-x linking both; theron also has an own fact
+        self._seed_shared_fact_direct(
+            conn,
+            fact_id="shared-f1",
+            ingest="yt-x",
+            cat_a="locations",
+            slug_a="aldara",
+            cat_b="characters",
+            slug_b="theron",
+        )
+        self._seed_own_fact_direct(
+            conn,
+            fact_id="theron-own-f1",
+            ingest="other-ingest",
+            category="characters",
+            slug="theron",
+        )
+        conn.commit()
+        conn.close()
+
+        # pre-create .md files
+        aldara_md = wiki / "locations" / "aldara.md"
+        aldara_md.write_text("old aldara", encoding="utf-8")
+        theron_md = wiki / "characters" / "theron.md"
+        theron_md.write_text("old theron", encoding="utf-8")
+
+        reject_ingest(cfg, "yt-x")
+
+        # aldara's page removed
+        assert not aldara_md.exists(), "deleted entity page should be gone"
+        # theron's page regenerated
+        assert theron_md.exists(), "linked survivor's page should remain"
+        assert theron_md.read_text(encoding="utf-8") != "old theron", (
+            "linked survivor's page should be re-summarized"
+        )
+
+
 class TestRejectIngestIsolation:
     """Pending state for each wiki is isolated under its own .wiki-state/."""
 

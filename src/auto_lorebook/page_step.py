@@ -3,9 +3,13 @@
 Regenerates .md files for touched entities and their one-hop linked
 entities after all facts are decided. Reports progress to stdout.
 
+On reject-ingest, pass ``removed_entities`` to delete removed pages
+and exclude removed entities from regeneration.
+
 Public API:
     run_page_step(conn, wiki_repo, touched_entities, entity_index,
-                  wiki_setting, client, model) -> list[Path]
+                  wiki_setting, client, model,
+                  removed_entities) -> list[Path]
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from auto_lorebook.linked_budget import (
     budget_linked_context,
 )
 from auto_lorebook.regen_set import plan_regeneration_set
+from auto_lorebook.summary_regen import delete_entity_summary
 
 if TYPE_CHECKING:
     import sqlite3
@@ -36,6 +41,7 @@ def run_page_step(
     wiki_repo: Path,
     touched_entities: list[tuple[str, str]],
     *,
+    removed_entities: list[tuple[str, str]] | None = None,
     entity_index: str = "",
     wiki_setting: str = "",
     client: OpenRouterClient,
@@ -45,20 +51,43 @@ def run_page_step(
 ) -> list[Path]:
     """Regenerate .md pages for touched entities and one-hop linked entities.
 
-    :param touched_entities: list of (category, slug) pairs
+    :param touched_entities: (category, slug) pairs to summarize
+    :param removed_entities: (category, slug) pairs whose pages to delete;
+        excluded from regeneration even if also in touched_entities
     :param context_window: model context window for linked-context budgeting
     :param budget_fraction: fraction of context_window for linked context block
     :returns: list of written paths
     """
-    if not touched_entities:
+    removed_set: frozenset[tuple[str, str]] = (
+        frozenset(removed_entities) if removed_entities else frozenset()
+    )
+    # delete pages of removed entities
+    for cat, slug in removed_set:
+        delete_entity_summary(wiki_repo, cat, slug)
+
+    if not touched_entities and not removed_set:
+        return []
+
+    # filter removed entities out of regen inputs
+    filtered_touched = [e for e in touched_entities if e not in removed_set]
+
+    if not filtered_touched and not removed_set:
         return []
 
     def linked_of(entity: tuple[str, str]) -> list[tuple[str, str]]:
-        return facts_mod.list_linked_entities(conn, entity[0], entity[1])
+        # exclude removed entities from linked set
+        return [
+            e
+            for e in facts_mod.list_linked_entities(conn, entity[0], entity[1])
+            if e not in removed_set
+        ]
 
-    regen = plan_regeneration_set(touched_entities, linked_of)
+    regen = plan_regeneration_set(filtered_touched, linked_of)
     n_touched = len(regen.touched)
     n_linked = len(regen.linked)
+
+    if not regen.ordered:
+        return []
 
     if n_linked:
         print(  # noqa: T201
