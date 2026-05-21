@@ -172,8 +172,22 @@ Example crossref footnote in rendered output:
 
 ## Rebuild
 
-Regenerate summaries from scratch for all entities:
+Regenerate all entity pages from scratch and reconcile the filesystem
+against the DB:
 
 ```bash
 auto-lorebook wiki rebuild
 ```
+
+Every non-superseded entity page is regenerated using the page step
+(prose + linked-entity propagation logic). After regeneration, the
+command scans each entity-category subdirectory (`characters`,
+`locations`, `factions`, `events`, `items`, `concepts`) and deletes
+any `.md` file that has no matching entity in the DB — recovering from
+corruption, a crashed page step, or a renamed entity.
+
+The wiki root and `.wiki-state/` directory are not scanned; only the
+six category subdirectories are touched.
+
+Staleness-skip (regenerate only entities whose facts changed since the
+last build) is future work.
