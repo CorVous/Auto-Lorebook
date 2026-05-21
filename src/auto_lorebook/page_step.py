@@ -25,6 +25,11 @@ from auto_lorebook.linked_budget import (
     budget_linked_context,
 )
 from auto_lorebook.regen_set import plan_regeneration_set
+from auto_lorebook.staleness_store import (
+    compute_page_inputs_hash,
+    get_page_hash,
+    record_page_hash,
+)
 from auto_lorebook.summary_regen import delete_entity_summary
 
 if TYPE_CHECKING:
@@ -48,6 +53,7 @@ def run_page_step(
     model: str = "",
     context_window: int = 200_000,
     budget_fraction: float = 0.25,
+    skip_unchanged: bool = False,
 ) -> list[Path]:
     """Regenerate .md pages for touched entities and one-hop linked entities.
 
@@ -56,6 +62,7 @@ def run_page_step(
         excluded from regeneration even if also in touched_entities
     :param context_window: model context window for linked-context budgeting
     :param budget_fraction: fraction of context_window for linked context block
+    :param skip_unchanged: skip pages whose inputs hash matches stored hash
     :returns: list of written paths
     """
     removed_set: frozenset[tuple[str, str]] = (
@@ -100,6 +107,8 @@ def run_page_step(
 
     paths: list[Path] = []
     for category, slug in regen.ordered:
+        entity = entities_mod.get_entity(conn, category, slug)
+
         # collect linked-entity facts for synthesis context
         linked_keys = facts_mod.list_linked_entities(conn, category, slug)
         linked_facts = []
@@ -111,9 +120,8 @@ def run_page_step(
             linked_facts.append((nb_entity, nb_facts))
 
         # apply token budget to linked context
-        subject_fact_ids = {
-            f.id for f in facts_mod.list_facts_by_entity(conn, category, slug)
-        }
+        own_facts = facts_mod.list_facts_by_entity(conn, category, slug)
+        subject_fact_ids = {f.id for f in own_facts}
         try:
             linked_facts = budget_linked_context(
                 linked_facts,
@@ -130,6 +138,29 @@ def run_page_step(
             )
             linked_facts = []
 
+        # staleness check
+        if entity is not None:
+            aliases = entities_mod.list_aliases(conn, category, slug)
+            current_hash: str | None = compute_page_inputs_hash(
+                entity=entity,
+                aliases=aliases,
+                facts=own_facts,
+                linked_facts=linked_facts,
+                entity_index=entity_index,
+                wiki_setting=wiki_setting,
+                model=model,
+                model_params={},
+            )
+        else:
+            current_hash = None
+        if (
+            skip_unchanged
+            and current_hash is not None
+            and (get_page_hash(conn, category, slug) == current_hash)
+        ):
+            _logger.debug("page_step: skipping unchanged %s/%s", category, slug)
+            continue
+
         try:
             path = stage4_mod.summarize_entity(
                 conn,
@@ -143,6 +174,9 @@ def run_page_step(
                 linked_facts=linked_facts or None,
             )
             paths.append(path)
+            if current_hash is not None:
+                record_page_hash(conn, category, slug, current_hash)
+                conn.commit()
         except Exception as exc:  # noqa: BLE001
             _logger.warning("page_step: skipping %s/%s: %s", category, slug, exc)
     return paths

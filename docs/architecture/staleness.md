@@ -49,7 +49,7 @@ whether it is an alias is what matters to downstream stages.
 | `reading.md` (approved) | same as draft (but staleness is a warning, not a blocker — see below) |
 | `plan.yaml` | approved `reading.md`, `.wiki-context.yaml`, entity index, model, model params |
 | `proposals/*.yaml` | `plan.yaml`, approved `reading.md`, transcript, `.transcription-corrections.yaml`, model, model params |
-| entity `.md` (summary) | entity YAML, entity index |
+| entity `.md` (summary) | entity's own facts, linked entities' facts, entity index, `.wiki-context.yaml` setting, model, model params |
 
 The preamble hash is derived from several of these inputs; it's
 recorded for debugging but the individual input hashes determine
@@ -128,9 +128,12 @@ command uses staleness of an approved fact to gate behavior.
   stages.
 - `reject-ingest` is unaffected — it works by `created_by_ingest`,
   independent of hashes.
-- `wiki rebuild` optimizes: it skips regeneration for entity `.md`
-  files whose recorded inputs match the current entity YAML and
-  index. `wiki rebuild --force` regenerates unconditionally.
+- `wiki rebuild` skips regeneration for entity `.md` files whose
+  recorded inputs hash (stored in `entity_page_staleness` keyed by
+  `(category, slug)`) matches the current inputs. Inputs are: entity's
+  own facts, linked entities' facts, entity index, `.wiki-context.yaml`
+  setting, model, model params. `wiki rebuild --force` regenerates
+  unconditionally. Hashes are stored only in the DB, not in `.md` files.
 - `replan` preserves approved proposals as facts in entity YAMLs,
   with their original `inputs` snapshots intact. Re-planning does not
   retroactively "update" historical facts to reflect the new input

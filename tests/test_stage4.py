@@ -1075,3 +1075,159 @@ class TestRunPageStepRemovedEntities:
         assert not md.exists()
         # removed entity is not in the written paths (nothing written)
         assert ("characters", "theron") not in [(p.parent.name, p.stem) for p in paths]
+
+
+# ---------------------------------------------------------------------------
+# page_step.run_page_step — staleness-skip behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestRunPageStepStaleness:
+    def test_records_hash_after_generation(self, tmp_path: Path) -> None:
+        """run_page_step stores inputs hash in DB after generating a page."""
+        from auto_lorebook.staleness_store import get_page_hash  # noqa: PLC0415
+
+        conn = _seed_entity_with_fact()
+        client = MagicMock()
+        client.complete.return_value = MagicMock(text='{"prose": "Generated."}')
+
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+        )
+        assert get_page_hash(conn, "characters", "theron") is not None
+
+    def test_skip_unchanged_does_not_call_llm_again(self, tmp_path: Path) -> None:
+        """Second run with skip_unchanged=True skips pages with matching hash."""
+        conn = _seed_entity_with_fact()
+        client = MagicMock()
+        client.complete.return_value = MagicMock(text='{"prose": "Generated."}')
+
+        # first run populates hash
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+            skip_unchanged=True,
+        )
+        first_call_count = client.complete.call_count
+
+        # second run: inputs unchanged → skip
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+            skip_unchanged=True,
+        )
+        assert client.complete.call_count == first_call_count
+
+    def test_skip_unchanged_false_regenerates(self, tmp_path: Path) -> None:
+        """skip_unchanged=False always calls LLM."""
+        conn = _seed_entity_with_fact()
+        client = MagicMock()
+        client.complete.return_value = MagicMock(text='{"prose": "Generated."}')
+
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+            skip_unchanged=False,
+        )
+        first_count = client.complete.call_count
+
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+            skip_unchanged=False,
+        )
+        assert client.complete.call_count == first_count * 2
+
+    def test_mutated_fact_triggers_regen(self, tmp_path: Path) -> None:
+        """Changing a fact's text causes skip_unchanged=True to regenerate."""
+        from auto_lorebook.facts import update_status  # noqa: PLC0415
+
+        conn = _seed_entity_with_fact()
+        client = MagicMock()
+        client.complete.return_value = MagicMock(text='{"prose": "Generated."}')
+
+        # first run
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+            skip_unchanged=True,
+        )
+        after_first = client.complete.call_count
+
+        # mutate fact status (fact text change would require a new function;
+        # status change is enough to change the inputs hash)
+        update_status(conn, "f-001", "hearsay", reason="changed", by="tester")
+        conn.commit()
+
+        # second run: inputs changed → regenerate
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+            skip_unchanged=True,
+        )
+        assert client.complete.call_count > after_first
+
+    def test_second_run_returns_empty_written_paths(self, tmp_path: Path) -> None:
+        """Second skip_unchanged run returns empty written paths list."""
+        conn = _seed_entity_with_fact()
+        client = MagicMock()
+        client.complete.return_value = MagicMock(text='{"prose": "Generated."}')
+
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+            skip_unchanged=True,
+        )
+
+        paths = run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+            skip_unchanged=True,
+        )
+        assert paths == []
