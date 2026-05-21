@@ -1,0 +1,19 @@
+schema_version: 1
+source_id: __QA_SOURCE_ID__
+source_type: srt
+source_url: null
+title: Aldara Session QA Fixture
+duration_seconds: 1020
+caption_type: null
+fetched_at: '2026-01-01T00:00:00Z'
+session_date: null
+transcript_filename: transcript.en.srt
+context:
+  perspective: Players and a DM around a table; in-character and out-of-character speech are mixed.
+  source_nature: actual-play
+  setting: Aldara, a low-fantasy kingdom.
+  speakers: []
+  notes: >-
+    QA fixture for the lore-vs-session-event distinction. Segments
+    deliberately mix standing setting knowledge with the session's own
+    play-narrative (combat, dice, travel, table talk).
