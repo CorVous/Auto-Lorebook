@@ -1,0 +1,46 @@
+schema_version: 1
+source_id: __QA_SOURCE_ID__
+generated_at: '2026-01-01T00:00:00Z'
+default_speaker: DM
+segments:
+  - id: seg-001
+    start: '0:00:00'
+    end: '0:03:00'
+    title: Founding of Aldara
+    speaker: DM
+  - id: seg-002
+    start: '0:03:00'
+    end: '0:05:30'
+    title: The War of the Dusk
+    speaker: DM
+  - id: seg-003
+    start: '0:05:30'
+    end: '0:07:00'
+    title: The Salt Hound innkeeper
+    speaker: DM
+  - id: seg-004
+    start: '0:07:00'
+    end: '0:08:30'
+    title: Sister Aldwin's history
+    speaker: Player-Mara
+  - id: seg-005
+    start: '0:08:30'
+    end: '0:11:00'
+    title: The throne room
+    speaker: mixed
+  - id: seg-006
+    start: '0:11:00'
+    end: '0:14:00'
+    title: Fight with the palace guards
+    speaker: mixed
+  - id: seg-007
+    start: '0:14:00'
+    end: '0:15:30'
+    title: Flight from Highmoor
+    speaker: DM
+  - id: seg-008
+    start: '0:15:30'
+    end: '0:17:00'
+    title: Out-of-character break
+    speaker: mixed
+uncertainty_flags: []

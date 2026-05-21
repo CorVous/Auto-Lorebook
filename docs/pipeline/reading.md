@@ -22,8 +22,9 @@ Two properties of the intended use dominate the design of this stage:
 2. **Missed claims are worse than spurious ones.** An omitted claim in
    a one-shot ingest is a permanent gap nothing downstream will
    surface. A spurious claim costs the human seconds to reject. The
-   pipeline tilts toward over-inclusion: surface anything plausibly
-   claim-bearing and let the human filter.
+   pipeline tilts toward over-inclusion — but only *within* the fact
+   category: surface borderline lore and let the human filter. It never
+   licenses the session's own play-narrative as a claim (see Stage 1b).
 
 These drive three design decisions: 1a covers the whole transcript (no
 scope filter); segmentation and attribution run as one pass; a
@@ -130,6 +131,20 @@ the segment list in the approve-reading outer view on each session.
 
 **Purpose.** For each segment from 1a, produce claim bullets — or
 explicitly none. This is the only substage that can invent content.
+
+**What counts as a claim.** A claim is a *fact candidate* — standing
+knowledge about the setting (history, geography, peoples, factions,
+religions, powers, items) or about a character who inhabits it. In-world
+history counts, including events from the world's past. When session
+play changes the world's durable state, 1b extracts the resulting
+state, not the action behind it — "King Theron is dead", not the
+dagger-throw and dice roll that killed him.
+
+1b does **not** extract the session's own play-narrative: combat
+blow-by-blow, dice and mechanics, the party's moment-to-moment actions
+and travel, scene blocking, or out-of-character table talk. A combat or
+travel segment typically yields no bullets. Recapping what happened in
+a session is a separate concern — not the reading stage's job.
 
 **Input.** Segmented, speaker-attributed transcript from 1a and the
 full preamble (including `interpretation_defaults`).

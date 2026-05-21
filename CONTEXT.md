@@ -25,6 +25,23 @@ _Avoid_: claim extraction.
 Per-bundle approval gate; the only point at which entities and facts enter the wiki.
 _Avoid_: approval, fact review (legacy).
 
+### Reading-stage terms
+
+**Claim**:
+A fact candidate — standing knowledge about the setting: its history,
+geography, peoples, characters, and in-world events. May be asserted outright
+by a speaker, or be the durable result when session play changes the world's
+state. Travels through reading, plan, and proposal; becomes a **Fact** only at
+Review.
+_Avoid_: fact (a fact is post-approval; a claim is pre-approval).
+
+**Session event**:
+Something that happens in the source session's own play — a fight, a dice
+roll, the party travelling or searching, out-of-character table talk. Not a
+**Claim**: the reading stage excludes session events. Recapping them is a
+separate concern, outside fact extraction.
+_Avoid_: narrative claim (legacy — the reading stage once extracted these).
+
 ### Review-stage terms
 
 **Claim group**:

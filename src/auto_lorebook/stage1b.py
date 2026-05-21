@@ -56,28 +56,61 @@ DEFAULT_MAX_CONCURRENCY = 4
 _TIMESTAMP_LINE_RE = re.compile(r"^\[(?P<ts>[0-9:,.]+)\]\s?(?P<body>.*)$")
 
 _TASK_INSTRUCTIONS = """\
-You are extracting worldbuilding and narrative claims from ONE segment
-of an actual-play / lore transcript. Read the segment below and emit a
-single JSON object of the form:
+You are extracting FACTS from ONE segment of an actual-play / lore
+transcript. A fact is a piece of standing knowledge about the SETTING —
+its history, geography, peoples, factions, religions, powers, and
+notable items — or about a CHARACTER who inhabits it: who they are,
+where they come from, and how they are tied to the world. Emit a
+single JSON object:
 
 {
   "bullets": [
     {
-      "text":   "<one short, self-contained claim>",
+      "text":   "<one short, self-contained fact about the world>",
       "anchor": "h:mm:ss"
     }
   ]
 }
 
+A fact IS:
+- Standing setting knowledge asserted by anyone — DM narration, an NPC,
+  or a player's character ("Aldara was founded in the Second Age").
+- In-world history, including events from the world's past ("The War of
+  the Dusk burned the elven city of Vethran").
+- Who a character is: their origin, lineage, role, allegiances, and
+  relationships. This includes the players' own characters — a PC's
+  backstory, stated in fiction, is setting knowledge ("Sister Aldwin
+  was orphaned by the War and raised in the Highmoor temple").
+- A claim a character makes about the world, even if unreliable — an
+  NPC's rumour still reveals what the setting believes.
+- The durable RESULT when play changes the world's state — not the
+  action behind it. If the party kills the king, the fact is "King
+  Theron is dead", never "a player threw a dagger and rolled 23".
+
+A fact is NOT the session's own play-narrative. Emit NOTHING for:
+- The blow-by-blow of play: attacks, damage, dice, initiative, hit
+  points, spells, conditions.
+- What the party does moment to moment: where they go, what they
+  search, who they speak to, how they travel, and what they find,
+  collect, loot, or are given.
+- The party's possessions and quest rewards, and what the party did in
+  earlier sessions.
+- Scene blocking and one-off detail: a door giving way, a guard rushing
+  in, the weather of a single scene.
+- Out-of-character talk: rules lookups, scheduling, snacks, table chat.
+
 Hard rules:
-- `bullets` MAY be empty. An off-topic, rules, or silence segment
-  typically yields no bullets — emit `{"bullets": []}` in that case.
-- `anchor` is a plain `h:mm:ss` timestamp INSIDE the segment where the
-  claim is made. Use the timestamps visible in the transcript lines.
-- Prefer short, factual bullets; one claim per bullet. Resolve pronouns
-  where possible ("The king" → "King Theron").
-- Err on the side of over-inclusion: a spurious bullet costs the human
-  seconds to reject; a missed claim is a permanent gap.
+- `bullets` MAY be empty, and often SHOULD be. A combat, travel, rules,
+  or break segment typically yields no facts — emit `{"bullets": []}`.
+- `anchor` is a plain `h:mm:ss` timestamp INSIDE the segment. Use the
+  timestamps visible in the transcript lines.
+- One fact per bullet; short and self-contained. Resolve pronouns to
+  names ("the king" → "King Theron"); resolve first-person in-character
+  speech to the speaking character ("I was orphaned" → "Sister Aldwin
+  was orphaned"). Never generalise a fact so it loses its subject.
+- When genuinely unsure whether something is durable setting knowledge,
+  include it — a spurious fact costs the human seconds to reject. This
+  licence covers borderline LORE only; it never licenses play-narrative.
 
 Emit ONLY the JSON object. No prose, no code fences, no commentary.
 """
