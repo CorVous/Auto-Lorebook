@@ -286,7 +286,7 @@ def test_interactive_setup_writes_config_and_skeleton(
     assert raw["wikis"][0] == {"nickname": nick, "path": str(wiki.resolve())}
     assert cfg.resolve_active_wiki(None) == wiki.resolve()
     assert cfg.openrouter.api_key_env == "OPENROUTER_API_KEY"
-    assert cfg.models.primary == "anthropic/claude-sonnet-4-5"
+    assert cfg.models.primary == "z-ai/glm-5.1"
     # wiki skeleton created
     assert (wiki / "characters").is_dir()
     assert (wiki / "concepts").is_dir()

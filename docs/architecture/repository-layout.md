@@ -88,7 +88,7 @@ wikis:
 openrouter:
   api_key_env: OPENROUTER_API_KEY
 models:
-  primary: anthropic/claude-sonnet-4-5
+  primary: z-ai/glm-5.1
   primary_context_window: 200000
 preamble:
   budget_fraction: 0.8
