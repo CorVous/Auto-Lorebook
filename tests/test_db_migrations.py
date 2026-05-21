@@ -198,7 +198,7 @@ def test_migration_002_preserves_existing_rows(tmp_path: Path) -> None:
 
     # Create a v1 DB (only migration 001)
     from auto_lorebook.db.migrations import (  # noqa: PLC0415
-        _migration_001_initial,  # noqa: PLC2701
+        _migration_001_initial,
     )
 
     raw = sqlite3.connect(str(db_path))
@@ -263,8 +263,8 @@ def test_migration_003_preserves_existing_rows(tmp_path: Path) -> None:
     db_path = tmp_path / "wiki.db"
 
     from auto_lorebook.db.migrations import (  # noqa: PLC0415
-        _migration_001_initial,  # noqa: PLC2701
-        _migration_002_widen_source_type,  # noqa: PLC2701
+        _migration_001_initial,
+        _migration_002_widen_source_type,
     )
 
     raw = sqlite3.connect(str(db_path))
@@ -371,10 +371,10 @@ def test_migration_005_drops_per_target_columns_from_proposals() -> None:
 def test_migration_005_preserves_existing_rows(tmp_path: Path) -> None:
     """Rows from v4 survive migration 005; proposal_targets populated from proposals."""
     from auto_lorebook.db.migrations import (  # noqa: PLC0415
-        _migration_001_initial,  # noqa: PLC2701
-        _migration_002_widen_source_type,  # noqa: PLC2701
-        _migration_003_fix_segment_status_and_add_flags_json,  # noqa: PLC2701
-        _migration_004_plan_metadata_and_flag_reason,  # noqa: PLC2701
+        _migration_001_initial,
+        _migration_002_widen_source_type,
+        _migration_003_fix_segment_status_and_add_flags_json,
+        _migration_004_plan_metadata_and_flag_reason,
     )
 
     db_path = tmp_path / "wiki.db"
@@ -437,9 +437,9 @@ def test_migration_005_preserves_existing_rows(tmp_path: Path) -> None:
 def test_migration_004_preserves_existing_rows(tmp_path: Path) -> None:
     """Rows from v3 survive migration 004; flag_reason is NULL on legacy proposals."""
     from auto_lorebook.db.migrations import (  # noqa: PLC0415
-        _migration_001_initial,  # noqa: PLC2701
-        _migration_002_widen_source_type,  # noqa: PLC2701
-        _migration_003_fix_segment_status_and_add_flags_json,  # noqa: PLC2701
+        _migration_001_initial,
+        _migration_002_widen_source_type,
+        _migration_003_fix_segment_status_and_add_flags_json,
     )
 
     db_path = tmp_path / "wiki.db"

@@ -243,6 +243,7 @@ def _resolve_crossref_markers(
     Returns (rewritten_prose, footnote_def_lines).
     """
     footnote_defs: list[str] = []
+    seen_fact_ids: set[str] = set()
 
     def _replace(m: re.Match[str]) -> str:
         fact_id = m.group(1)
@@ -257,7 +258,9 @@ def _resolve_crossref_markers(
         anchor = f"#fn:{fact_id}"
         quote = f'"{linked_fact.text}"'
         link = f"[{linked_ent.canonical_name}]({path}{anchor})"
-        footnote_defs.append(f"[^{fact_id}]: {quote} — {link}")
+        if fact_id not in seen_fact_ids:
+            seen_fact_ids.add(fact_id)
+            footnote_defs.append(f"[^{fact_id}]: {quote} — {link}")
         return f"[^{fact_id}]"
 
     rewritten = _FACT_REF_RE.sub(_replace, prose)

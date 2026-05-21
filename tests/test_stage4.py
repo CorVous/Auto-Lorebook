@@ -726,7 +726,9 @@ class TestPerFactAnchors:
         """Adding a second fact does not change the anchor of the first."""
         entity = _make_entity_row()
         fact1 = _make_fact_row(fact_id="f-001", text="First fact.")
-        fact2 = _make_fact_row(fact_id="f-002", text="Second fact.", source_id="src-001")
+        fact2 = _make_fact_row(
+            fact_id="f-002", text="Second fact.", source_id="src-001"
+        )
 
         result_one = render_entity_page(
             entity=entity,
@@ -753,9 +755,7 @@ class TestPerFactAnchors:
 
 
 class TestEntityMarkerResolution:
-    def _make_linked_entity(
-        self, name: str, category: str, slug: str
-    ) -> EntityRow:
+    def _make_linked_entity(self, name: str, category: str, slug: str) -> EntityRow:
         return _make_entity_row(name, category, slug)
 
     def test_marker_resolves_to_link(self) -> None:
@@ -783,7 +783,9 @@ class TestEntityMarkerResolution:
         assert "[[mystery/unknown]]" not in result
         assert "mystery/unknown" in result
 
-    def test_unresolvable_marker_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+    def test_unresolvable_marker_logs_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Unresolvable marker emits a logged warning."""
         lookup: dict[tuple[str, str], EntityRow] = {}
         prose = "See [[mystery/unknown]] here."
@@ -855,6 +857,30 @@ class TestCrossReferenceFootnotes:
         )
         assert "[[fact:unknown]]" not in new_prose
         assert not footnote_defs
+
+    def test_unresolvable_crossref_logs_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Unresolvable [[fact:unknown]] emits a logged warning."""
+        linked_fact_index: dict[str, tuple[EntityRow, FactRow]] = {}
+        prose = "See [[fact:unknown]]."
+        with caplog.at_level(logging.WARNING, logger="auto_lorebook.stage4"):
+            _resolve_crossref_markers(
+                prose, linked_fact_index, from_category="characters"
+            )
+        assert any("unknown" in r.message for r in caplog.records)
+
+    def test_duplicate_crossref_marker_single_footnote_def(self) -> None:
+        """Same [[fact:f-n01]] twice → exactly one footnote def."""
+        linked_ent = self._make_linked()
+        linked_fact = _make_fact_row(fact_id="f-n01", text="Aldara was built.")
+        linked_fact_index = {"f-n01": (linked_ent, linked_fact)}
+        prose = "First [[fact:f-n01]] and again [[fact:f-n01]]."
+        _, footnote_defs = _resolve_crossref_markers(
+            prose, linked_fact_index, from_category="characters"
+        )
+        assert footnote_defs.count(footnote_defs[0]) == 1
+        assert len([d for d in footnote_defs if "f-n01" in d]) == 1
 
     def test_crossref_only_for_cited_linked_facts(self) -> None:
         """Only [[fact:…]] markers that appear in prose generate footnotes."""

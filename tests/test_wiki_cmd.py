@@ -11,7 +11,7 @@ import yaml
 from auto_lorebook import config as cfg_mod
 from auto_lorebook.cli import create_parser
 from auto_lorebook.commands import wiki_cmd
-from auto_lorebook.commands._shared import resolve_wiki  # noqa: PLC2701
+from auto_lorebook.commands._shared import resolve_wiki
 from auto_lorebook.config import ConfigError
 
 if TYPE_CHECKING:
