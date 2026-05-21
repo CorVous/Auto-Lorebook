@@ -91,7 +91,10 @@ A fact is NOT the session's own play-narrative. Emit NOTHING for:
 - The blow-by-blow of play: attacks, damage, dice, initiative, hit
   points, spells, conditions.
 - What the party does moment to moment: where they go, what they
-  search, who they speak to, how they travel.
+  search, who they speak to, how they travel, and what they find,
+  collect, loot, or are given.
+- The party's possessions and quest rewards, and what the party did in
+  earlier sessions.
 - Scene blocking and one-off detail: a door giving way, a guard rushing
   in, the weather of a single scene.
 - Out-of-character talk: rules lookups, scheduling, snacks, table chat.
