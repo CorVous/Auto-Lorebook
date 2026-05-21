@@ -49,6 +49,13 @@ class PreambleConfig:
 
 
 @dataclass
+class SummarizerConfig:
+    """Summarizer section of config.yaml."""
+
+    linked_context_budget_fraction: float = 0.25
+
+
+@dataclass
 class Config:
     """Loaded ~/.auto-lorebook/config.yaml."""
 
@@ -57,6 +64,7 @@ class Config:
     openrouter: OpenRouterConfig = field(default_factory=OpenRouterConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
     preamble: PreambleConfig = field(default_factory=PreambleConfig)
+    summarizer: SummarizerConfig = field(default_factory=SummarizerConfig)
 
     def get_api_key(self) -> str | None:
         """Resolve API key. Env var wins; falls back to credentials file."""
@@ -165,6 +173,7 @@ def load_config(home: Path | None = None) -> Config:
     or_raw: dict[str, Any] = raw.get("openrouter") or {}
     models_raw: dict[str, Any] = raw.get("models") or {}
     preamble_raw: dict[str, Any] = raw.get("preamble") or {}
+    summarizer_raw: dict[str, Any] = raw.get("summarizer") or {}
 
     openrouter = OpenRouterConfig(
         api_key_env=or_raw.get("api_key_env", "OPENROUTER_API_KEY"),
@@ -179,6 +188,11 @@ def load_config(home: Path | None = None) -> Config:
     preamble = PreambleConfig(
         budget_fraction=float(preamble_raw.get("budget_fraction", 0.8)),
     )
+    summarizer_cfg = SummarizerConfig(
+        linked_context_budget_fraction=float(
+            summarizer_raw.get("linked_context_budget_fraction", 0.25)
+        ),
+    )
 
     return Config(
         wikis=wikis,
@@ -186,6 +200,7 @@ def load_config(home: Path | None = None) -> Config:
         openrouter=openrouter,
         models=models,
         preamble=preamble,
+        summarizer=summarizer_cfg,
     )
 
 
@@ -371,6 +386,11 @@ def save_config(cfg: Config, home: Path | None = None) -> None:
             "primary_context_window": cfg.models.primary_context_window,
         },
         "preamble": {"budget_fraction": cfg.preamble.budget_fraction},
+        "summarizer": {
+            "linked_context_budget_fraction": (
+                cfg.summarizer.linked_context_budget_fraction
+            ),
+        },
     }
     if cfg.models.extractor is not None:
         data["models"]["extractor"] = cfg.models.extractor

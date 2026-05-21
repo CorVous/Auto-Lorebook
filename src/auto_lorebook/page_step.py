@@ -16,6 +16,10 @@ from typing import TYPE_CHECKING
 from auto_lorebook import entities as entities_mod
 from auto_lorebook import facts as facts_mod
 from auto_lorebook import stage4 as stage4_mod
+from auto_lorebook.linked_budget import (
+    LinkedContextTooLargeError,
+    budget_linked_context,
+)
 from auto_lorebook.regen_set import plan_regeneration_set
 
 if TYPE_CHECKING:
@@ -36,10 +40,14 @@ def run_page_step(
     wiki_setting: str = "",
     client: OpenRouterClient,
     model: str = "",
+    context_window: int = 200_000,
+    budget_fraction: float = 0.25,
 ) -> list[Path]:
     """Regenerate .md pages for touched entities and one-hop linked entities.
 
     :param touched_entities: list of (category, slug) pairs
+    :param context_window: model context window for linked-context budgeting
+    :param budget_fraction: fraction of context_window for linked context block
     :returns: list of written paths
     """
     if not touched_entities:
@@ -72,6 +80,26 @@ def run_page_step(
                 continue
             nb_facts = facts_mod.list_facts_by_entity(conn, nb_cat, nb_slug)
             linked_facts.append((nb_entity, nb_facts))
+
+        # apply token budget to linked context
+        subject_fact_ids = {
+            f.id for f in facts_mod.list_facts_by_entity(conn, category, slug)
+        }
+        try:
+            linked_facts = budget_linked_context(
+                linked_facts,
+                subject_fact_ids,
+                context_window=context_window,
+                budget_fraction=budget_fraction,
+            )
+        except LinkedContextTooLargeError as exc:
+            _logger.warning(
+                "page_step: linked context too large for %s/%s, dropping: %s",
+                category,
+                slug,
+                exc,
+            )
+            linked_facts = []
 
         try:
             path = stage4_mod.summarize_entity(

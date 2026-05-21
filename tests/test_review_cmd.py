@@ -400,6 +400,8 @@ class TestReviewWritesLLMProse:
             wiki_setting: str = "",  # noqa: ARG001
             client: object,
             model: str = "",  # noqa: ARG001
+            context_window: int = 200_000,  # noqa: ARG001
+            budget_fraction: float = 0.25,  # noqa: ARG001
         ) -> list[object]:
             from pathlib import Path as _Path  # noqa: PLC0415
 

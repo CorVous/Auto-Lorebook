@@ -630,6 +630,8 @@ def run(
                 wiki_setting=wiki_setting,
                 client=client,
                 model=effective_model,
+                context_window=cfg.models.primary_context_window,
+                budget_fraction=cfg.summarizer.linked_context_budget_fraction,
             )
         return result
     finally:
