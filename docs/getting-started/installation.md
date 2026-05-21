@@ -64,8 +64,8 @@ wikis:
 openrouter:
   api_key_env: OPENROUTER_API_KEY
 models:
-  primary: anthropic/claude-sonnet-4-5
-  extractor: anthropic/claude-sonnet-4-5   # accepted but unused in Phase 1
+  primary: z-ai/glm-5.1
+  extractor: z-ai/glm-5.1   # accepted but unused in Phase 1
   primary_context_window: 200000
 preamble:
   budget_fraction: 0.8

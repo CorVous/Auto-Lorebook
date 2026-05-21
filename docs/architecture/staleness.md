@@ -20,7 +20,7 @@ inputs:
   corrections_sha256: jk0lm1...          # .transcription-corrections.yaml
   entity_index_sha256: n2o3p4...         # canonical serialization of the in-memory index
   preamble_sha256: q5r6s7...             # the fully-assembled preamble string
-  model: anthropic/claude-sonnet-4-5
+  model: z-ai/glm-5.1
   model_params_sha256: t8u9v0...         # temperature, max_tokens, etc.
 generated_at: 2026-04-20T14:32:00Z
 ```

@@ -34,7 +34,7 @@ class OpenRouterConfig:
 class ModelsConfig:
     """Models section of config.yaml."""
 
-    primary: str = "anthropic/claude-sonnet-4-5"
+    primary: str = "z-ai/glm-5.1"
     primary_context_window: int = 200_000
     extractor: str | None = None
     planner: str | None = None
@@ -179,7 +179,7 @@ def load_config(home: Path | None = None) -> Config:
         api_key_env=or_raw.get("api_key_env", "OPENROUTER_API_KEY"),
     )
     models = ModelsConfig(
-        primary=models_raw.get("primary", "anthropic/claude-sonnet-4-5"),
+        primary=models_raw.get("primary", "z-ai/glm-5.1"),
         primary_context_window=int(models_raw.get("primary_context_window", 200_000)),
         extractor=models_raw.get("extractor"),
         planner=models_raw.get("planner"),
@@ -259,7 +259,7 @@ def save_last_context(
 
 
 _DEFAULT_API_KEY_ENV = "OPENROUTER_API_KEY"
-_DEFAULT_MODEL = "anthropic/claude-sonnet-4-5"
+_DEFAULT_MODEL = "z-ai/glm-5.1"
 _CREDENTIALS_FILE = "credentials"
 
 
