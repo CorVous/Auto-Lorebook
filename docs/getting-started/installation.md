@@ -81,6 +81,7 @@ auto-lorebook wiki use <path> --name <nickname>   # register with explicit nickn
 auto-lorebook wiki add <nickname> <path>          # register without switching
 auto-lorebook wiki remove <nickname>    # deregister; refuses if active
 auto-lorebook wiki rename <old> <new>
+auto-lorebook wiki rebuild              # regenerate all pages; delete orphans
 ```
 
 Per-invocation override on any subcommand:

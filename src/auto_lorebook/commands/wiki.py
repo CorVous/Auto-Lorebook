@@ -1,6 +1,6 @@
 """auto-lorebook wiki subcommand group.
 
-Registry management: `wiki <list|use|add|remove|rename>`.
+Registry management: `wiki <list|use|add|remove|rename|rebuild>`.
 All dispatch through `run()` on `args.wiki_action`.
 """
 
@@ -14,12 +14,22 @@ from auto_lorebook import config as cfg_mod
 from auto_lorebook import db, wiki_state
 from auto_lorebook import wiki_bootstrap as wiki_bootstrap_mod
 from auto_lorebook.config import save_config
+from auto_lorebook.openrouter import OpenRouterClient
 from auto_lorebook.wiki_registry import WikiEntry, WikiRegistry, WikiRegistryError
 
 if TYPE_CHECKING:
     import argparse
 
 _logger = logging.getLogger(__name__)
+
+_ENTITY_CATEGORIES = (
+    "characters",
+    "locations",
+    "factions",
+    "events",
+    "items",
+    "concepts",
+)
 
 
 def add_parser(
@@ -93,6 +103,18 @@ def add_parser(
     p_rename.add_argument("new", help="New nickname")
     p_rename.set_defaults(func=run)
 
+    # rebuild
+    p_rebuild = sub.add_parser(
+        "rebuild",
+        parents=[common_parser],
+        help="Regenerate all entity pages; delete orphan .md files",
+        description=(
+            "Regenerate every entity page from scratch and reconcile the "
+            "filesystem against the DB — deletes any .md file with no matching entity."
+        ),
+    )
+    p_rebuild.set_defaults(func=run)
+
     return parser
 
 
@@ -110,6 +132,8 @@ def run(args: argparse.Namespace) -> int:
         return _run_remove(args, home)
     if action == "rename":
         return _run_rename(args, home)
+    if action == "rebuild":
+        return _run_rebuild(args, home)
     msg = f"unknown wiki action: {action}"
     raise ValueError(msg)
 
@@ -233,3 +257,72 @@ def _run_use(args: argparse.Namespace, home: Path | None) -> int:
     save_config(cfg, home=home)
     print(f"active wiki: {nick!r} → {candidate}")  # noqa: T201
     return 0
+
+
+def _run_rebuild(args: argparse.Namespace, home: Path | None) -> int:
+    """Regenerate all entity pages; delete orphan .md files."""
+    from auto_lorebook import entities as entities_mod  # noqa: PLC0415
+    from auto_lorebook import page_step as page_step_mod  # noqa: PLC0415
+    from auto_lorebook import wiki_context as wiki_context_mod  # noqa: PLC0415
+
+    cfg = cfg_mod.load_config(home=home)
+    try:
+        wiki_repo = cfg.resolve_active_wiki(getattr(args, "wiki", None))
+    except cfg_mod.ConfigError as e:
+        print(f"error: {e}")  # noqa: T201
+        return 1
+
+    api_key = cfg.get_api_key()
+    if not api_key:
+        print(  # noqa: T201
+            f"error: no API key found. "
+            f"Export ${cfg.openrouter.api_key_env} or store in "
+            "~/.auto-lorebook/credentials."
+        )
+        return 1
+
+    conn = db.open(wiki_state.wiki_db_path(wiki_repo))
+    try:
+        rows = entities_mod.list_entities(conn, wiki_repo=wiki_repo)
+        touched = [(e.category, e.slug) for e in rows]
+
+        client = OpenRouterClient(
+            api_key=api_key,
+            default_model=cfg.models.summarizer or cfg.models.primary,
+            app_title="auto-lorebook",
+        )
+        effective_model = cfg.models.summarizer or cfg.models.primary
+        wiki_ctx = wiki_context_mod.read(conn, wiki_repo=wiki_repo)
+        wiki_setting = wiki_ctx.setting.description or ""
+        entity_index = entities_mod.render_for_preamble(conn)
+
+        written = page_step_mod.run_page_step(
+            conn,
+            wiki_repo,
+            touched,
+            entity_index=entity_index,
+            wiki_setting=wiki_setting,
+            client=client,
+            model=effective_model,
+        )
+
+        # orphan cleanup: delete .md files in category dirs with no matching entity
+        valid_paths = {wiki_repo / e.category / f"{e.slug}.md" for e in rows}
+        orphans_removed = 0
+        for cat in _ENTITY_CATEGORIES:
+            cat_dir = wiki_repo / cat
+            if not cat_dir.is_dir():
+                continue
+            for md_file in cat_dir.glob("*.md"):
+                if md_file not in valid_paths:
+                    md_file.unlink()
+                    orphans_removed += 1
+                    _logger.info("removed orphan: %s", md_file)
+
+        print(  # noqa: T201
+            f"Rebuild complete: {len(written)} pages regenerated, "
+            f"{orphans_removed} orphan(s) removed."
+        )
+        return 0
+    finally:
+        conn.close()
