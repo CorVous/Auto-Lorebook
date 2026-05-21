@@ -1002,3 +1002,76 @@ class TestRunPageStepBudget:
         theron_path = tmp_path / "characters" / "theron.md"
         assert theron_path in paths
         assert theron_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# page_step.run_page_step — removed_entities param
+# ---------------------------------------------------------------------------
+
+
+class TestRunPageStepRemovedEntities:
+    def test_removed_entity_page_deleted(self, tmp_path: Path) -> None:
+        """Page file for removed entity is deleted; no LLM call for it."""
+        conn = _seed_entity_with_fact()
+        # pre-create the .md so we can assert it gets removed
+        md = tmp_path / "characters" / "theron.md"
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text("old content", encoding="utf-8")
+
+        client = MagicMock()
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[],
+            removed_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+        )
+        assert not md.exists()
+        client.complete.assert_not_called()
+
+    def test_removed_set_not_resummarized(self, tmp_path: Path) -> None:
+        """Entity in both touched and removed is not re-summarized."""
+        conn = _seed_entity_with_fact()
+        md = tmp_path / "characters" / "theron.md"
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text("old content", encoding="utf-8")
+
+        client = MagicMock()
+        run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[("characters", "theron")],
+            removed_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+        )
+        # page deleted, NOT re-summarized
+        assert not md.exists()
+        client.complete.assert_not_called()
+
+    def test_only_removed_set_runs(self, tmp_path: Path) -> None:
+        """removed_entities non-empty with empty touched_entities → page deleted."""
+        conn = _seed_entity_with_fact()
+        md = tmp_path / "characters" / "theron.md"
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text("old content", encoding="utf-8")
+
+        client = MagicMock()
+        paths = run_page_step(
+            conn=conn,
+            wiki_repo=tmp_path,
+            touched_entities=[],
+            removed_entities=[("characters", "theron")],
+            entity_index="",
+            wiki_setting="",
+            client=client,
+            model="test/model",
+        )
+        assert not md.exists()
+        # removed entity is not in the written paths (nothing written)
+        assert ("characters", "theron") not in [(p.parent.name, p.stem) for p in paths]

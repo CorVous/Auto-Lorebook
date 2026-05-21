@@ -93,6 +93,13 @@ Regeneration runs once per `review` session after all fact decisions are
 made, not per approval. Interrupted review (Ctrl-C) writes no pages;
 resuming and completing the session triggers the batch.
 
+`run_page_step` accepts an optional `removed_entities` list for
+reject-ingest reconciliation. Removed entities' pages are deleted before
+regeneration begins. Any entity in both `removed_entities` and
+`touched_entities` is treated as removed only — it is not re-summarized.
+If only `removed_entities` is supplied (no `touched_entities`), the page
+step still runs to delete those pages.
+
 ## Linked-entity propagation
 
 When a fact is approved for entity A that co-targets entity B (via `fact_targets`),

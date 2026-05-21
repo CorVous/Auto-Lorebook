@@ -530,3 +530,202 @@ class TestProposalsDirAbsent:
         assert result.stubs_deleted == 1
         # No exception; pending paths just don't exist.
         assert not reading_pipeline.pending_plan_path("yt-x").exists()
+
+
+# ---------------------------------------------------------------------------
+# Page reconciliation during reject-ingest (offline fallback path)
+# ---------------------------------------------------------------------------
+
+
+def _seed_shared_fact(
+    conn: sqlite3.Connection,
+    *,
+    fact_id: str,
+    ingest: str,
+    cat_a: str,
+    slug_a: str,
+    cat_b: str,
+    slug_b: str,
+    text: str = "A shared fact.",
+) -> None:
+    """Seed a fact co-targeting two entities."""
+    conn.execute(
+        "INSERT OR IGNORE INTO sources"
+        "(source_id, source_type, fetched_at, context_json)"
+        " VALUES (?, 'youtube', '2026-01-01T00:00:00Z', '{}')",
+        (ingest,),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO ingests(ingest_id, source_id, started_at, state)"
+        " VALUES (?, ?, '2026-01-01T00:00:00Z', 'done')",
+        (ingest, ingest),
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO facts (
+            id, text, raw_transcript_span, text_corrects_transcript,
+            text_source, edited_by_human, edited_at,
+            source_id, locator, speaker,
+            status, status_reason, session_date,
+            approved_at, created_by_ingest, claim_group_id,
+            corrections_applied_json, inputs_json
+        ) VALUES (?,?,?,0,NULL,0,NULL,?,?,?,?,NULL,?,?,?,NULL,'[]',NULL)
+        """,
+        (
+            fact_id,
+            text,
+            text,
+            ingest,
+            "0:00:01",
+            "DM",
+            "authoritative",
+            "2026-04-15",
+            "2026-04-20T00:00:00Z",
+            ingest,
+        ),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO fact_targets"
+        "(fact_id, entity_category, entity_slug, section)"
+        " VALUES (?,?,?,?)",
+        (fact_id, cat_a, slug_a, "s1"),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO fact_targets"
+        "(fact_id, entity_category, entity_slug, section)"
+        " VALUES (?,?,?,?)",
+        (fact_id, cat_b, slug_b, "s2"),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO fact_status_history(fact_id, status, at, by, reason)"
+        " VALUES (?,?,?,?,NULL)",
+        (fact_id, "authoritative", "2026-04-20T00:00:00Z", "test"),
+    )
+
+
+class TestPageReconciliation:
+    """reject_ingest page reconciliation via offline fallback."""
+
+    def test_removed_entity_md_deleted(self, cfg: cfg_mod.Config) -> None:
+        """Removed entity's .md is deleted after reject-ingest."""
+        wiki = cfg.resolve_active_wiki(None)
+        conn = _open_db(wiki)
+        _seed_entity(
+            conn,
+            name="Aldara",
+            category="locations",
+            slug="aldara",
+            created_by_ingest="yt-x",
+        )
+        _seed_fact(conn, fact_id="f001", ingest="yt-x")
+        conn.close()
+        # pre-create .md
+        md = wiki / "locations" / "aldara.md"
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text("old content", encoding="utf-8")
+
+        reject_ingest(cfg, "yt-x")
+
+        assert not md.exists()
+
+    def test_linked_survivor_resummarized(self, cfg: cfg_mod.Config) -> None:
+        """Survivor linked to deleted entity has its .md regenerated."""
+        wiki = cfg.resolve_active_wiki(None)
+        conn = _open_db(wiki)
+        # aldara: created by yt-x, will be fully removed
+        _seed_entity(
+            conn,
+            name="Aldara",
+            category="locations",
+            slug="aldara",
+            created_by_ingest="yt-x",
+        )
+        # theron: survivor created by other-ingest
+        _seed_entity(
+            conn,
+            name="Theron",
+            category="characters",
+            slug="theron",
+            created_by_ingest="other-ingest",
+        )
+        # shared fact: links aldara (yt-x) and theron (other-ingest)
+        _seed_shared_fact(
+            conn,
+            fact_id="shared-f001",
+            ingest="yt-x",
+            cat_a="locations",
+            slug_a="aldara",
+            cat_b="characters",
+            slug_b="theron",
+        )
+        # theron also has an independent fact from other-ingest
+        _seed_fact(
+            conn,
+            fact_id="theron-f001",
+            ingest="other-ingest",
+            entity_category="characters",
+            entity_slug="theron",
+        )
+        conn.close()
+
+        # pre-create old .md files
+        aldara_md = wiki / "locations" / "aldara.md"
+        aldara_md.parent.mkdir(parents=True, exist_ok=True)
+        aldara_md.write_text("old aldara", encoding="utf-8")
+        theron_md = wiki / "characters" / "theron.md"
+        theron_md.parent.mkdir(parents=True, exist_ok=True)
+        theron_md.write_text("old theron", encoding="utf-8")
+
+        reject_ingest(cfg, "yt-x")
+
+        # aldara's page gone; theron's page regenerated (new content)
+        assert not aldara_md.exists()
+        assert theron_md.exists()
+        assert theron_md.read_text(encoding="utf-8") != "old theron"
+
+    def test_survivor_zero_facts_renders_stub(self, cfg: cfg_mod.Config) -> None:
+        """Survivor with zero facts post-rejection renders mechanical stub."""
+        wiki = cfg.resolve_active_wiki(None)
+        conn = _open_db(wiki)
+        # theron: created by other-ingest, has only the yt-x shared fact
+        _seed_entity(
+            conn,
+            name="Theron",
+            category="characters",
+            slug="theron",
+            created_by_ingest="other-ingest",
+        )
+        # aldara: will be removed entirely
+        _seed_entity(
+            conn,
+            name="Aldara",
+            category="locations",
+            slug="aldara",
+            created_by_ingest="yt-x",
+        )
+        # shared fact from yt-x: when rejected, theron loses it → zero facts remain
+        _seed_shared_fact(
+            conn,
+            fact_id="shared-f002",
+            ingest="yt-x",
+            cat_a="locations",
+            slug_a="aldara",
+            cat_b="characters",
+            slug_b="theron",
+        )
+        conn.close()
+
+        theron_md = wiki / "characters" / "theron.md"
+        theron_md.parent.mkdir(parents=True, exist_ok=True)
+        theron_md.write_text("old theron", encoding="utf-8")
+        aldara_md = wiki / "locations" / "aldara.md"
+        aldara_md.parent.mkdir(parents=True, exist_ok=True)
+        aldara_md.write_text("old aldara", encoding="utf-8")
+
+        reject_ingest(cfg, "yt-x")
+
+        # aldara gone; theron stub written (heading only)
+        assert not aldara_md.exists()
+        assert theron_md.exists()
+        stub_text = theron_md.read_text(encoding="utf-8")
+        assert "# Theron" in stub_text
