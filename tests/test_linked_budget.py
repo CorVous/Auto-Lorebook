@@ -110,20 +110,21 @@ def test_shared_facts_kept_over_nonshared_when_tight() -> None:
     ent = _entity("theron")
     # shared fact — id in subject_fact_ids
     shared = _fact("f-shared", "Shared fact.", status="hearsay")
-    # non-shared authoritative
+    # non-shared authoritative, large enough that entity doesn't fit with both facts
     non_shared = _fact("f-own", "X" * 300, status="authoritative")
 
-    # budget just fits one fact's worth of tokens
-    # shared text is short; non_shared is long; tight budget keeps shared
+    # budget=75: both facts ≈100 tokens (doesn't fit);
+    # shared-only ≈17 tokens (fits) → fact-level trim keeps shared, drops non-shared
     result = budget_linked_context(
         [(ent, [non_shared, shared])],
         subject_fact_ids={"f-shared"},
-        context_window=40,  # very small
+        context_window=300,
         budget_fraction=0.25,
     )
-    if result:
-        included_ids = {f.id for f in result[0][1]}
-        assert "f-shared" in included_ids
+    assert result, "entity should fit after dropping low-priority non-shared fact"
+    included_ids = {f.id for f in result[0][1]}
+    assert "f-shared" in included_ids
+    assert "f-own" not in included_ids
 
 
 def test_hearsay_dropped_before_authoritative() -> None:
@@ -144,6 +145,27 @@ def test_hearsay_dropped_before_authoritative() -> None:
     assert "f-hearsay" in ids
 
 
+def test_hearsay_dropped_before_authoritative_tight() -> None:
+    """Tight budget: hearsay dropped, authoritative kept within same entity."""
+    ent = _entity("theron")
+    # auth is short; hearsay is long; together they exceed the budget
+    auth_fact = _fact("f-auth", "Authoritative fact.", status="authoritative")
+    hearsay_fact = _fact("f-hearsay", "H" * 300, status="hearsay")
+
+    # entity with both ≈ 90+ tokens; auth-only ≈ 20 tokens
+    # budget=50 → auth-only fits, combined doesn't
+    result = budget_linked_context(
+        [(ent, [hearsay_fact, auth_fact])],
+        subject_fact_ids=set(),
+        context_window=200,
+        budget_fraction=0.25,
+    )
+    assert result, "entity should fit after dropping hearsay"
+    ids = {f.id for f in result[0][1]}
+    assert "f-auth" in ids
+    assert "f-hearsay" not in ids
+
+
 def test_disproven_dropped_before_hearsay() -> None:
     """Disproven dropped before hearsay in trim order."""
     ent = _entity("theron")
@@ -162,23 +184,46 @@ def test_disproven_dropped_before_hearsay() -> None:
     assert "f-disproven" in ids
 
 
-def test_nonshared_disproven_dropped_first() -> None:
-    """Non-shared disproven dropped before non-shared hearsay."""
+def test_disproven_dropped_before_hearsay_tight() -> None:
+    """Tight budget: disproven dropped, hearsay kept within same entity."""
     ent = _entity("theron")
-    # two long facts; budget only fits one
-    disproven = _fact("f-disproven", "D" * 400, status="disproven")
-    hearsay = _fact("f-hearsay", "H" * 400, status="hearsay")
+    # both long; together they exceed the budget; disproven has lower priority
+    hearsay = _fact("f-hearsay", "H" * 300, status="hearsay")
+    disproven = _fact("f-disproven", "D" * 300, status="disproven")
 
+    # entity with both ≈ 175 tokens; hearsay-only ≈ 85 tokens
+    # budget=100 → hearsay-only fits, combined doesn't
     result = budget_linked_context(
         [(ent, [disproven, hearsay])],
         subject_fact_ids=set(),
-        context_window=400,  # fits roughly one fact
+        context_window=400,
         budget_fraction=0.25,
     )
-    if result:
-        included_ids = {f.id for f in result[0][1]}
-        # hearsay kept over disproven
-        assert "f-disproven" not in included_ids or "f-hearsay" in included_ids
+    assert result, "entity should fit after dropping disproven"
+    ids = {f.id for f in result[0][1]}
+    assert "f-hearsay" in ids
+    assert "f-disproven" not in ids
+
+
+def test_nonshared_disproven_dropped_first() -> None:
+    """Non-shared disproven dropped before non-shared hearsay."""
+    ent = _entity("theron")
+    # two long facts; budget fits one but not both
+    disproven = _fact("f-disproven", "D" * 400, status="disproven")
+    hearsay = _fact("f-hearsay", "H" * 400, status="hearsay")
+
+    # entity with both ≈ 223 tokens; hearsay-only ≈ 114 tokens
+    # budget=150 → hearsay-only fits, combined doesn't
+    result = budget_linked_context(
+        [(ent, [disproven, hearsay])],
+        subject_fact_ids=set(),
+        context_window=600,
+        budget_fraction=0.25,
+    )
+    assert result, "entity should fit after dropping disproven"
+    included_ids = {f.id for f in result[0][1]}
+    assert "f-hearsay" in included_ids
+    assert "f-disproven" not in included_ids
 
 
 # ---------------------------------------------------------------------------

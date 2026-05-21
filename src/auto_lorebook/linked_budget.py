@@ -14,7 +14,7 @@ _logger = logging.getLogger(__name__)
 LinkedContext = list[tuple["EntityRow", list["FactRow"]]]
 
 # priority order: shared > non-shared authoritative > non-shared trustworthy;
-# drop non-shared hearsay before disproven (both non-shared)
+# drop non-shared disproven before hearsay (both non-shared)
 _STATUS_PRIORITY: dict[str, int] = {
     "authoritative": 1,
     "trustworthy": 2,
@@ -132,7 +132,19 @@ def budget_linked_context(
         if used + cost <= budget:
             result.append((ent, facts))
             used += cost
-        # else: skip this entity — over budget
+            continue
+        # entity over budget: fact-level trim — drop lowest-priority facts from tail
+        trimmed = list(facts)
+        while trimmed:
+            trimmed.pop()  # drop lowest-priority fact (tail of sorted list)
+            if not trimmed:
+                break  # no facts left — skip entity entirely
+            block = _render_for_estimate(ent, trimmed)
+            cost = _estimate_tokens(block)
+            if used + cost <= budget:
+                result.append((ent, trimmed))
+                used += cost
+                break
 
     # hard check: if fact text alone exceeds budget, no trimming can help → raise
     if not result and ordered:
