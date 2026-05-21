@@ -118,7 +118,7 @@ default 0.25).
 1. Shared facts (fact targets both the subject entity and the linked entity).
 2. Non-shared authoritative facts.
 3. Non-shared trustworthy facts.
-4. Non-shared hearsay facts (dropped before disproven).
+4. Non-shared hearsay facts (dropped after disproven).
 5. Non-shared disproven facts (dropped first when over budget).
 
 **Entity ranking**: entities with more shared facts appear first (nearest-first);
