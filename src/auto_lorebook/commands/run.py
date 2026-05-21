@@ -18,6 +18,7 @@ from auto_lorebook.commands import generate_reading as generate_reading_cmd
 from auto_lorebook.commands import ingest as ingest_cmd
 from auto_lorebook.commands import plan as plan_cmd
 from auto_lorebook.commands import review as review_cmd
+from auto_lorebook.commands._shared import load_or_create_config
 from auto_lorebook.interactive import _is_interactive
 from auto_lorebook.pipeline_state import Stage, first_missing_stage
 
@@ -181,10 +182,14 @@ def _build_stage_args(
 def run(args: argparse.Namespace) -> int:
     """Execute the run command: loop through stages until done."""
     try:
-        cfg = cfg_mod.load_config()
+        cfg = load_or_create_config(
+            no_interactive=getattr(args, "no_interactive", False)
+        )
     except cfg_mod.ConfigError as e:
         _logger.error("%s", e)
         return 1
+    except KeyboardInterrupt:
+        return 130
 
     wiki_override: str | None = getattr(args, "wiki", None)
     # url_or_sid = real positional; source_id = --source-id flag override.

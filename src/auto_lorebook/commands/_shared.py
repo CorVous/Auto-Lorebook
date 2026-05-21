@@ -46,6 +46,20 @@ def resolve_wiki(cfg: cfg_mod.Config, args: argparse.Namespace) -> Path:
     return cfg.resolve_active_wiki(override)
 
 
+def load_or_create_config(*, no_interactive: bool) -> cfg_mod.Config:
+    """Load config; run first-run interactive setup when it's missing.
+
+    :raises MissingConfigError: config absent and no_interactive set
+    :raises KeyboardInterrupt: user aborted setup
+    """
+    try:
+        return cfg_mod.load_config()
+    except cfg_mod.MissingConfigError:
+        if no_interactive:
+            raise
+        return cfg_mod.interactive_setup()
+
+
 def finalize_context(
     info: Info,
     info_path: Path,
