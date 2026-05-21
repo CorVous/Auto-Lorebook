@@ -33,8 +33,9 @@ inside each wiki under `<wiki>/.wiki-state/`. See
 [repository layout](../architecture/repository-layout.md) for the
 full split.
 
-On first invocation of `auto-lorebook ingest`, the tool detects a
-missing `~/.auto-lorebook/config.yaml` and prompts for:
+On the first invocation of `auto-lorebook ingest` or `auto-lorebook
+run`, the tool detects a missing `~/.auto-lorebook/config.yaml` and
+prompts for:
 
 - A nickname for your first wiki.
 - The wiki repo path (registered with that nickname and marked active).

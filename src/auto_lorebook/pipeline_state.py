@@ -34,16 +34,20 @@ def first_missing_stage(
 
     Detector table:
       INGEST           : sources row exists in DB (lazy-backfills from info.yaml)
-      GENERATE_READING : ingests row exists (DB-backed reading state)
+      GENERATE_READING : segments rows exist (Stage 1a structure written)
       APPROVE_READING  : <wiki>/sources/<sid>/reading.md exists
       PLAN             : pending/<sid>/plan.yaml exists
       EXTRACT          : pending/<sid>/proposals/ absent
       REVIEW           : pending/<sid>/proposals/ exists and non-empty
       done             : proposals dir exists and empty
+
+    GENERATE_READING keys off segments, not the ingests row: `ingest`
+    creates a bare ingests row, so its presence cannot distinguish
+    "ingested" from "reading generated".
     """
     from auto_lorebook import db as db_mod  # noqa: PLC0415
     from auto_lorebook import info_yaml as info_yaml_mod  # noqa: PLC0415
-    from auto_lorebook import reading_sidecar as sidecar_mod  # noqa: PLC0415
+    from auto_lorebook import structure_store as structure_store_mod  # noqa: PLC0415
 
     wiki_root: Path = cfg.resolve_active_wiki(wiki_override)
 
@@ -53,8 +57,8 @@ def first_missing_stage(
         if not ingested:
             return Stage.INGEST
 
-        # check DB for reading state
-        has_reading_state = sidecar_mod.exists(conn, source_id)
+        # Stage 1a writes segments; bare ingests row alone is not enough
+        has_reading_state = structure_store_mod.has_structure(conn, source_id)
     finally:
         conn.close()
 

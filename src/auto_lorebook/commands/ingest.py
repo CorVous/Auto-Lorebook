@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from auto_lorebook import config as cfg_mod
 from auto_lorebook import info_yaml, source_store, ytdlp
 from auto_lorebook import source_id as sid_mod
-from auto_lorebook.commands._shared import finalize_context
+from auto_lorebook.commands._shared import finalize_context, load_or_create_config
 from auto_lorebook.timestamps import format_iso_now
 
 if TYPE_CHECKING:
@@ -115,7 +115,7 @@ def add_parser(
 def run(args: argparse.Namespace) -> int:
     """Execute the ingest command."""
     try:
-        cfg = _load_or_create_config(no_interactive=args.no_interactive)
+        cfg = load_or_create_config(no_interactive=args.no_interactive)
     except cfg_mod.ConfigError as e:
         _logger.error("%s", e)
         return 1
@@ -127,15 +127,6 @@ def run(args: argparse.Namespace) -> int:
     if args.url_or_path.startswith(("http://", "https://")):
         return _run_from_url(args, cfg, wiki_repo)
     return _run_from_local(args, cfg, wiki_repo)
-
-
-def _load_or_create_config(*, no_interactive: bool) -> cfg_mod.Config:
-    try:
-        return cfg_mod.load_config()
-    except cfg_mod.MissingConfigError:
-        if no_interactive:
-            raise
-        return cfg_mod.interactive_setup()
 
 
 @dataclass

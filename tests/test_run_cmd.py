@@ -24,12 +24,14 @@ def _args(
     *,
     yes: bool = False,
     auto_approve: bool = False,
+    no_interactive: bool = False,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         source_id=source_id,
         wiki=wiki,
         yes=yes,
         auto_approve=auto_approve,
+        no_interactive=no_interactive,
     )
 
 
@@ -256,6 +258,39 @@ def test_config_error_returns_1() -> None:
         result = run_cmd.run(_args())
 
     assert result == 1
+
+
+def test_first_run_triggers_interactive_setup() -> None:
+    """Missing config.yaml invokes interactive_setup when interactive."""
+    setup_mock = MagicMock(return_value=MagicMock())
+    with (
+        patch(
+            "auto_lorebook.commands.run.cfg_mod.load_config",
+            side_effect=cfg_mod.MissingConfigError("not found"),
+        ),
+        patch("auto_lorebook.commands.run.cfg_mod.interactive_setup", setup_mock),
+        patch("auto_lorebook.commands.run.first_missing_stage", return_value=None),
+    ):
+        result = run_cmd.run(_args())
+
+    assert setup_mock.called
+    assert result == 0
+
+
+def test_first_run_no_interactive_returns_1() -> None:
+    """`--no-interactive` surfaces the missing-config error without prompting."""
+    setup_mock = MagicMock()
+    with (
+        patch(
+            "auto_lorebook.commands.run.cfg_mod.load_config",
+            side_effect=cfg_mod.MissingConfigError("not found"),
+        ),
+        patch("auto_lorebook.commands.run.cfg_mod.interactive_setup", setup_mock),
+    ):
+        result = run_cmd.run(_args(no_interactive=True))
+
+    assert result == 1
+    assert not setup_mock.called
 
 
 # ---------------------------------------------------------------------------

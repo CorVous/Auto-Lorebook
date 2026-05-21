@@ -37,7 +37,11 @@ def _mk_info_yaml(wiki: Path, sid: str) -> None:
 
 
 def _mk_reading_sidecar(wiki: Path, sid: str) -> None:
-    """Seed ingests row in wiki DB (DB-backed reading state)."""
+    """Seed bare ingests row in wiki DB — mirrors what `ingest` writes.
+
+    `ingest` creates this row via `record_in_db`; it does NOT mean the
+    reading has been generated. Generate-reading is detected by segments.
+    """
     from auto_lorebook import db as db_mod  # noqa: PLC0415
     from auto_lorebook import wiki_state  # noqa: PLC0415
 
@@ -54,6 +58,24 @@ def _mk_reading_sidecar(wiki: Path, sid: str) -> None:
             " name_corrections_json, session_date) "
             "VALUES (?,?,?,'reading',NULL,'{}',NULL)",
             (sid, sid, "2026-01-01T00:00:00Z"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _mk_structure(wiki: Path, sid: str) -> None:
+    """Seed a segments row (Stage 1a output) — generate-reading done."""
+    from auto_lorebook import db as db_mod  # noqa: PLC0415
+    from auto_lorebook import wiki_state  # noqa: PLC0415
+
+    _mk_reading_sidecar(wiki, sid)
+    conn = db_mod.open(wiki_state.wiki_db_path(wiki))
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO segments "
+            "(ingest_id, segment_id, start, end, title) VALUES (?,?,?,?,?)",
+            (sid, "seg-001", "0:00:00", "0:01:00", "Opening"),
         )
         conn.commit()
     finally:
@@ -101,10 +123,12 @@ SID = "yt-abc12345678"
         ([], Stage.INGEST),
         # info.yaml only → GENERATE_READING
         ([_mk_info_yaml], Stage.GENERATE_READING),
-        # info.yaml + reading sidecar → APPROVE_READING
-        ([_mk_info_yaml, _mk_reading_sidecar], Stage.APPROVE_READING),
-        # info.yaml + reading sidecar + wiki reading.md → PLAN
-        ([_mk_info_yaml, _mk_reading_sidecar, _mk_wiki_reading], Stage.PLAN),
+        # info.yaml + bare ingests row (post-ingest) → still GENERATE_READING
+        ([_mk_info_yaml, _mk_reading_sidecar], Stage.GENERATE_READING),
+        # info.yaml + segments (reading generated) → APPROVE_READING
+        ([_mk_info_yaml, _mk_structure], Stage.APPROVE_READING),
+        # info.yaml + segments + wiki reading.md → PLAN
+        ([_mk_info_yaml, _mk_structure, _mk_wiki_reading], Stage.PLAN),
         # info.yaml + wiki reading.md + plan.yaml + absent proposals dir → EXTRACT
         (
             [_mk_info_yaml, _mk_wiki_reading, _mk_plan_yaml],
@@ -124,8 +148,9 @@ SID = "yt-abc12345678"
     ids=[
         "empty→INGEST",
         "info.yaml→GENERATE_READING",
-        "sidecar→APPROVE_READING",
-        "wiki-reading→PLAN",
+        "bare-ingests→GENERATE_READING",
+        "structure→APPROVE_READING",
+        "structure+wiki-reading→PLAN",
         "plan+absent-proposals→EXTRACT",
         "plan+proposals→REVIEW",
         "plan+empty-proposals→None",
