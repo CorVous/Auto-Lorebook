@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
     from auto_lorebook.info_yaml import Info
     from auto_lorebook.reading_sidecar import IngestState
+    from auto_lorebook.srt import Cue
+    from auto_lorebook.transcript import LoadedTranscript
 
 _EMPTY_MARKER = "_No claims extracted from this segment._"
 
@@ -105,6 +107,70 @@ def build_segment_body(
             else:
                 parts.append(f"- {text} [{anchor_ts}]")
     return "\n\n".join(parts) + "\n"
+
+
+def build_segment_review_body(
+    *,
+    seg_bullets: list,
+    flags: list[dict],
+    source_url: str | None,
+    name_corrections: dict[str, str],
+    transcript: LoadedTranscript | None,
+) -> str:
+    """Per-segment review body for `approve-reading`.
+
+    Each claim bullet is followed by the verbatim transcript cues behind it —
+    cues overlapping the bullet's `locator_hint` window. Interactive-display
+    only; never written to `reading.md`.
+
+    Falls back to plain `build_segment_body` output when `transcript` is None
+    or has no cues (plain-text source).
+    """
+    cues = transcript.cues if transcript is not None else None
+    if not cues:
+        return build_segment_body(
+            seg_bullets=seg_bullets,
+            flags=flags,
+            source_url=source_url,
+            name_corrections=name_corrections,
+        )
+
+    parts: list[str] = []
+    for flag in flags:
+        locator = parse_timestamp(str(flag.get("locator") or "0:00:00"))
+        ts = format_timestamp(locator)
+        kind = flag.get("kind", "other")
+        span = flag.get("span", "")
+        note = flag.get("note")
+        note_str = f"; {note}" if note else ""
+        parts.append(f"- [{ts}] uncertain {kind}: {span}{note_str}")
+    if not seg_bullets:
+        parts.append(_EMPTY_MARKER)
+    else:
+        for b in seg_bullets:
+            text = apply_name_corrections(b.text, name_corrections)
+            anchor_ts = format_timestamp(b.anchor)
+            link = linkify_timestamp(source_url, b.anchor)
+            bullet = (
+                f"- {text} [[{anchor_ts}]]({link})"
+                if link
+                else f"- {text} [{anchor_ts}]"
+            )
+            window = _transcript_window_block(
+                cues, b.locator_hint_start, b.locator_hint_end
+            )
+            parts.append(f"{bullet}\n{window}")
+    return "\n\n".join(parts) + "\n"
+
+
+def _transcript_window_block(cues: tuple[Cue, ...], start: float, end: float) -> str:
+    """Indented verbatim transcript lines for cues overlapping `[start, end)`."""
+    kept = [c for c in cues if c.end > start and c.start < end]
+    label = f"    transcript {format_timestamp(start)}-{format_timestamp(end)}:"
+    if not kept:
+        return f"{label} (no transcript lines in window)"
+    lines = "\n".join(f"      [{format_timestamp(c.start)}] {c.text}" for c in kept)
+    return f"{label}\n{lines}"
 
 
 def _render_frontmatter(info: Info, sidecar: IngestState) -> str:
