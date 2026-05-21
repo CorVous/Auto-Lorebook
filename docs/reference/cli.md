@@ -165,6 +165,16 @@ must already exist on disk.
 `wiki rename` renames an entry in place. If the renamed entry is active,
 `active_wiki` is updated to the new nickname.
 
+```bash
+auto-lorebook wiki rebuild
+```
+
+Regenerates every entity page from scratch using the page step (prose +
+linked-entity propagation) and reconciles the filesystem against the DB
+— deletes any `.md` file in the entity-category subdirectories with no
+matching entity. Use after corruption, a crashed page step, or a prompt
+change. Staleness-skip is future work.
+
 ### `--wiki` override flag
 
 ```bash

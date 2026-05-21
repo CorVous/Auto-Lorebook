@@ -362,6 +362,107 @@ def _args(**kwargs: object) -> argparse.Namespace:
     return argparse.Namespace(**kwargs)
 
 
+class TestReviewWritesLLMProse:
+    """Regression: review path must call run_page_step with a real client."""
+
+    def test_review_passes_real_client_to_page_step(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """review_cmd.run() must build a client and pass it to run_page_step.
+
+        Asserts run_page_step is called with a non-None client, and that the
+        resulting .md contains LLM prose text (not a mechanical bullet list).
+        """
+        _write_user_config(tmp_home, ingested_wiki)
+        monkeypatch.setenv("FAKE_OR_KEY", "sk-fake")
+
+        pipeline_client = MagicMock()
+        _wire_client_responses(pipeline_client)
+
+        prose_text = (
+            "Aldara is an ancient city founded by King Theron in the Second Age."
+        )
+        # fake client returned by OpenRouterClient constructor in review module
+        review_client = MagicMock()
+
+        captured_client: list[object] = []
+
+        def _fake_run_page_step(
+            _conn: object,
+            wiki_repo: object,
+            touched_entities: list[tuple[str, str]],
+            *,
+            entity_index: str = "",  # noqa: ARG001
+            wiki_setting: str = "",  # noqa: ARG001
+            client: object,
+            model: str = "",  # noqa: ARG001
+            context_window: int = 200_000,  # noqa: ARG001
+            budget_fraction: float = 0.25,  # noqa: ARG001
+        ) -> list[object]:
+            from pathlib import Path as _Path  # noqa: PLC0415
+
+            captured_client.append(client)
+            paths = []
+            for category, slug in touched_entities:
+                p = _Path(str(wiki_repo)) / category / f"{slug}.md"
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(
+                    f"# {slug.capitalize()}\n\n## Summary\n\n{prose_text}\n",
+                    encoding="utf-8",
+                )
+                paths.append(p)
+            return paths
+
+        with (
+            patch(
+                "auto_lorebook.reading_pipeline.OpenRouterClient",
+                return_value=pipeline_client,
+            ),
+            patch(
+                "auto_lorebook.review.OpenRouterClient",
+                return_value=review_client,
+            ),
+            patch(
+                "auto_lorebook.review.page_step_mod.run_page_step",
+                side_effect=_fake_run_page_step,
+            ),
+        ):
+            generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
+            assert (
+                approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
+                == 0
+            )
+            plan_cmd.run(_args(source_id="yt-abc12345678"))
+            extract_cmd.run(_args(source_id="yt-abc12345678"))
+            rc = review_cmd.run(_args(source_id="yt-abc12345678", auto_approve=True))
+
+        assert rc == 0
+        # run_page_step must have been called with a real (non-None) client
+        assert len(captured_client) == 1, "run_page_step was not called"
+        assert captured_client[0] is not None, "run_page_step received client=None"
+        assert captured_client[0] is review_client, (
+            "run_page_step received wrong client; "
+            "expected the one built by review.run()"
+        )
+        md_path = ingested_wiki / "locations" / "aldara.md"
+        assert md_path.exists()
+        content = md_path.read_text(encoding="utf-8")
+        # prose path: LLM-generated prose appears in the page
+        assert prose_text in content
+        capsys.readouterr()
+
+
+def _make_review_client() -> MagicMock:
+    """Stub review-phase client: returns valid stage4 prose JSON for any entity."""
+    c = MagicMock()
+    c.complete.return_value = MagicMock(text='{"prose": "Stub prose."}')
+    return c
+
+
 class TestAutoApprove:
     def test_full_pipeline_lands_a_fact_in_entity_yaml(
         self,
@@ -375,8 +476,14 @@ class TestAutoApprove:
 
         client = MagicMock()
         _wire_client_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        with (
+            patch(
+                "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+            ),
+            patch(
+                "auto_lorebook.review.OpenRouterClient",
+                return_value=_make_review_client(),
+            ),
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
             assert (
@@ -427,8 +534,14 @@ class TestEmptyDir:
 
         client = MagicMock()
         _wire_client_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        with (
+            patch(
+                "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+            ),
+            patch(
+                "auto_lorebook.review.OpenRouterClient",
+                return_value=_make_review_client(),
+            ),
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
             approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=True))
@@ -490,8 +603,14 @@ class TestMultiTargetBundle:
 
         client = MagicMock()
         _wire_multi_target_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        with (
+            patch(
+                "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+            ),
+            patch(
+                "auto_lorebook.review.OpenRouterClient",
+                return_value=_make_review_client(),
+            ),
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
             assert (
@@ -551,6 +670,7 @@ class TestMultiTargetBundle:
             cfg=cfg_mod.load_config(),
             source_id="yt-abc12345678",
             reviewer=_DropFirstRouteReviewer(),
+            client=_make_review_client(),
         )
 
         # Theron and Second Age stubs exist; Aldara's proposal was dropped.
@@ -820,8 +940,14 @@ class TestInteractiveReviewerUndoIntegration:
 
         client = MagicMock()
         _wire_multi_target_responses(client)
-        with patch(
-            "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+        with (
+            patch(
+                "auto_lorebook.reading_pipeline.OpenRouterClient", return_value=client
+            ),
+            patch(
+                "auto_lorebook.review.OpenRouterClient",
+                return_value=_make_review_client(),
+            ),
         ):
             generate_reading_cmd.run(_args(source_id="yt-abc12345678"))
             assert (

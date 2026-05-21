@@ -65,8 +65,10 @@ YouTube URL / SRT / text file
   facts and entities enter the wiki. First approval of a claim
   targeting a new entity creates the entity stub atomically.
 - **[Stage 4: Summarizer](../pipeline/summarizer.md)** — regenerates
-  readable entity prose from approved facts. The YAML is truth; the
-  markdown is a view.
+  readable entity prose from approved facts. Propagates one hop to
+  linked entities (co-targets via `fact_targets`); each entity's prompt
+  includes linked-entity facts for cross-entity synthesis (B2 content model).
+  The YAML is truth; the markdown is a view.
 
 ## Two gates, not three
 

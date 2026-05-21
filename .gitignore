@@ -14,3 +14,6 @@ src/*/_version.py
 
 # MkDocs build output
 site/
+
+# Agent worktree scratch space
+.claude/worktrees/

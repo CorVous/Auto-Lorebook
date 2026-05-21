@@ -22,12 +22,14 @@ from auto_lorebook import config as cfg_mod
 from auto_lorebook import db as db_mod
 from auto_lorebook import entities as entities_mod
 from auto_lorebook import info_yaml as info_yaml_mod
+from auto_lorebook import page_step as page_step_mod
 from auto_lorebook import plan_yaml as plan_yaml_mod
 from auto_lorebook import proposal_yaml as proposal_yaml_mod
-from auto_lorebook import summary_regen as summary_regen_mod
+from auto_lorebook import wiki_context as wiki_context_mod
 from auto_lorebook.approval import ApprovalResult
 from auto_lorebook.entities import slugify
 from auto_lorebook.entity_yaml import normalize_alias_name
+from auto_lorebook.openrouter import OpenRouterClient
 from auto_lorebook.timestamps import format_iso_now
 
 if TYPE_CHECKING:
@@ -370,6 +372,8 @@ class _ApprovalContext:
     conn: sqlite3.Connection
     merged_aliases: set[tuple[str, str]] = field(default_factory=set)
     declined_aliases: set[tuple[str, str]] = field(default_factory=set)
+    # (category, slug) pairs approved during this review session
+    touched_entities: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _resolve_target(
@@ -543,14 +547,17 @@ def run(
     source_id: str,
     reviewer: Reviewer,
     wiki_override: str | None = None,
+    client: OpenRouterClient | None = None,
+    model: str | None = None,
 ) -> ReviewResult:
-    """Walk pending bundles; approve into DB; write .md files; return counts.
+    """Walk pending bundles; approve into DB; write .md pages; return counts.
 
     Each claim group is one `Proposal` with N `ProposalTarget` entries;
     surfaced as a single `BundleView`; one `decide_bundle` call covers
     every target. approved/edited/rejected count proposals, not targets.
+    On completion, runs the page step for all touched entities (batched).
     KeyboardInterrupt propagates after recording the count of proposals
-    left in DB as `remaining`.
+    left in DB as `remaining`; interrupted reviews write no pages.
     """
     wiki_repo = cfg.resolve_active_wiki(wiki_override)
     from auto_lorebook import wiki_state as wiki_state_mod  # noqa: PLC0415
@@ -594,6 +601,38 @@ def run(
             except KeyboardInterrupt:
                 result.remaining = _count_remaining(conn, source_id)
                 raise
+
+        # page step: batched regeneration for all touched entities
+        if ctx.touched_entities:
+            if client is None:
+                api_key = cfg.get_api_key()
+                if not api_key:
+                    msg = (
+                        "OpenRouter API key not found. Either export "
+                        f"${cfg.openrouter.api_key_env} or store the key in "
+                        "~/.auto-lorebook/credentials."
+                    )
+                    raise ReviewError(msg)
+                client = OpenRouterClient(
+                    api_key=api_key,
+                    default_model=cfg.models.summarizer or cfg.models.primary,
+                    app_title="auto-lorebook",
+                )
+            effective_model = model or (cfg.models.summarizer or cfg.models.primary)
+            wiki_ctx = wiki_context_mod.read(conn, wiki_repo=wiki_repo)
+            wiki_setting = wiki_ctx.setting.description or ""
+            entity_index = entities_mod.render_for_preamble(conn)
+            page_step_mod.run_page_step(
+                conn,
+                wiki_repo,
+                ctx.touched_entities,
+                entity_index=entity_index,
+                wiki_setting=wiki_setting,
+                client=client,
+                model=effective_model,
+                context_window=cfg.models.primary_context_window,
+                budget_fraction=cfg.summarizer.linked_context_budget_fraction,
+            )
         return result
     finally:
         conn.close()
@@ -704,18 +743,11 @@ def _process_bundle(
             ctx.merged_aliases.add((target_key, normalize_alias_name(alias_name)))
 
     if approval_result == ApprovalResult.APPROVED:
-        # regen .md per target only after the fact is committed
+        # collect touched entities for batched page step at review completion
         for category, slug, _section in targets_resolved:
-            try:
-                summary_regen_mod.regenerate_entity(
-                    ctx.conn, ctx.wiki_repo, category, slug
-                )
-            except ValueError:
-                _logger.warning(
-                    "review: regenerate_entity failed for %s/%s; .md not written",
-                    category,
-                    slug,
-                )
+            entry = (category, slug)
+            if entry not in ctx.touched_entities:
+                ctx.touched_entities.append(entry)
         if bundle_edits is not None:
             result.edited += 1
         else:
@@ -725,4 +757,4 @@ def _process_bundle(
                 result.edited += 1
             else:
                 result.approved += 1
-    # SKIPPED_IDEMPOTENT: no counter increment, no regen
+    # SKIPPED_IDEMPOTENT: no counter increment, no page regeneration

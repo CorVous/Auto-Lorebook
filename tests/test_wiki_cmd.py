@@ -11,7 +11,7 @@ import yaml
 from auto_lorebook import config as cfg_mod
 from auto_lorebook.cli import create_parser
 from auto_lorebook.commands import wiki_cmd
-from auto_lorebook.commands._shared import resolve_wiki  # noqa: PLC2701
+from auto_lorebook.commands._shared import resolve_wiki
 from auto_lorebook.config import ConfigError
 
 if TYPE_CHECKING:
@@ -485,3 +485,296 @@ class TestWikiOverrideFlag:
         resolve_wiki(cfg, args)
         after = yaml.safe_load((tmp_home / "config.yaml").read_text(encoding="utf-8"))
         assert before == after
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 — wiki rebuild
+# ---------------------------------------------------------------------------
+
+
+def _make_rebuild_ns(**kwargs: object) -> argparse.Namespace:
+    base: dict[str, object] = {"wiki_action": "rebuild", "wiki": None, "force": False}
+    base.update(kwargs)
+    return argparse.Namespace(**base)
+
+
+def _seed_wiki_db(wiki_repo: Path) -> None:
+    """Initialise wiki DB with two entities and stub facts."""
+    from auto_lorebook import db, wiki_state  # noqa: PLC0415
+    from auto_lorebook.facts import create_fact_with_target  # noqa: PLC0415
+
+    conn = db.open(wiki_state.wiki_db_path(wiki_repo))
+    try:
+        conn.execute(
+            "INSERT INTO sources(source_id, source_type, fetched_at, context_json)"
+            " VALUES ('src-001', 'youtube', '2026-01-01T00:00:00Z', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO ingests(ingest_id, source_id, started_at, state)"
+            " VALUES ('ing-001', 'src-001', '2026-01-01T00:00:00Z', 'done')"
+        )
+        conn.execute(
+            "INSERT INTO entities(category, slug, canonical_name, created_at,"
+            " created_by_ingest, updated_at)"
+            " VALUES ('characters', 'theron', 'Theron',"
+            " '2026-01-01T00:00:00Z', 'ing-001', '2026-01-01T00:00:00Z')"
+        )
+        conn.execute(
+            "INSERT INTO entities(category, slug, canonical_name, created_at,"
+            " created_by_ingest, updated_at)"
+            " VALUES ('locations', 'aldara', 'Aldara',"
+            " '2026-01-01T00:00:00Z', 'ing-001', '2026-01-01T00:00:00Z')"
+        )
+        create_fact_with_target(
+            conn,
+            fact_id="f-001",
+            text="Theron founded the city.",
+            raw_transcript_span="raw",
+            text_corrects_transcript=False,
+            source_id="src-001",
+            locator="0:04:32",
+            status="authoritative",
+            approved_at="2026-01-15T10:00:00Z",
+            created_by_ingest="ing-001",
+            entity_category="characters",
+            entity_slug="theron",
+            section="biography",
+            by="tester",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class TestRebuild:
+    def test_rebuild_subcommand_registered(self) -> None:
+        """Parser accepts `wiki rebuild` and sets func."""
+        parser = create_parser()
+        args = parser.parse_args(["wiki", "rebuild"])
+        assert args.wiki_action == "rebuild"
+        assert args.func is wiki_cmd.run
+
+    def test_rebuild_regenerates_all_pages(
+        self,
+        configured_wiki: Path,
+        tmp_home: Path,  # noqa: ARG002
+    ) -> None:
+        """Rebuild regenerates .md for every entity."""
+        from unittest.mock import MagicMock, patch  # noqa: PLC0415
+
+        _seed_wiki_db(configured_wiki)
+
+        mock_client = MagicMock()
+        mock_client.complete.return_value = MagicMock(
+            text='{"prose": "Some generated prose."}'
+        )
+
+        with (
+            patch(
+                "auto_lorebook.commands.wiki.OpenRouterClient", return_value=mock_client
+            ),
+            patch(
+                "auto_lorebook.commands.wiki.cfg_mod.Config.get_api_key",
+                return_value="sk-test",
+            ),
+        ):
+            rc = wiki_cmd.run(_make_rebuild_ns())
+
+        assert rc == 0
+        assert (configured_wiki / "characters" / "theron.md").exists()
+
+    def test_rebuild_removes_orphan_md(
+        self,
+        configured_wiki: Path,
+        tmp_home: Path,  # noqa: ARG002
+    ) -> None:
+        """Orphan .md with no matching entity is deleted after rebuild."""
+        from unittest.mock import MagicMock, patch  # noqa: PLC0415
+
+        _seed_wiki_db(configured_wiki)
+
+        # pre-create orphan: no matching entity in DB
+        orphan = configured_wiki / "characters" / "ghost.md"
+        orphan.write_text("# Ghost\n", encoding="utf-8")
+        assert orphan.exists()
+
+        mock_client = MagicMock()
+        mock_client.complete.return_value = MagicMock(
+            text='{"prose": "Some generated prose."}'
+        )
+
+        with (
+            patch(
+                "auto_lorebook.commands.wiki.OpenRouterClient", return_value=mock_client
+            ),
+            patch(
+                "auto_lorebook.commands.wiki.cfg_mod.Config.get_api_key",
+                return_value="sk-test",
+            ),
+        ):
+            rc = wiki_cmd.run(_make_rebuild_ns())
+
+        assert rc == 0
+        assert not orphan.exists()
+        assert (configured_wiki / "characters" / "theron.md").exists()
+
+    def test_rebuild_recoverable_after_partial(
+        self,
+        configured_wiki: Path,
+        tmp_home: Path,  # noqa: ARG002
+    ) -> None:
+        """Rebuild succeeds even with a stale/partial .md present."""
+        from unittest.mock import MagicMock, patch  # noqa: PLC0415
+
+        _seed_wiki_db(configured_wiki)
+
+        # partial/stale .md exists with wrong content
+        stale = configured_wiki / "characters" / "theron.md"
+        stale.write_text("# PARTIAL\n", encoding="utf-8")
+
+        mock_client = MagicMock()
+        mock_client.complete.return_value = MagicMock(text='{"prose": "Fresh prose."}')
+
+        with (
+            patch(
+                "auto_lorebook.commands.wiki.OpenRouterClient", return_value=mock_client
+            ),
+            patch(
+                "auto_lorebook.commands.wiki.cfg_mod.Config.get_api_key",
+                return_value="sk-test",
+            ),
+        ):
+            rc = wiki_cmd.run(_make_rebuild_ns())
+
+        assert rc == 0
+        content = stale.read_text(encoding="utf-8")
+        # page was regenerated, not left as stale
+        assert "PARTIAL" not in content
+
+    def test_rebuild_no_api_key_returns_1(
+        self,
+        configured_wiki: Path,
+        tmp_home: Path,  # noqa: ARG002
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Rebuild prints error and returns 1 when no API key."""
+        from unittest.mock import patch  # noqa: PLC0415
+
+        _seed_wiki_db(configured_wiki)
+
+        with patch(
+            "auto_lorebook.commands.wiki.cfg_mod.Config.get_api_key",
+            return_value=None,
+        ):
+            rc = wiki_cmd.run(_make_rebuild_ns())
+
+        assert rc == 1
+        assert "api key" in capsys.readouterr().out.lower()
+
+    def test_rebuild_no_active_wiki_returns_1(
+        self,
+        tmp_home: Path,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Rebuild prints error and returns 1 when no active wiki is set."""
+        # config has a wiki registered but active_wiki is null
+        wiki_dir = tmp_path / "mywiki"
+        wiki_dir.mkdir()
+        data = {
+            "schema_version": 2,
+            "active_wiki": None,
+            "wikis": [{"nickname": "other", "path": str(wiki_dir)}],
+        }
+        (tmp_home / "config.yaml").write_text(
+            yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+        )
+
+        rc = wiki_cmd.run(_make_rebuild_ns())
+
+        assert rc == 1
+        assert "wiki" in capsys.readouterr().out.lower()
+
+    def test_rebuild_force_flag_parsed(self) -> None:
+        """Parser sets force=True when --force passed."""
+        from auto_lorebook.cli import create_parser  # noqa: PLC0415
+
+        parser = create_parser()
+        args = parser.parse_args(["wiki", "rebuild", "--force"])
+        assert args.force is True
+
+    def test_rebuild_force_flag_default_false(self) -> None:
+        """Parser sets force=False when --force not passed."""
+        from auto_lorebook.cli import create_parser  # noqa: PLC0415
+
+        parser = create_parser()
+        args = parser.parse_args(["wiki", "rebuild"])
+        assert args.force is False
+
+    def test_rebuild_skip_unchanged_second_run(
+        self,
+        configured_wiki: Path,
+        tmp_home: Path,  # noqa: ARG002
+    ) -> None:
+        """Second rebuild without --force skips unchanged pages (LLM not re-called)."""
+        from unittest.mock import MagicMock, patch  # noqa: PLC0415
+
+        _seed_wiki_db(configured_wiki)
+
+        mock_client = MagicMock()
+        mock_client.complete.return_value = MagicMock(
+            text='{"prose": "Some generated prose."}'
+        )
+
+        patch_client = patch(
+            "auto_lorebook.commands.wiki.OpenRouterClient", return_value=mock_client
+        )
+        patch_key = patch(
+            "auto_lorebook.commands.wiki.cfg_mod.Config.get_api_key",
+            return_value="sk-test",
+        )
+
+        with patch_client, patch_key:
+            rc1 = wiki_cmd.run(_make_rebuild_ns())
+        assert rc1 == 0
+        after_first = mock_client.complete.call_count
+
+        # second rebuild without --force → skip unchanged
+        with patch_client, patch_key:
+            rc2 = wiki_cmd.run(_make_rebuild_ns())
+        assert rc2 == 0
+        # no extra LLM calls on second run
+        assert mock_client.complete.call_count == after_first
+
+    def test_rebuild_force_regenerates_despite_unchanged(
+        self,
+        configured_wiki: Path,
+        tmp_home: Path,  # noqa: ARG002
+    ) -> None:
+        """Second rebuild with --force calls LLM again even if inputs unchanged."""
+        from unittest.mock import MagicMock, patch  # noqa: PLC0415
+
+        _seed_wiki_db(configured_wiki)
+
+        mock_client = MagicMock()
+        mock_client.complete.return_value = MagicMock(
+            text='{"prose": "Some generated prose."}'
+        )
+
+        patch_client = patch(
+            "auto_lorebook.commands.wiki.OpenRouterClient", return_value=mock_client
+        )
+        patch_key = patch(
+            "auto_lorebook.commands.wiki.cfg_mod.Config.get_api_key",
+            return_value="sk-test",
+        )
+
+        with patch_client, patch_key:
+            wiki_cmd.run(_make_rebuild_ns())
+        after_first = mock_client.complete.call_count
+
+        # --force → always regenerate
+        with patch_client, patch_key:
+            rc2 = wiki_cmd.run(_make_rebuild_ns(force=True))
+        assert rc2 == 0
+        assert mock_client.complete.call_count > after_first

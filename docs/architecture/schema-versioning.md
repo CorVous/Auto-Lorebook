@@ -13,7 +13,7 @@ SELECT version FROM schema_version;  -- e.g. 1
 ```
 
 This is the authoritative version for the relational schema. It covers
-all 16 tables that store entities, facts, ingests, proposals, and related
+all 17 tables that store entities, facts, ingests, proposals, and related
 metadata.
 
 ### Versioning rules

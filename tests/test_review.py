@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -38,7 +39,27 @@ from auto_lorebook.wiki_registry import WikiEntry
 
 if TYPE_CHECKING:
     import sqlite3
+    from collections.abc import Generator
     from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Module-level stub: no real LLM calls from review.run
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _stub_review_openrouter_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[None]:
+    """Prevent test_review.py from hitting the real LLM via review.run()."""
+    # review.run() requires an API key before it builds the page-step client;
+    # supply a dummy so the stub below is reached instead of a ReviewError.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-stub-key")
+    stub = MagicMock()
+    stub.complete.return_value = MagicMock(text='{"prose": "Stub prose."}')
+    with patch("auto_lorebook.review.OpenRouterClient", return_value=stub):
+        yield
 
 
 # ---------------------------------------------------------------------------

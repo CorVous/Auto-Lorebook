@@ -18,7 +18,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from auto_lorebook import db
+from auto_lorebook.entities import create_entity, list_aliases
+from auto_lorebook.facts import create_fact_with_target, list_facts_by_entity
 from auto_lorebook.openrouter import OpenRouterClient, OpenRouterResponse
+from auto_lorebook.stage4 import SummarizeResult
+from auto_lorebook.stage4 import run as stage4_run
 from auto_lorebook.ytdlp import fetch
 
 if TYPE_CHECKING:
@@ -78,3 +83,66 @@ def test_ytdlp_fetch_subtitles_live(tmp_path: Path) -> None:
     assert body.strip(), "SRT file was empty"
     # SRT cue blocks contain `-->` between start/end timestamps.
     assert "-->" in body
+
+
+@pytest.mark.skipif(
+    not _OPENROUTER_KEY,
+    reason="set $OPENROUTER_API_KEY to run this live test",
+)
+def test_stage4_summarizer_live() -> None:
+    """Round-trip stage4 summarizer through OpenRouter with a real entity."""
+    model = os.environ.get("LIVE_TEST_MODEL", _DEFAULT_LIVE_MODEL)
+    client = OpenRouterClient(api_key=_OPENROUTER_KEY, default_model=model)
+
+    conn = db.open(":memory:")
+    conn.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at, context_json)"
+        " VALUES ('src-live', 'youtube', '2026-01-01T00:00:00Z', '{}')"
+    )
+    conn.execute(
+        "INSERT INTO ingests(ingest_id, source_id, started_at, state)"
+        " VALUES ('ing-live', 'src-live', '2026-01-01T00:00:00Z', 'done')"
+    )
+    entity = create_entity(
+        conn,
+        category="characters",
+        slug="aldara",
+        canonical_name="Aldara",
+        ingest_id="ing-live",
+    )
+    create_fact_with_target(
+        conn,
+        fact_id="f-live-001",
+        text="Aldara is an ancient sorceress who founded the city of Mireth.",
+        raw_transcript_span=(
+            "Aldara is an ancient sorceress who founded the city of Mireth."
+        ),
+        text_corrects_transcript=False,
+        source_id="src-live",
+        locator="0:01:00",
+        status="authoritative",
+        approved_at="2026-01-01T00:00:00Z",
+        created_by_ingest="ing-live",
+        entity_category="characters",
+        entity_slug="aldara",
+        section="biography",
+        by="live-test",
+    )
+    conn.commit()
+
+    aliases = list_aliases(conn, "characters", "aldara")
+    facts = list_facts_by_entity(conn, "characters", "aldara")
+
+    result = stage4_run(
+        entity=entity,
+        aliases=aliases,
+        facts=facts,
+        entity_index="characters:\n  - Aldara",
+        wiki_setting="A high-fantasy world with ancient magic.",
+        client=client,
+        model=model,
+    )
+
+    assert isinstance(result, SummarizeResult)
+    assert result.prose
+    assert len(result.prose) > 20  # non-trivial prose returned

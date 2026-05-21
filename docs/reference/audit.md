@@ -56,11 +56,23 @@ Removes everything attributable to that ingest:
    whose `facts` list is now empty. Entities that were created by
    this ingest but have since received facts from other ingests stay
    (with the rejected facts and aliases removed).
-4. Regenerates affected summaries.
+4. Page reconciliation: the removed entities' `.md` pages are deleted
+   and linked survivors (entities that shared a fact with a now-deleted
+   entity) are re-summarized. When an API key is available the
+   re-summarization uses the LLM page step; otherwise it falls back
+   to the mechanical renderer. An entity that loses all its facts
+   but is not deleted (created by a different ingest) gets a
+   mechanical stub.
 
 This gives a clean "what did this ingest add" answer: an ingest's net
 contribution is exactly the facts tagged with its ID plus the entities
 tagged with its ID.
+
+## Replanning
+
+`replan` discards only unreviewed proposals; it never deletes approved
+facts or entity pages. Because no entity data is removed, there is
+nothing to reconcile — no page deletion or re-summarization runs.
 
 ## What the audit trail does not do
 

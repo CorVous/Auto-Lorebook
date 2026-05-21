@@ -918,7 +918,7 @@ class TestRenderOuterGapWarnings:
 
     def _make_summaries(self) -> list:
         from auto_lorebook.commands.approve_reading import (  # noqa: PLC0415
-            _SegSummary,  # noqa: PLC2701
+            _SegSummary,
         )
 
         return [
@@ -936,7 +936,7 @@ class TestRenderOuterGapWarnings:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         from auto_lorebook.commands.approve_reading import (  # noqa: PLC0415
-            _render_outer,  # noqa: PLC2701
+            _render_outer,
         )
 
         summaries = self._make_summaries()
@@ -950,7 +950,7 @@ class TestRenderOuterGapWarnings:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         from auto_lorebook.commands.approve_reading import (  # noqa: PLC0415
-            _render_outer,  # noqa: PLC2701
+            _render_outer,
         )
         from auto_lorebook.gap_check import GapWarning  # noqa: PLC0415
 

@@ -314,6 +314,34 @@ def get_fact(conn: sqlite3.Connection, fact_id: str) -> FactRow | None:
     return _fact_from_row(row) if row else None
 
 
+def list_linked_entities(
+    conn: sqlite3.Connection,
+    entity_category: str,
+    entity_slug: str,
+) -> list[tuple[str, str]]:
+    """Return entities co-targeted with (entity_category, entity_slug) via fact_targets.
+
+    One-hop symmetric: any entity sharing at least one fact with the input.
+    Excludes self and superseded entities. Sorted by (category, slug), deduped.
+    """
+    rows = conn.execute(
+        """
+        SELECT DISTINCT ft2.entity_category, ft2.entity_slug
+        FROM fact_targets ft1
+        JOIN fact_targets ft2 ON ft2.fact_id = ft1.fact_id
+        JOIN entities e ON e.category = ft2.entity_category
+                       AND e.slug = ft2.entity_slug
+        WHERE ft1.entity_category = ?
+          AND ft1.entity_slug = ?
+          AND (ft2.entity_category != ? OR ft2.entity_slug != ?)
+          AND e.superseded_by_slug IS NULL
+        ORDER BY ft2.entity_category, ft2.entity_slug
+        """,
+        (entity_category, entity_slug, entity_category, entity_slug),
+    ).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
 def list_facts_by_entity(
     conn: sqlite3.Connection,
     entity_category: str,

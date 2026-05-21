@@ -527,12 +527,28 @@ def _migration_005_multi_target_proposals(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE schema_version SET version = 5")
 
 
+def _migration_006_entity_page_staleness(conn: sqlite3.Connection) -> None:
+    """Add entity_page_staleness table for wiki rebuild skip logic."""
+    conn.execute("""
+CREATE TABLE entity_page_staleness (
+    category      TEXT NOT NULL,
+    slug          TEXT NOT NULL,
+    inputs_sha256 TEXT NOT NULL,
+    generated_at  TEXT NOT NULL,
+    PRIMARY KEY (category, slug),
+    FOREIGN KEY (category, slug) REFERENCES entities(category, slug) ON DELETE CASCADE
+)
+""")
+    conn.execute("UPDATE schema_version SET version = 6")
+
+
 MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (
     _migration_001_initial,
     _migration_002_widen_source_type,
     _migration_003_fix_segment_status_and_add_flags_json,
     _migration_004_plan_metadata_and_flag_reason,
     _migration_005_multi_target_proposals,
+    _migration_006_entity_page_staleness,
 )
 
 CURRENT_SCHEMA_VERSION: int = len(MIGRATIONS)

@@ -64,6 +64,12 @@ A per-route prompt, shown after a route is approved, asking whether a planner-su
 **Ingest**:
 One end-to-end run from source to approved facts, possibly partial. Every entity and alias records the ingest that created it.
 
+### Summarizer-stage terms
+
+**Linked entity**:
+Entity sharing at least one fact with a given entity via `fact_targets`. Symmetric relation. A summary regeneration of an entity propagates to its linked entities.
+_Avoid_: connected entity, related entity, neighbour.
+
 ## Relationships
 
 - A **Reading** produces zero or more **Plans** (one per replan).
@@ -71,6 +77,7 @@ One end-to-end run from source to approved facts, possibly partial. Every entity
 - Extraction emits one **Proposal** per **Route**.
 - A **Bundle** is one **Claim group** as presented during review.
 - Approving a **Bundle** creates one **Fact** plus one **Fact target** per approved route.
+- Two entities are **linked** when a **Fact** targets both; regenerating one entity's summary propagates to its **linked entities**.
 
 ## Example dialogue
 
