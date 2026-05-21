@@ -113,6 +113,11 @@ def add_parser(
             "filesystem against the DB — deletes any .md file with no matching entity."
         ),
     )
+    p_rebuild.add_argument(
+        "--force",
+        action="store_true",
+        help="Regenerate every page even if inputs are unchanged",
+    )
     p_rebuild.set_defaults(func=run)
 
     return parser
@@ -296,6 +301,7 @@ def _run_rebuild(args: argparse.Namespace, home: Path | None) -> int:
         wiki_setting = wiki_ctx.setting.description or ""
         entity_index = entities_mod.render_for_preamble(conn)
 
+        force = getattr(args, "force", False)
         written = page_step_mod.run_page_step(
             conn,
             wiki_repo,
@@ -304,6 +310,7 @@ def _run_rebuild(args: argparse.Namespace, home: Path | None) -> int:
             wiki_setting=wiki_setting,
             client=client,
             model=effective_model,
+            skip_unchanged=not force,
         )
 
         # orphan cleanup: delete .md files in category dirs with no matching entity
@@ -319,8 +326,10 @@ def _run_rebuild(args: argparse.Namespace, home: Path | None) -> int:
                     orphans_removed += 1
                     _logger.info("removed orphan: %s", md_file)
 
+        skipped = len(touched) - len(written)
         print(  # noqa: T201
             f"Rebuild complete: {len(written)} pages regenerated, "
+            f"{skipped} skipped, "
             f"{orphans_removed} orphan(s) removed."
         )
         return 0

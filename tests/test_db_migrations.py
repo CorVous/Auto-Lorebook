@@ -34,6 +34,7 @@ _EXPECTED_TABLES = frozenset({
     "proposals",
     "plan_metadata",
     "proposal_targets",
+    "entity_page_staleness",
 })
 
 
@@ -479,3 +480,109 @@ def test_migration_004_preserves_existing_rows(tmp_path: Path) -> None:
     assert seg_row is not None
     assert seg_row[0] == "seg-001"
     assert pm_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Migration 006 specific tests
+# ---------------------------------------------------------------------------
+
+
+def test_migration_006_entity_page_staleness_exists() -> None:
+    """entity_page_staleness has expected columns after full migration."""
+    conn = db.open(":memory:")
+    cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(entity_page_staleness)").fetchall()
+    }
+    conn.close()
+    assert cols == {"category", "slug", "inputs_sha256", "generated_at"}
+
+
+def test_migration_006_preserves_existing_rows(tmp_path: Path) -> None:
+    """Rows from v5 survive migration 006; entity_page_staleness starts empty."""
+    from auto_lorebook.db.migrations import (  # noqa: PLC0415
+        _migration_001_initial,
+        _migration_002_widen_source_type,
+        _migration_003_fix_segment_status_and_add_flags_json,
+        _migration_004_plan_metadata_and_flag_reason,
+        _migration_005_multi_target_proposals,
+    )
+
+    db_path = tmp_path / "wiki.db"
+    raw = sqlite3.connect(str(db_path))
+    raw.execute("PRAGMA foreign_keys=ON")
+    _migration_001_initial(raw)
+    _migration_002_widen_source_type(raw)
+    _migration_003_fix_segment_status_and_add_flags_json(raw)
+    _migration_004_plan_metadata_and_flag_reason(raw)
+    _migration_005_multi_target_proposals(raw)
+    raw.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at)"
+        " VALUES ('s1', 'srt', '2026-01-01T00:00:00+00:00')"
+    )
+    raw.execute(
+        "INSERT INTO ingests(ingest_id, source_id, started_at, state)"
+        " VALUES ('i1', 's1', '2026-01-01T00:00:00+00:00', 'done')"
+    )
+    raw.execute(
+        "INSERT INTO entities(category, slug, canonical_name, created_at,"
+        " created_by_ingest, updated_at)"
+        " VALUES ('characters', 'theron', 'Theron',"
+        " '2026-01-01T00:00:00+00:00', 'i1', '2026-01-01T00:00:00+00:00')"
+    )
+    raw.execute("DELETE FROM schema_version")
+    raw.execute("INSERT INTO schema_version(version) VALUES (5)")
+    raw.commit()
+    raw.close()
+
+    conn = db.open(db_path)
+    version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    ent_row = conn.execute("SELECT slug FROM entities WHERE slug='theron'").fetchone()
+    staleness_count = conn.execute(
+        "SELECT COUNT(*) FROM entity_page_staleness"
+    ).fetchone()[0]
+    conn.close()
+
+    assert version == CURRENT_SCHEMA_VERSION
+    assert ent_row is not None
+    assert staleness_count == 0
+
+
+def test_migration_006_fk_cascade_deletes_staleness_row() -> None:
+    """Deleting an entity CASCADE-deletes its entity_page_staleness row."""
+    conn = db.open(":memory:")
+    conn.execute(
+        "INSERT INTO sources(source_id, source_type, fetched_at)"
+        " VALUES ('s1', 'srt', '2026-01-01T00:00:00+00:00')"
+    )
+    conn.execute(
+        "INSERT INTO ingests(ingest_id, source_id, started_at, state)"
+        " VALUES ('i1', 's1', '2026-01-01T00:00:00+00:00', 'done')"
+    )
+    conn.execute(
+        "INSERT INTO entities(category, slug, canonical_name, created_at,"
+        " created_by_ingest, updated_at)"
+        " VALUES ('characters', 'theron', 'Theron',"
+        " '2026-01-01T00:00:00+00:00', 'i1', '2026-01-01T00:00:00+00:00')"
+    )
+    conn.execute(
+        "INSERT INTO entity_page_staleness(category, slug, inputs_sha256, generated_at)"
+        " VALUES ('characters', 'theron', 'abc123', '2026-01-01T00:00:00+00:00')"
+    )
+    conn.commit()
+
+    # verify staleness row exists before delete
+    before = conn.execute(
+        "SELECT COUNT(*) FROM entity_page_staleness WHERE slug='theron'"
+    ).fetchone()[0]
+    assert before == 1
+
+    # delete entity → CASCADE deletes staleness row
+    conn.execute("DELETE FROM entities WHERE category='characters' AND slug='theron'")
+    conn.commit()
+
+    after = conn.execute(
+        "SELECT COUNT(*) FROM entity_page_staleness WHERE slug='theron'"
+    ).fetchone()[0]
+    conn.close()
+    assert after == 0

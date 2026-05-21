@@ -189,5 +189,11 @@ corruption, a crashed page step, or a renamed entity.
 The wiki root and `.wiki-state/` directory are not scanned; only the
 six category subdirectories are touched.
 
-Staleness-skip (regenerate only entities whose facts changed since the
-last build) is future work.
+### Staleness-skip
+
+`wiki rebuild` skips pages whose recorded inputs hash matches. The
+hash covers: entity's own facts, linked entities' facts, entity index,
+`.wiki-context.yaml` setting description, model, and model params.
+Hashes are stored in the `entity_page_staleness` DB table (keyed by
+`(category, slug)`); they are never written to `.md` files. Use
+`wiki rebuild --force` to regenerate all pages unconditionally.

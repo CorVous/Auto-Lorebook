@@ -288,6 +288,17 @@ CREATE TABLE proposal_targets (
 )
 """
 
+ENTITY_PAGE_STALENESS = """
+CREATE TABLE entity_page_staleness (
+    category      TEXT NOT NULL,
+    slug          TEXT NOT NULL,
+    inputs_sha256 TEXT NOT NULL,
+    generated_at  TEXT NOT NULL,
+    PRIMARY KEY (category, slug),
+    FOREIGN KEY (category, slug) REFERENCES entities(category, slug) ON DELETE CASCADE
+)
+"""
+
 PLAN_METADATA = """
 CREATE TABLE plan_metadata (
     ingest_id                TEXT PRIMARY KEY,

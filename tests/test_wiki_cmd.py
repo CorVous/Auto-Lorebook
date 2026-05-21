@@ -493,7 +493,7 @@ class TestWikiOverrideFlag:
 
 
 def _make_rebuild_ns(**kwargs: object) -> argparse.Namespace:
-    base: dict[str, object] = {"wiki_action": "rebuild", "wiki": None}
+    base: dict[str, object] = {"wiki_action": "rebuild", "wiki": None, "force": False}
     base.update(kwargs)
     return argparse.Namespace(**base)
 
@@ -694,3 +694,87 @@ class TestRebuild:
 
         assert rc == 1
         assert "wiki" in capsys.readouterr().out.lower()
+
+    def test_rebuild_force_flag_parsed(self) -> None:
+        """Parser sets force=True when --force passed."""
+        from auto_lorebook.cli import create_parser  # noqa: PLC0415
+
+        parser = create_parser()
+        args = parser.parse_args(["wiki", "rebuild", "--force"])
+        assert args.force is True
+
+    def test_rebuild_force_flag_default_false(self) -> None:
+        """Parser sets force=False when --force not passed."""
+        from auto_lorebook.cli import create_parser  # noqa: PLC0415
+
+        parser = create_parser()
+        args = parser.parse_args(["wiki", "rebuild"])
+        assert args.force is False
+
+    def test_rebuild_skip_unchanged_second_run(
+        self,
+        configured_wiki: Path,
+        tmp_home: Path,  # noqa: ARG002
+    ) -> None:
+        """Second rebuild without --force skips unchanged pages (LLM not re-called)."""
+        from unittest.mock import MagicMock, patch  # noqa: PLC0415
+
+        _seed_wiki_db(configured_wiki)
+
+        mock_client = MagicMock()
+        mock_client.complete.return_value = MagicMock(
+            text='{"prose": "Some generated prose."}'
+        )
+
+        patch_client = patch(
+            "auto_lorebook.commands.wiki.OpenRouterClient", return_value=mock_client
+        )
+        patch_key = patch(
+            "auto_lorebook.commands.wiki.cfg_mod.Config.get_api_key",
+            return_value="sk-test",
+        )
+
+        with patch_client, patch_key:
+            rc1 = wiki_cmd.run(_make_rebuild_ns())
+        assert rc1 == 0
+        after_first = mock_client.complete.call_count
+
+        # second rebuild without --force → skip unchanged
+        with patch_client, patch_key:
+            rc2 = wiki_cmd.run(_make_rebuild_ns())
+        assert rc2 == 0
+        # no extra LLM calls on second run
+        assert mock_client.complete.call_count == after_first
+
+    def test_rebuild_force_regenerates_despite_unchanged(
+        self,
+        configured_wiki: Path,
+        tmp_home: Path,  # noqa: ARG002
+    ) -> None:
+        """Second rebuild with --force calls LLM again even if inputs unchanged."""
+        from unittest.mock import MagicMock, patch  # noqa: PLC0415
+
+        _seed_wiki_db(configured_wiki)
+
+        mock_client = MagicMock()
+        mock_client.complete.return_value = MagicMock(
+            text='{"prose": "Some generated prose."}'
+        )
+
+        patch_client = patch(
+            "auto_lorebook.commands.wiki.OpenRouterClient", return_value=mock_client
+        )
+        patch_key = patch(
+            "auto_lorebook.commands.wiki.cfg_mod.Config.get_api_key",
+            return_value="sk-test",
+        )
+
+        with patch_client, patch_key:
+            wiki_cmd.run(_make_rebuild_ns())
+        after_first = mock_client.complete.call_count
+
+        # --force → always regenerate
+        with patch_client, patch_key:
+            rc2 = wiki_cmd.run(_make_rebuild_ns(force=True))
+        assert rc2 == 0
+        assert mock_client.complete.call_count > after_first
