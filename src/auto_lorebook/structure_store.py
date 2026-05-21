@@ -312,6 +312,14 @@ def read_bullets(conn: sqlite3.Connection, ingest_id: str) -> ReadingBullets:
 # ---------------------------------------------------------------------------
 
 
+def has_structure(conn: sqlite3.Connection, ingest_id: str) -> bool:
+    """Return True if any segments row exists for ingest_id (Stage 1a output)."""
+    row = conn.execute(
+        "SELECT 1 FROM segments WHERE ingest_id=? LIMIT 1", (ingest_id,)
+    ).fetchone()
+    return row is not None
+
+
 def list_segments(conn: sqlite3.Connection, ingest_id: str) -> list[SegmentRow]:
     """Return all SegmentRows for ingest_id sorted by start."""
     rows = conn.execute(
