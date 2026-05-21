@@ -336,7 +336,14 @@ Below the segment list, any persisted gap-check warnings are rendered as
 ⚠ Possible coverage gap: blocks (one per stretch, transcript order).
 
 **Per-segment prompt** — shows segment body (up to 60 lines) and current /
-pending status:
+pending status. Each claim bullet is followed by the verbatim transcript
+cues behind it — the cues overlapping that bullet's `locator_hint` window —
+so the reviewer can compare the claim against what was actually said and
+against the clickable source timestamp without leaving the terminal. The
+transcript shown is the raw (globally-corrected) transcript, not the
+reading's `name_corrections`-applied text, so mishearings stay visible.
+Plain-text sources (no cue timing) and missing transcripts fall back to
+plain bullets:
 
 | Key | Action |
 |-----|--------|

@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from auto_lorebook.reading_assembly import assemble, build_segment_body
+from auto_lorebook.reading_assembly import (
+    assemble,
+    build_segment_body,
+    build_segment_review_body,
+)
+from auto_lorebook.srt import Cue
+from auto_lorebook.stage1b import Bullet
+from auto_lorebook.transcript import LoadedTranscript
 from tests._reading_fixtures import (
     _bullets,
     _info,
@@ -171,6 +178,138 @@ class TestPureNoFilesystem:
             sidecar=_sidecar(),
         )
         assert isinstance(result, str)
+
+
+def _bullet(text: str, anchor: float, hint_start: float, hint_end: float) -> Bullet:
+    return Bullet(
+        text=text,
+        anchor=anchor,
+        locator_hint_start=hint_start,
+        locator_hint_end=hint_end,
+    )
+
+
+def _loaded(cues: list[Cue]) -> LoadedTranscript:
+    return LoadedTranscript(text_for_llm="", total_duration=0.0, cues=tuple(cues))
+
+
+class TestBuildSegmentReviewBody:
+    """approve-reading per-segment body: claim bullets vs. transcript window."""
+
+    def test_transcript_lines_follow_each_bullet(self) -> None:
+        bullets = [_bullet("Theron founded Aldara", 150.0, 135.0, 165.0)]
+        cues = [
+            Cue(index=1, start=120.0, end=160.0, text="Theron founded Aldara then."),
+            Cue(index=2, start=200.0, end=210.0, text="Unrelated later cue."),
+        ]
+        body = build_segment_review_body(
+            seg_bullets=bullets,
+            flags=[],
+            source_url=None,
+            name_corrections={},
+            transcript=_loaded(cues),
+        )
+        assert "- Theron founded Aldara [0:02:30]" in body
+        assert "transcript 0:02:15-0:02:45:" in body
+        assert "[0:02:00] Theron founded Aldara then." in body
+        assert "Unrelated later cue." not in body
+
+    def test_overlapping_cue_starting_before_window_included(self) -> None:
+        # cue starts before the window but spans into it (coarse manual SRT)
+        cues = [Cue(index=1, start=60.0, end=200.0, text="Long spanning cue.")]
+        bullets = [_bullet("claim", 150.0, 135.0, 165.0)]
+        body = build_segment_review_body(
+            seg_bullets=bullets,
+            flags=[],
+            source_url=None,
+            name_corrections={},
+            transcript=_loaded(cues),
+        )
+        assert "Long spanning cue." in body
+
+    def test_empty_window_shows_marker(self) -> None:
+        cues = [Cue(index=1, start=500.0, end=510.0, text="far away cue")]
+        bullets = [_bullet("claim", 150.0, 135.0, 165.0)]
+        body = build_segment_review_body(
+            seg_bullets=bullets,
+            flags=[],
+            source_url=None,
+            name_corrections={},
+            transcript=_loaded(cues),
+        )
+        assert "(no transcript lines in window)" in body
+        assert "far away cue" not in body
+
+    def test_none_transcript_falls_back_to_plain(self) -> None:
+        bullets = [_bullet("claim", 150.0, 135.0, 165.0)]
+        plain = build_segment_body(
+            seg_bullets=bullets, flags=[], source_url=None, name_corrections={}
+        )
+        review = build_segment_review_body(
+            seg_bullets=bullets,
+            flags=[],
+            source_url=None,
+            name_corrections={},
+            transcript=None,
+        )
+        assert review == plain
+        assert "transcript" not in review
+
+    def test_plain_text_transcript_falls_back_to_plain(self) -> None:
+        bullets = [_bullet("claim", 150.0, 135.0, 165.0)]
+        plain = build_segment_body(
+            seg_bullets=bullets, flags=[], source_url=None, name_corrections={}
+        )
+        lt = LoadedTranscript(text_for_llm="raw", total_duration=0.0, cues=None)
+        review = build_segment_review_body(
+            seg_bullets=bullets,
+            flags=[],
+            source_url=None,
+            name_corrections={},
+            transcript=lt,
+        )
+        assert review == plain
+
+    def test_anchor_link_preserved_with_source_url(self) -> None:
+        bullets = [_bullet("claim", 150.0, 135.0, 165.0)]
+        cues = [Cue(index=1, start=140.0, end=150.0, text="said it here")]
+        body = build_segment_review_body(
+            seg_bullets=bullets,
+            flags=[],
+            source_url="https://youtube.com/watch?v=abc",
+            name_corrections={},
+            transcript=_loaded(cues),
+        )
+        assert "[[0:02:30]](https://youtube.com/watch?v=abc&t=150)" in body
+        assert "[0:02:20] said it here" in body
+
+    def test_flags_still_rendered(self) -> None:
+        flags = [
+            {
+                "locator": "0:05:47",
+                "span": "a place name",
+                "kind": "name",
+                "note": "unclear",
+            }
+        ]
+        body = build_segment_review_body(
+            seg_bullets=[],
+            flags=flags,
+            source_url=None,
+            name_corrections={},
+            transcript=_loaded([Cue(index=1, start=0.0, end=5.0, text="hi")]),
+        )
+        assert "uncertain name: a place name; unclear" in body
+
+    def test_empty_bullets_with_transcript_shows_marker(self) -> None:
+        body = build_segment_review_body(
+            seg_bullets=[],
+            flags=[],
+            source_url=None,
+            name_corrections={},
+            transcript=_loaded([Cue(index=1, start=0.0, end=5.0, text="hi")]),
+        )
+        assert "_No claims extracted from this segment._" in body
 
 
 class TestFixtureMatchesPipeline:

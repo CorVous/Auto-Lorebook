@@ -292,8 +292,14 @@ def _load_segment_body(
     segment_id: str,
     wiki_override: str | None = None,
 ) -> str:
-    """Render segment body from DB for interactive display."""
+    """Render segment body from DB for interactive display.
+
+    Each claim bullet is annotated with the verbatim transcript window behind
+    it so the reviewer can compare the claim against what was said.
+    """
+    from auto_lorebook import corrections as corrections_mod  # noqa: PLC0415
     from auto_lorebook import reading_assembly as assembly_mod  # noqa: PLC0415
+    from auto_lorebook import transcript as transcript_mod  # noqa: PLC0415
 
     wiki_repo = cfg.resolve_active_wiki(wiki_override)
     conn = db_mod.open(wiki_state_mod.wiki_db_path(wiki_repo))
@@ -306,11 +312,20 @@ def _load_segment_body(
         bullets_map = structure_store_mod.read_bullets(conn, source_id)
         seg_bullets = bullets_map.segments.get(segment_id, [])
         flags = list(seg_row.flags)
-        return assembly_mod.build_segment_body(
+        # transcript powers the claim-vs-transcript comparison; missing or
+        # plain-text transcripts degrade to plain bullets.
+        loaded: transcript_mod.LoadedTranscript | None = None
+        try:
+            cors = corrections_mod.read(conn, wiki_repo=wiki_repo)
+            loaded = transcript_mod.load(wiki_repo, info, cors)
+        except transcript_mod.TranscriptError:
+            loaded = None
+        return assembly_mod.build_segment_review_body(
             seg_bullets=seg_bullets,
             flags=flags,
             source_url=info.source_url,
             name_corrections=sc.name_corrections,
+            transcript=loaded,
         )
     finally:
         conn.close()

@@ -735,6 +735,30 @@ class TestApproveReadingInteractive:
         out = capsys.readouterr().out
         assert "Approved" in out
 
+    def test_per_segment_view_shows_transcript(
+        self,
+        tmp_home: Path,
+        ingested_wiki: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Opening a segment shows the transcript window behind each claim."""
+        _write_user_config(tmp_home, ingested_wiki)
+        self._force_tty(monkeypatch)
+        # open seg-002 (has the Theron claim), back to outer, quit
+        self._patch_inputs(monkeypatch, ["2", "b", "q"])
+        self._generate(monkeypatch)
+
+        rc = approve_reading_cmd.run(_args(source_id="yt-abc12345678", yes=False))
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        # claim bullet text
+        assert "King Theron founded Aldara" in out
+        # transcript window label + verbatim cue behind the claim
+        assert "transcript" in out
+        assert "in the Second Age" in out
+
     def test_ctrl_c_in_outer_writes_nothing(
         self,
         tmp_home: Path,
