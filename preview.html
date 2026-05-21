@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auto-Lorebook — Seeded Ingest QA Run</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e222e; --line:#2a2f3d;
+    --ink:#e6e8ee; --mute:#9aa3b2; --accent:#6ea8fe; --green:#4ade80;
+    --amber:#fbbf24; --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.55;}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 24px 80px;}
+  header{border-bottom:1px solid var(--line);padding-bottom:24px;margin-bottom:32px;}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:-.2px;}
+  .sub{color:var(--mute);font-size:14px;}
+  .sub code{font-family:var(--mono);color:var(--accent);background:var(--panel2);
+    padding:1px 6px;border-radius:4px;font-size:13px;}
+  h2{font-size:16px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute);
+    margin:40px 0 14px;font-weight:600;}
+  .banner{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--green);
+    border-radius:8px;padding:16px 18px;display:flex;gap:18px;flex-wrap:wrap;}
+  .banner .stat{min-width:90px;}
+  .banner .num{font-size:22px;font-weight:700;}
+  .banner .lbl{font-size:12px;color:var(--mute);text-transform:uppercase;letter-spacing:.05em;}
+  .pipe{display:flex;flex-direction:column;gap:8px;}
+  .stage{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:12px 16px;display:grid;grid-template-columns:26px 150px 1fr;gap:14px;align-items:start;}
+  .dot{width:18px;height:18px;border-radius:50%;background:var(--green);
+    color:#06210f;font-size:12px;font-weight:800;display:flex;align-items:center;
+    justify-content:center;margin-top:2px;}
+  .stage .name{font-weight:600;font-size:14px;}
+  .stage .cmd{font-family:var(--mono);font-size:11px;color:var(--accent);margin-top:3px;}
+  .stage .out{font-size:13px;color:var(--mute);}
+  .stage .out b{color:var(--ink);font-weight:600;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:0;overflow:hidden;margin-bottom:16px;}
+  .card .head{padding:10px 16px;background:var(--panel2);border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:13px;color:var(--accent);display:flex;
+    justify-content:space-between;}
+  .card .head .tag{color:var(--mute);}
+  pre{margin:0;padding:16px;font-family:var(--mono);font-size:12.5px;line-height:1.6;
+    overflow-x:auto;white-space:pre-wrap;word-break:break-word;color:var(--ink);}
+  .flag{background:rgba(251,191,36,.14);border-radius:3px;padding:0 3px;
+    color:var(--amber);font-weight:600;}
+  .finding{background:var(--panel);border:1px solid var(--line);
+    border-left:3px solid var(--amber);border-radius:8px;padding:14px 18px;margin-bottom:12px;}
+  .finding h3{margin:0 0 6px;font-size:14px;}
+  .finding p{margin:0;font-size:13px;color:var(--mute);}
+  .finding code{font-family:var(--mono);font-size:12px;background:var(--panel2);
+    padding:1px 5px;border-radius:4px;color:var(--ink);}
+  footer{margin-top:48px;border-top:1px solid var(--line);padding-top:20px;
+    font-size:12px;color:var(--mute);}
+  footer code{font-family:var(--mono);color:var(--accent);}
+  .ok{color:var(--green);font-weight:600;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Auto-Lorebook — Seeded Ingest QA Run</h1>
+    <div class="sub">
+      Source <code>qa-98a469df</code> &nbsp;·&nbsp; fixture <code>tiny-aldara</code>
+      &nbsp;·&nbsp; wiki <code>/home/user/qa-wiki</code> &nbsp;·&nbsp; 2026-05-21
+      <br>Driven end-to-end in a <code>tmux</code> session against live OpenRouter
+      (model <code>anthropic/claude-sonnet-4-5</code>).
+    </div>
+  </header>
+
+  <div class="banner">
+    <div class="stat"><div class="num ok">6 / 6</div><div class="lbl">Stages green</div></div>
+    <div class="stat"><div class="num">3</div><div class="lbl">Entity pages</div></div>
+    <div class="stat"><div class="num">1</div><div class="lbl">Proposal approved</div></div>
+    <div class="stat"><div class="num">4</div><div class="lbl">Unresolved items</div></div>
+    <div class="stat"><div class="num" style="color:var(--amber)">1</div><div class="lbl">QA finding</div></div>
+  </div>
+
+  <h2>Pipeline</h2>
+  <div class="pipe">
+
+    <div class="stage">
+      <div class="dot">&#10003;</div>
+      <div><div class="name">Seed</div><div class="cmd">seed-ingest --at=structure</div></div>
+      <div class="out">Minted <b>qa-98a469df</b>, laid down a 4-cue transcript SRT
+        from the <b>tiny-aldara</b> fixture.</div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">&#10003;</div>
+      <div><div class="name">Stage 1 — Reading</div><div class="cmd">generate-reading qa-98a469df</div></div>
+      <div class="out">Draft reading: <b>4 segments, 3 bullets</b>. Flagged 3 uncertain
+        names and 1 vague reference ("a war").</div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">&#10003;</div>
+      <div><div class="name">Approve Reading</div><div class="cmd">approve-reading qa-98a469df --yes</div></div>
+      <div class="out">Reading approved &rarr; <b>reading.md</b> written to the source folder.</div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">&#10003;</div>
+      <div><div class="name">Stage 2 — Planner</div><div class="cmd">plan qa-98a469df</div></div>
+      <div class="out"><b>plan.yaml</b>: 3 new entities proposed
+        (King Theron, Aldara, Second Age); 1 planned claim <b>cg-001</b>
+        routed to all 3; 4 unresolved items.</div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">&#10003;</div>
+      <div><div class="name">Stage 3 — Extractor</div><div class="cmd">extract qa-98a469df</div></div>
+      <div class="out">Extracted <b>1 proposal</b> (<code>king-theron-f001</code>),
+        0 flagged — the claim fans out to 3 entity targets.</div>
+    </div>
+
+    <div class="stage">
+      <div class="dot">&#10003;</div>
+      <div><div class="name">Stage 4 — Review &amp; Pages</div><div class="cmd">review qa-98a469df --auto-approve</div></div>
+      <div class="out">1 proposal approved (0 edited, 0 rejected); page step
+        <b>summarized 3 entities</b> &rarr; 3 markdown pages written.</div>
+    </div>
+
+  </div>
+
+  <h2>Source transcript</h2>
+  <div class="card">
+    <div class="head">sources/qa-98a469df/transcript.en.srt<span class="tag">4 cues</span></div>
+<pre>00:00 – 00:30   Welcome to the session.
+00:30 – 02:00   Today we talk about Aldara.
+02:00 – 05:00   King Theron founded Aldara in the Second Age.
+05:00 – 10:00   The war followed. Many died.</pre>
+  </div>
+
+  <h2>Generated entity pages</h2>
+
+  <div class="card">
+    <div class="head">characters/king-theron.md<span class="tag">clean</span></div>
+<pre># King Theron
+
+## Summary
+
+King Theron founded the city of [Aldara](../locations/aldara.md) during the
+[Second Age](../events/second-age.md). His establishment of Aldara marks a
+significant moment in the region's history, though details of his reign and
+the circumstances surrounding the city's founding remain unrecorded.
+
+## Facts
+### Authoritative
+[^king-theron-f001]: King Theron founded Aldara in the Second Age.</pre>
+  </div>
+
+  <div class="card">
+    <div class="head">events/second-age.md<span class="tag">clean</span></div>
+<pre># Second Age
+
+## Summary
+
+The Second Age marks a significant period in history, most notably as the era
+when [King Theron](../characters/king-theron.md) founded the city of
+[Aldara](../locations/aldara.md). This act of foundation established one of the
+realm's enduring settlements during this epoch.
+
+## Facts
+### Authoritative
+[^king-theron-f001]: King Theron founded Aldara in the Second Age.</pre>
+  </div>
+
+  <div class="card">
+    <div class="head">locations/aldara.md<span class="tag" style="color:var(--amber)">see findings</span></div>
+<pre># Aldara
+
+## Summary
+
+<span class="flag">[[locations/aldara|Aldara]]</span> is a location founded by
+<span class="flag">[[characters/king-theron|King Theron]]</span> during the
+<span class="flag">[[events/second-age|Second Age]]</span>.[^king-theron-f001]
+
+## Facts
+### Authoritative
+[^king-theron-f001]: King Theron founded Aldara in the Second Age.
+
+<span class="flag">[^king-theron-f001]</span>: "King Theron founded Aldara…" — mixed, 0:02:00-0:05:00
+<span class="flag">[^king-theron-f001]</span>: "King Theron founded Aldara…" — [Second Age](../events/second-age.md#fn:king-theron-f001)</pre>
+  </div>
+
+  <h2>QA findings</h2>
+
+  <div class="finding">
+    <h3>Entity-link markers not resolved on <code>aldara.md</code></h3>
+    <p>The other two pages resolved their cross-links cleanly
+      (<code>[Aldara](../locations/aldara.md)</code>). On <code>aldara.md</code> the
+      summarizer emitted the Obsidian-style alias form
+      <code>[[locations/aldara|Aldara]]</code>, which the slice-3 link resolver
+      (<code>_resolve_entity_links</code>) does not match — the raw markers ship in
+      the reader-facing page. Fix candidates: pin the marker syntax in the
+      summarizer prompt, or teach the resolver the <code>[[cat/slug|Display]]</code> form.</p>
+  </div>
+
+  <div class="finding">
+    <h3>Duplicate footnote id <code>[^king-theron-f001]</code></h3>
+    <p>On <code>aldara.md</code> the same anchor is defined twice — once as the fact
+      citation, once as the slice-3 cross-reference footnote pointing at
+      <code>second-age.md</code>. The shared fact is both a local fact and a crossref
+      target, so the two footnote defs collide on one id. Worth a dedup or an
+      id-namespacing pass between the fact-citation and crossref renderers.</p>
+  </div>
+
+  <footer>
+    Run reproduced with: <code>seed-ingest --at=structure</code> &rarr;
+    <code>generate-reading</code> &rarr; <code>approve-reading --yes</code> &rarr;
+    <code>plan</code> &rarr; <code>extract</code> &rarr;
+    <code>review --auto-approve</code>, executed inside a <code>tmux</code> session.
+    Disposable QA source — clean up with <code>reject-ingest qa-98a469df</code>.
+  </footer>
+
+</div>
+</body>
+</html>
